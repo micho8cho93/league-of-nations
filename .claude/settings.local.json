@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --input-type=module)",
+      "Bash(node --check js/stages.js)",
+      "Bash(node --check js/nation.js)",
+      "Bash(node --check js/war.js)",
+      "Bash(node --check js/bot.js)",
+      "Bash(node --check js/game.js)",
+      "Bash(node --check js/ui.js)"
+    ]
+  }
+}
