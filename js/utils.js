@@ -1,106 +1,224 @@
-// Shared helpers. Phase 1 focus: hex math + color palette.
+export const SAVE_KEY = "league-of-nations-fresh-v1";
+export const SAVE_VERSION = 1;
 
-const TILE_TYPES = {
+export const MAP_SIZES = {
+  Small: { label: "Small", radius: 7 },
+  Medium: { label: "Medium", radius: 10 },
+  Large: { label: "Large", radius: 13 },
+};
+
+export const TILE_TYPES = {
   EMPTY: "empty",
   FARM: "farm",
   MINE: "mine",
   SCHOOL: "school",
-  MILITARY: "military",
   FACTORY: "factory",
+  MILITARY: "military",
   WATER: "water",
-  UN: "un", // Hidden UN territory — revealed at Stage 3.2, then claimable
-  ISLAND: "island", // Legacy saves: old hidden UN territory key
 };
 
-const TILE_COLORS = {
-  [TILE_TYPES.EMPTY]: 0x8a6a3d,
-  [TILE_TYPES.FARM]: 0x4c9a3a,
-  [TILE_TYPES.MINE]: 0xd98a2b,
-  [TILE_TYPES.SCHOOL]: 0x3a78c9,
-  [TILE_TYPES.MILITARY]: 0xc94c4c,
-  [TILE_TYPES.FACTORY]: 0x222830,
-  [TILE_TYPES.WATER]: 0x1f4a78,
-  [TILE_TYPES.UN]: 0x1f4a78,
-  [TILE_TYPES.ISLAND]: 0x1f4a78,
-};
+export const BUILDING_TYPES = [
+  TILE_TYPES.FARM,
+  TILE_TYPES.MINE,
+  TILE_TYPES.SCHOOL,
+  TILE_TYPES.FACTORY,
+  TILE_TYPES.MILITARY,
+];
 
-const TILE_LABELS = {
-  [TILE_TYPES.EMPTY]: "Unclaimed Land",
+export const TILE_LABELS = {
+  [TILE_TYPES.EMPTY]: "Empty",
   [TILE_TYPES.FARM]: "Farm",
   [TILE_TYPES.MINE]: "Mine",
   [TILE_TYPES.SCHOOL]: "School",
-  [TILE_TYPES.MILITARY]: "Military Base",
   [TILE_TYPES.FACTORY]: "Factory",
+  [TILE_TYPES.MILITARY]: "Military Base",
   [TILE_TYPES.WATER]: "Water",
-  [TILE_TYPES.UN]: "Uncharted Waters",
-  [TILE_TYPES.ISLAND]: "Uncharted Waters",
 };
 
-// Flat-top hex geometry, per prompt:
-//   x = size * (3/2 * q)
-//   z = size * (sqrt(3)/2 * q + sqrt(3) * r)
-const SQRT3 = Math.sqrt(3);
+export const WORKER_ROLES = {
+  FARMERS: "farmers",
+  MINERS: "miners",
+  SCHOLARS: "scholars",
+  ENGINEERS: "engineers",
+  SOLDIERS: "soldiers",
+};
 
-function axialToWorld(q, r, size) {
-  const x = size * (1.5 * q);
-  const z = size * ((SQRT3 / 2) * q + SQRT3 * r);
-  return { x, z };
+export const WORKER_ROLE_BY_TILE = {
+  [TILE_TYPES.FARM]: WORKER_ROLES.FARMERS,
+  [TILE_TYPES.MINE]: WORKER_ROLES.MINERS,
+  [TILE_TYPES.SCHOOL]: WORKER_ROLES.SCHOLARS,
+  [TILE_TYPES.FACTORY]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.MILITARY]: WORKER_ROLES.SOLDIERS,
+};
+
+export const WORKER_MIN = {
+  [TILE_TYPES.FARM]: 2,
+  [TILE_TYPES.MINE]: 3,
+  [TILE_TYPES.SCHOOL]: 3,
+  [TILE_TYPES.FACTORY]: 5,
+  [TILE_TYPES.MILITARY]: 4,
+};
+
+export const TILE_COLORS = {
+  [TILE_TYPES.EMPTY]: 0x8d7251,
+  [TILE_TYPES.FARM]: 0x4f9a58,
+  [TILE_TYPES.MINE]: 0xb46e3d,
+  [TILE_TYPES.SCHOOL]: 0x4e84c4,
+  [TILE_TYPES.FACTORY]: 0x4b525f,
+  [TILE_TYPES.MILITARY]: 0xa44646,
+  [TILE_TYPES.WATER]: 0x2e6f95,
+};
+
+export const OWNER_COLORS = [
+  "#55c6a5",
+  "#d95f59",
+  "#6c8ff0",
+  "#d7b84f",
+  "#a875d6",
+  "#e58a42",
+  "#3fb7c4",
+  "#d66aa2",
+  "#7cc46b",
+  "#c9a5ff",
+];
+
+export const HEX_DIRECTIONS = [
+  { q: 1, r: 0 },
+  { q: -1, r: 0 },
+  { q: 0, r: 1 },
+  { q: 0, r: -1 },
+  { q: 1, r: -1 },
+  { q: -1, r: 1 },
+];
+
+export function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-// Generate axial coords covering a hex-shaped map of given radius.
-function hexMapCoords(radius) {
+export function clampInt(value, min, max, fallback = min) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return clamp(n, min, max);
+}
+
+export function tileKey(q, r) {
+  return `${q},${r}`;
+}
+
+export function tileId(q, r) {
+  return `${q}:${r}`;
+}
+
+export function parseTileId(id) {
+  const [q, r] = String(id).split(":").map(Number);
+  return { q, r };
+}
+
+export function axialNeighbors(q, r) {
+  return HEX_DIRECTIONS.map((dir) => ({ q: q + dir.q, r: r + dir.r }));
+}
+
+export function hexDistance(a, b) {
+  return (
+    Math.abs(a.q - b.q) +
+    Math.abs(a.q + a.r - b.q - b.r) +
+    Math.abs(a.r - b.r)
+  ) / 2;
+}
+
+export function hexMapCoords(radius) {
   const coords = [];
-  for (let q = -radius; q <= radius; q++) {
-    const rMin = Math.max(-radius, -q - radius);
-    const rMax = Math.min(radius, -q + radius);
-    for (let r = rMin; r <= rMax; r++) {
-      coords.push({ q, r });
-    }
+  for (let q = -radius; q <= radius; q += 1) {
+    const r1 = Math.max(-radius, -q - radius);
+    const r2 = Math.min(radius, -q + radius);
+    for (let r = r1; r <= r2; r += 1) coords.push({ q, r });
   }
   return coords;
 }
 
-const AXIAL_DIRS = [
-  { dq: 1, dr: 0 },
-  { dq: -1, dr: 0 },
-  { dq: 0, dr: 1 },
-  { dq: 0, dr: -1 },
-  { dq: 1, dr: -1 },
-  { dq: -1, dr: 1 },
-];
-
-function axialNeighbors(q, r) {
-  return AXIAL_DIRS.map((d) => ({ q: q + d.dq, r: r + d.dr }));
+export function axialToWorld(q, r, size = 1) {
+  return {
+    x: size * 1.5 * q,
+    z: size * (Math.sqrt(3) * (r + q / 2)),
+  };
 }
 
-function hexDistance(a, b) {
-  return (
-    (Math.abs(a.q - b.q) +
-      Math.abs(a.q + a.r - b.q - b.r) +
-      Math.abs(a.r - b.r)) /
-    2
-  );
+export function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function next() {
+    t += 0x6d2b79f5;
+    let x = t;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-// Deterministic hash → [0,1) for reproducible map gen given a seed.
-function hash2d(q, r, seed) {
-  let h = (q * 374761393) ^ (r * 668265263) ^ (seed * 2147483647);
-  h = (h ^ (h >>> 13)) * 1274126177;
-  h = h ^ (h >>> 16);
-  return ((h >>> 0) % 1000000) / 1000000;
+export function hash2d(q, r, seed = 1) {
+  let h = seed ^ Math.imul(q + 374761393, 668265263) ^ Math.imul(r + 1442695041, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-function randomSeed() {
-  return Math.floor(Math.random() * 1e9);
+export function randInt(rng, min, max) {
+  return Math.floor(rng() * (max - min + 1)) + min;
 }
 
-function pickWeighted(entries, rand) {
-  // entries: [[value, weight], ...]
-  const total = entries.reduce((s, [, w]) => s + w, 0);
-  let n = rand * total;
-  for (const [value, weight] of entries) {
-    n -= weight;
-    if (n <= 0) return value;
+export function randomSeed() {
+  return Math.floor((Date.now() % 1000000000) + Math.random() * 1000000);
+}
+
+export function shuffle(items, rng) {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
   }
-  return entries[entries.length - 1][0];
+  return out;
+}
+
+export function pickWeighted(options, rng) {
+  const total = options.reduce((sum, option) => sum + option.weight, 0);
+  let roll = rng() * total;
+  for (const option of options) {
+    roll -= option.weight;
+    if (roll <= 0) return option.value;
+  }
+  return options[options.length - 1]?.value;
+}
+
+export function formatNumber(value) {
+  return Math.round(value).toLocaleString("en-US");
+}
+
+export function signed(value) {
+  return value >= 0 ? `+${formatNumber(value)}` : formatNumber(value);
+}
+
+export function titleCase(value) {
+  return String(value)
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export function isLand(tile) {
+  return tile && tile.terrain === "land" && tile.type !== TILE_TYPES.WATER;
+}
+
+export function isTileActive(tile) {
+  if (!tile || !WORKER_MIN[tile.type]) return false;
+  if (tile.effects?.disabledTurns > 0 || tile.effects?.floodedTurns > 0) return false;
+  return (tile.workers || 0) >= WORKER_MIN[tile.type];
+}
+
+export function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+export function pairKey(a, b) {
+  return [a, b].sort().join("|");
+}
+
+export function delay(ms) {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }

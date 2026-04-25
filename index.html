@@ -4,379 +4,116 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>League of Nations</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="./css/style.css" />
 </head>
 <body>
-  <div id="app">
-    <header id="topbar">
-      <div class="brand">LEAGUE OF NATIONS</div>
-      <div class="status">
-        <span id="status-nation">—</span>
-        <span id="status-stage">Stage: 1</span>
-        <span id="status-turn">Turn: 1</span>
-        <span id="starve-indicator" class="starve-indicator" hidden>⚠ STARVATION</span>
+  <div id="setup-screen" class="setup-screen">
+    <form id="setup-form" class="setup-panel">
+      <div class="setup-title">League of Nations</div>
+      <div class="setup-subtitle">Educational turn-based strategy</div>
+      <div class="setup-grid">
+        <label class="field">
+          <span>Nation name</span>
+          <input id="setup-player-name" type="text" maxlength="40" value="Republic of Nova" />
+        </label>
+        <label class="field">
+          <span>Map size</span>
+          <select id="setup-map-size">
+            <option>Small</option>
+            <option selected>Medium</option>
+            <option>Large</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Total nations</span>
+          <input id="setup-nation-count" type="number" min="2" max="10" step="1" value="5" />
+        </label>
+        <label class="field">
+          <span>Max turns</span>
+          <input id="setup-max-turns" type="number" min="10" max="120" step="1" value="30" />
+        </label>
+        <label class="field">
+          <span>Time limit minutes</span>
+          <input id="setup-time-limit" type="number" min="0" max="240" step="5" value="0" />
+        </label>
+        <label class="field checkbox-field">
+          <input id="setup-unlimited" type="checkbox" />
+          <span>Unlimited mode</span>
+        </label>
       </div>
-      <button id="end-turn-btn">End Turn →</button>
+      <div id="continue-note" class="continue-note"></div>
+      <div class="setup-actions">
+        <button id="continue-btn" type="button" class="secondary-btn">Continue</button>
+        <button type="submit" class="primary-btn">Start New Game</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand">League of Nations</div>
+        <div id="phase-label" class="phase-label">Player Turn</div>
+      </div>
+      <div id="status-strip" class="status-strip"></div>
+      <div class="top-actions">
+        <button id="save-btn" class="secondary-btn">Save</button>
+        <button id="new-game-btn" class="secondary-btn">New</button>
+        <button id="end-turn-btn" class="primary-btn">End Turn</button>
+      </div>
     </header>
 
-    <main id="main">
-      <div id="map-container">
+    <main class="game-shell">
+      <section class="map-section">
         <canvas id="map-canvas"></canvas>
-        <div id="tooltip" class="tooltip hidden"></div>
-        <div id="tutorial-card" class="tutorial-card" hidden>
-          <div class="tutorial-kicker">Tutorial</div>
-          <div id="tutorial-text"></div>
-          <button id="tutorial-dismiss-btn" class="secondary-btn">Skip</button>
-        </div>
-      </div>
+        <div id="tooltip" class="tooltip" hidden></div>
+        <section id="tile-popup" class="tile-popup" hidden>
+          <button id="tile-close-btn" class="icon-btn close-btn" aria-label="Close tile popup">×</button>
+          <div id="tile-popup-content"></div>
+        </section>
+      </section>
 
-      <aside id="sidebar">
+      <aside class="side-panel">
         <section class="panel">
           <h2>Resources</h2>
-          <div id="resource-panel" class="resource-panel"></div>
+          <div id="resource-panel"></div>
         </section>
         <section class="panel">
           <h2>Nations</h2>
-          <div id="nation-panel" class="nation-panel"></div>
+          <div id="nation-panel"></div>
         </section>
         <section class="panel">
           <h2>Diplomacy</h2>
-          <div id="diplomacy-panel" class="diplomacy-panel"></div>
-        </section>
-        <section class="panel" id="military-panel-section" hidden>
-          <h2>War Command</h2>
-          <div class="recruit-controls">
-            <label class="field">
-              <span>Recruit soldiers to weakest base</span>
-              <input id="recruit-amount" type="number" min="1" step="1" value="4" />
-            </label>
-            <button id="recruit-btn" class="wide-btn">Recruit</button>
-          </div>
-          <div id="war-panel" class="war-panel"></div>
+          <div id="diplomacy-panel"></div>
         </section>
         <section class="panel">
-          <h2>Tile</h2>
-          <div id="tile-info" class="tile-info">
-            <p class="muted">Click a tile to inspect or build.</p>
-          </div>
-        </section>
-        <section class="panel" id="summary-panel" hidden>
-          <h2>Last Round</h2>
-          <div id="summary-content"></div>
-        </section>
-        <section class="panel" id="tech-panel-section" hidden>
-          <h2>Industrial Era</h2>
-          <div id="tech-panel-btns" class="tech-panel-btns">
-            <button id="open-tech-btn" class="wide-btn">⚗ Research Technology</button>
-          </div>
-        </section>
-        <section class="panel" id="fleet-panel-section" hidden>
-          <h2>Modern Era</h2>
-          <div id="fleet-panel-btns" class="tech-panel-btns">
-            <button id="open-fleet-btn" class="wide-btn">⚓ Assemble Fleets</button>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Controls</h2>
-          <ul class="controls">
-            <li><strong>Left-drag</strong> — orbit camera</li>
-            <li><strong>Right-drag</strong> — pan</li>
-            <li><strong>Scroll</strong> — zoom</li>
-            <li><strong>Click</strong> — select tile</li>
-          </ul>
+          <h2>Technology</h2>
+          <div id="tech-panel"></div>
         </section>
         <section class="panel">
-          <h2>Settings</h2>
-          <div class="settings-actions">
-            <button id="open-archives-btn" class="wide-btn">📜 View Archives</button>
-            <button id="manual-save-btn" class="wide-btn">Save Game</button>
-            <button id="new-game-btn" class="wide-btn">New Game</button>
-          </div>
-          <div id="save-status" class="save-status muted"></div>
+          <h2>Last Turn</h2>
+          <div id="summary-panel"></div>
         </section>
       </aside>
     </main>
 
-    <footer id="eventfeed">
-      <div class="feed-head">
-        <span class="feed-label">Events</span>
-        <span id="phase-indicator" class="phase-indicator">Player Turn</span>
-      </div>
-      <div id="feed-current" class="feed-current muted">Loading…</div>
-      <div id="feed-content" class="feed-list"></div>
+    <footer class="event-feed">
+      <div class="feed-title">Event Feed</div>
+      <div id="event-feed-content" class="feed-content"></div>
     </footer>
-
-    <div id="trade-modal" class="modal-backdrop" hidden>
-      <div class="modal trade-modal" role="dialog" aria-modal="true" aria-labelledby="trade-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="trade-title">Trade</h2>
-            <p id="trade-subtitle" class="muted"></p>
-          </div>
-          <button id="trade-close-btn" class="icon-btn" aria-label="Close trade modal">×</button>
-        </div>
-
-        <div class="trade-columns">
-          <section>
-            <h3>You Offer</h3>
-            <label class="field">
-              <span>Money</span>
-              <input id="offer-money" type="number" min="0" step="50" value="0" />
-            </label>
-            <label class="field">
-              <span>People</span>
-              <input id="offer-people" type="number" min="0" step="1" value="0" />
-            </label>
-          </section>
-          <section>
-            <h3>You Request</h3>
-            <label class="field">
-              <span>Money</span>
-              <input id="request-money" type="number" min="0" step="50" value="0" />
-            </label>
-            <label class="field">
-              <span>People</span>
-              <input id="request-people" type="number" min="0" step="1" value="0" />
-            </label>
-          </section>
-        </div>
-
-        <div id="trade-preview" class="trade-preview muted"></div>
-        <div class="modal-actions">
-          <button id="trade-reset-btn" class="secondary-btn">Reset</button>
-          <button id="trade-submit-btn" class="primary-btn">Send Proposal</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="stage-modal" class="modal-backdrop" hidden>
-      <div class="modal stage-modal" role="dialog" aria-modal="true" aria-labelledby="stage-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="stage-title">Stage Unlocked</h2>
-            <p id="stage-subtitle" class="muted"></p>
-          </div>
-          <button id="stage-close-btn" class="icon-btn" aria-label="Close stage modal">×</button>
-        </div>
-        <div id="stage-content" class="stage-content"></div>
-        <div class="modal-actions">
-          <button id="stage-government-btn" class="primary-btn">Choose Government</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="government-modal" class="modal-backdrop" hidden>
-      <div class="modal government-modal" role="dialog" aria-modal="true" aria-labelledby="government-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="government-title">Choose Government</h2>
-            <p class="muted">This choice is permanent for the current stage.</p>
-          </div>
-        </div>
-        <div id="government-options" class="government-options"></div>
-      </div>
-    </div>
-
-    <!-- Technology Modal -->
-    <div id="tech-modal" class="modal-backdrop" hidden>
-      <div class="modal tech-modal" role="dialog" aria-modal="true" aria-labelledby="tech-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="tech-title">Technology</h2>
-            <p id="tech-subtitle" class="muted"></p>
-          </div>
-          <button id="tech-close-btn" class="icon-btn" aria-label="Close tech modal">×</button>
-        </div>
-        <div id="tech-grid" class="tech-grid"></div>
-      </div>
-    </div>
-
-    <!-- Declare War Modal -->
-    <div id="war-declare-modal" class="modal-backdrop" hidden>
-      <div class="modal war-declare-modal" role="dialog" aria-modal="true" aria-labelledby="war-declare-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="war-declare-title">Declare War</h2>
-            <p id="war-declare-subtitle" class="muted"></p>
-          </div>
-          <button id="war-declare-close-btn" class="icon-btn" aria-label="Close declare war modal">×</button>
-        </div>
-        <div class="war-declare-body">
-          <p id="war-declare-info" class="war-info-row"></p>
-          <label class="field">
-            <span>Declaration reason (optional)</span>
-            <input id="war-declare-reason" type="text" maxlength="80" placeholder="e.g. Territorial expansion" />
-          </label>
-        </div>
-        <div class="modal-actions">
-          <button id="war-declare-cancel-btn" class="secondary-btn">Cancel</button>
-          <button id="war-declare-confirm-btn" class="danger-btn">Declare War</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- War Report Modal -->
-    <div id="war-report-modal" class="modal-backdrop" hidden>
-      <div class="modal war-report-modal" role="dialog" aria-modal="true" aria-labelledby="war-report-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="war-report-title">Combat Report</h2>
-            <p id="war-report-subtitle" class="muted"></p>
-          </div>
-          <button id="war-report-close-btn" class="icon-btn" aria-label="Close war report modal">×</button>
-        </div>
-        <div id="war-report-content" class="war-report-content"></div>
-        <div class="modal-actions">
-          <button id="war-report-close-action-btn" class="primary-btn">Continue</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Fleet Modal -->
-    <div id="fleet-modal" class="modal-backdrop" hidden>
-      <div class="modal tech-modal" role="dialog" aria-modal="true" aria-labelledby="fleet-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="fleet-title">Fleet Assembly</h2>
-            <p id="fleet-subtitle" class="muted"></p>
-          </div>
-          <button id="fleet-close-btn" class="icon-btn" aria-label="Close fleet modal">×</button>
-        </div>
-        <div id="fleet-grid" class="tech-grid"></div>
-      </div>
-    </div>
-
-    <!-- Victory Modal -->
-    <div id="victory-modal" class="modal-backdrop" hidden>
-      <div class="modal victory-modal" role="dialog" aria-modal="true" aria-labelledby="victory-title">
-        <div class="victory-header">
-          <div id="victory-badge" class="victory-badge"></div>
-          <h2 id="victory-title">Game Over</h2>
-          <p id="victory-subtitle" class="muted"></p>
-        </div>
-        <div id="awards-grid" class="awards-grid"></div>
-        <div id="victory-stats" class="victory-stats"></div>
-        <div class="modal-actions">
-          <button id="victory-play-again" class="primary-btn">Play Again</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- National Archives Modal -->
-    <div id="archive-modal" class="modal-backdrop" hidden>
-      <div class="modal archive-modal" role="dialog" aria-modal="true" aria-labelledby="archive-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="archive-title">National Archives</h2>
-            <p id="archive-subtitle" class="muted">Complete history of your nation's actions</p>
-          </div>
-          <button id="archive-close-btn" class="icon-btn" aria-label="Close archives">×</button>
-        </div>
-        <label class="field archive-picker">
-          <span>Nation</span>
-          <select id="archive-nation-select"></select>
-        </label>
-        <div id="archive-content" class="archive-content"></div>
-      </div>
-    </div>
-
-    <div id="alliance-modal" class="modal-backdrop" hidden>
-      <div class="modal alliance-modal" role="dialog" aria-modal="true" aria-labelledby="alliance-title">
-        <div class="modal-head">
-          <div>
-            <h2 id="alliance-title">Alliance Agreement</h2>
-            <p id="alliance-subtitle" class="muted"></p>
-          </div>
-          <button id="alliance-close-btn" class="icon-btn" aria-label="Close alliance modal">×</button>
-        </div>
-        <div class="alliance-form">
-          <label class="field">
-            <span>Alliance Name</span>
-            <input id="alliance-name" type="text" maxlength="48" value="Trade Accord" />
-          </label>
-          <label class="field">
-            <span>Type</span>
-            <select id="alliance-type">
-              <option value="trade">Trade</option>
-              <option value="military">Military</option>
-              <option value="political">Political</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Duration</span>
-            <input id="alliance-duration" type="number" min="1" max="20" step="1" value="5" />
-          </label>
-          <div class="term-grid">
-            <label><input id="term-share" type="checkbox" checked /> Share resources</label>
-            <label><input id="term-defense" type="checkbox" /> Mutual defense</label>
-            <label><input id="term-exclusive" type="checkbox" /> Trade exclusivity</label>
-          </div>
-        </div>
-        <div id="alliance-preview" class="trade-preview muted"></div>
-        <div class="modal-actions">
-          <button id="alliance-submit-btn" class="primary-btn">Send Agreement</button>
-        </div>
-      </div>
-    </div>
   </div>
 
-  <div id="start-screen" class="start-screen">
-    <div class="start-panel">
-      <div class="start-brand">LEAGUE OF NATIONS</div>
-      <p class="start-subtitle">A Civilization Strategy Game</p>
-      <div class="start-grid">
-        <label class="field">
-          <span>Nation Name</span>
-          <input id="start-nation-name" type="text" maxlength="40" value="Republic of Nova" />
-        </label>
-        <label class="field">
-          <span>Bot Nations</span>
-          <input id="start-bot-count" type="number" min="2" max="7" step="1" value="3" />
-        </label>
-        <label class="field">
-          <span>Map Size</span>
-          <select id="start-map-size">
-            <option value="8">Small</option>
-            <option value="11" selected>Medium</option>
-            <option value="14">Large</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Turn Limit</span>
-          <select id="start-turn-limit">
-            <option value="20">20</option>
-            <option value="30" selected>30</option>
-            <option value="40">40</option>
-            <option value="0">Unlimited</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Growth Rate</span>
-          <select id="start-growth-rate">
-            <option value="1">Every turn</option>
-            <option value="2">Every 2 turns</option>
-          </select>
-        </label>
+  <div id="dialog-backdrop" class="dialog-backdrop" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-head">
+        <h2 id="dialog-title"></h2>
+        <button id="dialog-close-btn" class="icon-btn" aria-label="Close dialog">×</button>
       </div>
-      <div id="continue-note" class="continue-note muted"></div>
-      <div class="start-actions">
-        <button id="continue-game-btn" class="secondary-btn">Continue Game</button>
-        <button id="start-game-btn" class="primary-btn">Start Game</button>
-      </div>
+      <div id="dialog-body" class="dialog-body"></div>
     </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="js/utils.js"></script>
-  <script src="js/nation.js"></script>
-  <script src="js/stages.js"></script>
-  <script src="js/war.js"></script>
-  <script src="js/trade.js"></script>
-  <script src="js/map.js"></script>
-  <script src="js/bot.js"></script>
-  <script src="js/game.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/main.js"></script>
+  <script type="module" src="./js/main.js"></script>
 </body>
 </html>

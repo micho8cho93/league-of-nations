@@ -1,119 +1,258 @@
-// Nation state, cost tables, worker rules. Phase 2.
+import {
+  BUILDING_TYPES,
+  TILE_TYPES,
+  WORKER_ROLES,
+  isTileActive,
+} from "./utils.js";
 
-const REGION_TYPES = {
-  1: { name: "Abundant",   startTiles: 40, maxPerResource: Infinity, money: 1000, people: 40 },
-  2: { name: "Moderate",   startTiles: 55, maxPerResource: 25,       money: 2000, people: 30 },
-  3: { name: "Restricted", startTiles: 65, maxPerResource: 20,       money: 2500, people: 20 },
-  4: { name: "Limited",    startTiles: 80, maxPerResource: 20,       money: 3500, people: 15 },
+export const PERSONALITIES = [
+  "Builder",
+  "Trader",
+  "Scholar",
+  "Militarist",
+  "Expansionist",
+  "Defender",
+];
+
+export const BOT_NAMES = [
+  "Arden Republic",
+  "Vesper Union",
+  "Meridian League",
+  "Solenne Duchy",
+  "Orun Free Cities",
+  "Caldor Dominion",
+  "Istrian Commonwealth",
+  "Kestral Accord",
+  "Namar Isles",
+];
+
+export const STARTING_PROFILES = {
+  small: {
+    label: "Small Nation",
+    territoryTarget: 5,
+    population: 24,
+    money: 1800,
+    resources: { food: 80, materials: 40, education: 25, industry: 0 },
+  },
+  balanced: {
+    label: "Balanced Nation",
+    territoryTarget: 7,
+    population: 32,
+    money: 1350,
+    resources: { food: 110, materials: 55, education: 35, industry: 0 },
+  },
+  large: {
+    label: "Large Nation",
+    territoryTarget: 9,
+    population: 42,
+    money: 950,
+    resources: { food: 140, materials: 70, education: 45, industry: 0 },
+  },
 };
 
-// Minimum workers required for a tile to be "active".
-const WORKER_MIN = {
-  farm: 2,
-  mine: 3,
-  school: 3,
-  military: 4,
-  factory: 5,
-};
+export function profileSequence(nationCount) {
+  const sequence = [];
+  const order = ["small", "balanced", "large"];
+  for (let i = 0; i < nationCount; i += 1) sequence.push(order[i % order.length]);
+  return sequence;
+}
 
-const TANK_STRENGTH = 5;
-const TANK_FLEET_STRENGTH = TANK_STRENGTH * 4;
-
-// Which population subfield a tile draws from.
-const WORKER_FIELD = {
-  farm: "farmers",
-  mine: "miners",
-  school: "scholars",
-  military: "soldiers",
-  factory: "scholars",
-};
-
-// Plural key on nation.tiles for a tile type.
-const TILE_LIST_KEY = {
-  farm: "farms",
-  mine: "mines",
-  school: "schools",
-  military: "militaryBases",
-  factory: "factories",
-};
-
-function createNation({ id, name, color, regionType }) {
-  const r = REGION_TYPES[regionType];
+export function createNation({
+  id,
+  name,
+  color,
+  isPlayer = false,
+  profile = "balanced",
+  personality = "Builder",
+}) {
+  const start = STARTING_PROFILES[profile] || STARTING_PROFILES.balanced;
+  const population = start.population;
   return {
     id,
     name,
     color,
-    regionType,
-    money: r.money,
+    isPlayer,
+    profile,
+    personality,
+    active: true,
+    capitalTileId: null,
+    territory: [],
     population: {
-      total: r.people,
-      available: r.people,
-      farmers: 0,
-      miners: 0,
-      scholars: 0,
-      soldiers: 0,
+      total: population,
+      available: Math.max(0, population - 8),
     },
-    tiles: {
-      farms: [],
-      mines: [],
-      schools: [],
-      militaryBases: [],
-      factories: [],
-      empty: [],
+    money: start.money,
+    resources: { ...start.resources },
+    workers: {
+      [WORKER_ROLES.FARMERS]: 2,
+      [WORKER_ROLES.MINERS]: 0,
+      [WORKER_ROLES.SCHOLARS]: 0,
+      [WORKER_ROLES.ENGINEERS]: 0,
+      [WORKER_ROLES.SOLDIERS]: 6,
     },
-    technologies: {
-      tractors: 0,
-      excavators: 0,
-      universities: 0,
-      tanks: 0,
-      navalShips: 0,
-      tankFleets: 0,
-      navalFleets: 0,
+    diplomacy: {},
+    military: {
+      unitsTrained: 0,
+      unitsLost: 0,
+      battlesWon: 0,
+      battlesLost: 0,
+      capitalsCaptured: 0,
+      branchFocus: null,
     },
-    stage: STAGES.FOUNDATIONAL,
-    stageUnlocks: { stage2: false, stage3: false, stage32: false, stage4: false },
-    government: null,
-    alliances: [],
-    atWarWith: [],
-    treaties: [],
-    archives: [],
-    awards: [],
+    tech: {
+      farming: 0,
+      mining: 0,
+      education: 0,
+      military: 0,
+      branches: {
+        tanks: 0,
+        air: 0,
+        naval: 0,
+      },
+    },
+    stats: {
+      built: 0,
+      destroyed: 0,
+      tilesCaptured: 0,
+      warsDeclared: 0,
+      tradesAccepted: 0,
+      alliancesFormed: 0,
+      turnsAtWar: 0,
+      peopleLost: 0,
+      peopleGained: 0,
+      moneyEarned: 0,
+      moneySpent: 0,
+      resourcesProduced: 0,
+      techResearched: 0,
+      eventsSuffered: 0,
+      history: [],
+    },
   };
 }
 
-// Build cost by stage (1,2,3.1,3.2). Returns { money, people } — pay one or the other.
-// `people` is null for tiles that cannot be paid for in people (factory).
-function buildCost(stage, tileType) {
-  const base = {
-    farm:     { money: 100, people: 1 },
-    mine:     { money: 200, people: 2 },
-    school:   { money: 200, people: 2 },
-    military: { money: 400, people: 4 },
-    factory:  { money: 700, people: null },
-  };
-  if (stage >= STAGES.INDUSTRIAL_EXPANSION) {
-    base.farm     = { money: 300,  people: 3 };
-    base.mine     = { money: 400,  people: 4 };
-    base.school   = { money: 400,  people: 4 };
-    base.military = { money: 500,  people: 5 };
-    base.factory  = { money: 1000, people: null };
+export function addHistory(nation, turn, message, type = "action") {
+  nation.stats.history.push({
+    turn,
+    type,
+    message,
+    timestamp: Date.now(),
+  });
+  if (nation.stats.history.length > 160) nation.stats.history.shift();
+}
+
+export function ownedTiles(nation, tiles) {
+  if (!nation) return [];
+  return tiles.filter((tile) => tile.ownerId === nation.id);
+}
+
+export function activeTiles(nation, tiles, type = null) {
+  return ownedTiles(nation, tiles).filter((tile) => {
+    if (type && tile.type !== type) return false;
+    return isTileActive(tile);
+  });
+}
+
+export function countTiles(nation, tiles, type = null) {
+  return ownedTiles(nation, tiles).filter((tile) => !type || tile.type === type).length;
+}
+
+export function availableWorkers(nation) {
+  return Math.max(0, nation.population.available);
+}
+
+export function spendMoney(nation, amount) {
+  const cost = Math.max(0, Math.ceil(amount));
+  if (nation.money < cost) return false;
+  nation.money -= cost;
+  nation.stats.moneySpent += cost;
+  return true;
+}
+
+export function earnMoney(nation, amount) {
+  const gain = Math.max(0, Math.ceil(amount));
+  nation.money += gain;
+  nation.stats.moneyEarned += gain;
+}
+
+export function addPopulation(nation, amount) {
+  const gain = Math.max(0, Math.floor(amount));
+  nation.population.total += gain;
+  nation.population.available += gain;
+  nation.stats.peopleGained += gain;
+}
+
+export function removePopulation(nation, amount) {
+  let remaining = Math.max(0, Math.floor(amount));
+  const before = remaining;
+  const fromAvailable = Math.min(nation.population.available, remaining);
+  nation.population.available -= fromAvailable;
+  nation.population.total -= fromAvailable;
+  remaining -= fromAvailable;
+
+  const roleOrder = [
+    WORKER_ROLES.SOLDIERS,
+    WORKER_ROLES.ENGINEERS,
+    WORKER_ROLES.SCHOLARS,
+    WORKER_ROLES.MINERS,
+    WORKER_ROLES.FARMERS,
+  ];
+  for (const role of roleOrder) {
+    if (remaining <= 0) break;
+    const lost = Math.min(nation.workers[role] || 0, remaining);
+    nation.workers[role] -= lost;
+    nation.population.total -= lost;
+    remaining -= lost;
   }
-  return base[tileType];
+
+  const removed = before - remaining;
+  nation.population.total = Math.max(0, nation.population.total);
+  nation.population.available = Math.max(0, nation.population.available);
+  nation.stats.peopleLost += removed;
+  if (nation.population.total <= 0) nation.active = false;
+  return removed;
 }
 
-function isTileActive(tile) {
-  const min = WORKER_MIN[tile.type];
-  if (min == null) return false;
-  if ((tile.disabledTurns || 0) > 0 || (tile.floodedTurns || 0) > 0) return false;
-  return (tile.workers || 0) >= min;
+export function militaryPower(nation, tiles = []) {
+  if (!nation || !nation.active) return 0;
+  const owned = tiles.length ? ownedTiles(nation, tiles) : [];
+  const unitStrength = owned.reduce((sum, tile) => sum + (tile.unit?.strength || 0), 0);
+  const staffedBases = owned.filter((tile) => tile.type === TILE_TYPES.MILITARY).reduce((sum, tile) => sum + (tile.workers || 0), 0);
+  const branchPower =
+    nation.tech.branches.tanks * 10 +
+    nation.tech.branches.air * 9 +
+    nation.tech.branches.naval * 8;
+  return Math.round(staffedBases + unitStrength + nation.tech.military * 6 + branchPower);
 }
 
-function tileFoodCapacity(tile) {
-  if (!isTileActive(tile) || tile.type !== "farm") return 0;
-  const baseFood = tile.hasTractor ? 40 : 10;
-  return baseFood * ((tile.bountifulTurns || 0) > 0 ? 2 : 1);
+export function computeScore(nation, tiles) {
+  if (!nation || !nation.active) return -Infinity;
+  const owned = ownedTiles(nation, tiles);
+  const resourceValue =
+    nation.resources.food * 0.5 +
+    nation.resources.materials * 2 +
+    nation.resources.education * 3 +
+    nation.resources.industry * 5;
+  const buildingValue = BUILDING_TYPES.reduce((sum, type) => {
+    return sum + countTiles(nation, tiles, type) * (type === TILE_TYPES.FACTORY ? 180 : 75);
+  }, 0);
+  const techValue =
+    (nation.tech.farming + nation.tech.mining + nation.tech.education + nation.tech.military) * 220 +
+    Object.values(nation.tech.branches).reduce((sum, level) => sum + level * 260, 0);
+  return Math.round(
+    nation.money +
+      resourceValue +
+      nation.population.total * 18 +
+      owned.length * 90 +
+      buildingValue +
+      militaryPower(nation, tiles) * 22 +
+      techValue
+  );
 }
 
-function foodCapacity(nation) {
-  return nation.tiles.farms.reduce((sum, farm) => sum + tileFoodCapacity(farm), 0);
+export function serializeNation(nation) {
+  return JSON.parse(JSON.stringify(nation));
+}
+
+export function restoreNation(data) {
+  return JSON.parse(JSON.stringify(data));
 }
