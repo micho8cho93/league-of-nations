@@ -5,6 +5,7 @@ import {
   isTileActive,
 } from "./utils.js";
 import { activeTiles, countTiles } from "./nation.js";
+import { BALANCE } from "./balance.js";
 
 export const ERAS = {
   1: {
@@ -37,28 +38,28 @@ export const TECH_CATEGORIES = {
   farming: {
     label: "Farming",
     tileType: TILE_TYPES.FARM,
-    baseCost: 260,
+    baseCost: BALANCE.tech.categories.farming.baseCost,
     resource: "food",
     description: "Improves food output and population growth.",
   },
   mining: {
     label: "Mining",
     tileType: TILE_TYPES.MINE,
-    baseCost: 320,
+    baseCost: BALANCE.tech.categories.mining.baseCost,
     resource: "materials",
     description: "Improves material extraction and factory prerequisites.",
   },
   education: {
     label: "Education",
     tileType: TILE_TYPES.SCHOOL,
-    baseCost: 360,
+    baseCost: BALANCE.tech.categories.education.baseCost,
     resource: "education",
     description: "Improves research and industrial readiness.",
   },
   military: {
     label: "Military",
     tileType: TILE_TYPES.MILITARY,
-    baseCost: 420,
+    baseCost: BALANCE.tech.categories.military.baseCost,
     resource: "materials",
     description: "Improves training, defense, and late-era specialization.",
   },
@@ -67,67 +68,127 @@ export const TECH_CATEGORIES = {
 export const MILITARY_BRANCHES = {
   tanks: {
     label: "Tanks",
-    baseCost: 900,
-    materialCost: 45,
+    baseCost: BALANCE.tech.branches.tanks.baseCost,
+    materialCost: BALANCE.tech.branches.tanks.materialCost,
     effect: "Heavy ground units gain attack power.",
   },
   air: {
     label: "Air",
-    baseCost: 1050,
-    materialCost: 35,
-    educationCost: 35,
+    baseCost: BALANCE.tech.branches.air.baseCost,
+    materialCost: BALANCE.tech.branches.air.materialCost,
+    educationCost: BALANCE.tech.branches.air.educationCost,
     effect: "Air support adds combat strength across nearby fronts.",
   },
   naval: {
     label: "Naval",
-    baseCost: 1000,
-    materialCost: 50,
+    baseCost: BALANCE.tech.branches.naval.baseCost,
+    materialCost: BALANCE.tech.branches.naval.materialCost,
     effect: "Units can cross water and fight over islands.",
   },
 };
 
-const BASE_BUILD_COSTS = {
-  [TILE_TYPES.FARM]: 140,
-  [TILE_TYPES.MINE]: 190,
-  [TILE_TYPES.SCHOOL]: 230,
-  [TILE_TYPES.MILITARY]: 330,
-  [TILE_TYPES.FACTORY]: 780,
+export const UNIT_TRAINING = {
+  infantry: {
+    label: "Infantry",
+    action: "Train",
+    branch: null,
+    strengths: BALANCE.tech.training.infantryStrengths,
+    description: "Reliable ground troops.",
+  },
+  tanks: {
+    label: "Tank Column",
+    action: "Deploy",
+    branch: "tanks",
+    baseStrength: BALANCE.tech.training.branchBaseStrength.tanks,
+    description: "Heavy ground armor.",
+  },
+  air: {
+    label: "Plane Wing",
+    action: "Deploy",
+    branch: "air",
+    baseStrength: BALANCE.tech.training.branchBaseStrength.air,
+    description: "Fast air support.",
+  },
+  naval: {
+    label: "Naval Fleet",
+    action: "Deploy",
+    branch: "naval",
+    baseStrength: BALANCE.tech.training.branchBaseStrength.naval,
+    description: "Water-crossing forces.",
+  },
 };
 
 export function buildingCost(type, era) {
-  const base = BASE_BUILD_COSTS[type] || 0;
-  if (type === TILE_TYPES.FACTORY) return era >= 4 ? 1250 : 780;
-  if (era >= 4) return Math.ceil(base * 2.35);
-  if (era >= 3) return Math.ceil(base * 1.65);
+  const base = BALANCE.costs.build[type] || 0;
+  if (type === TILE_TYPES.FACTORY) return era >= 4 ? BALANCE.costs.factoryEra4Build : BALANCE.costs.build[TILE_TYPES.FACTORY];
+  if (era >= 4) return Math.ceil(base * BALANCE.costs.buildEraMultipliers.era4);
+  if (era >= 3) return Math.ceil(base * BALANCE.costs.buildEraMultipliers.era3);
   return base;
 }
 
 export function destroyCost(type) {
   if (type === TILE_TYPES.EMPTY || type === TILE_TYPES.WATER) return 0;
-  return type === TILE_TYPES.FACTORY ? 160 : 70;
+  return BALANCE.costs.destroy[type] || BALANCE.costs.destroy.default;
 }
 
 export function workerAdminCost(amount) {
-  return Math.max(0, Math.ceil(amount) * 5);
+  return Math.max(0, Math.ceil(amount) * BALANCE.costs.workerAdminPerWorker);
 }
 
-export function trainingCost(strength, era) {
-  const scale = era >= 4 ? 1.45 : era >= 3 ? 1.2 : 1;
-  return {
-    money: Math.ceil(strength * 35 * scale),
-    people: Math.ceil(strength / 3),
-    materials: Math.ceil(strength * (era >= 4 ? 0.85 : 0.55)),
+export function trainingCost(strength, era, branch = "infantry", branchLevel = 0) {
+  const config = BALANCE.tech.training;
+  const scale = era >= 4 ? config.era4Scale : era >= 3 ? config.era3Scale : 1;
+  const multiplier = config.branchMoneyMultiplier[branch] || config.branchMoneyMultiplier.infantry;
+  const cost = {
+    money: Math.ceil(strength * config.moneyPerStrength * scale),
+    people: Math.ceil(strength / config.peopleDivisor),
+    materials: Math.ceil(strength * (era >= 4 ? config.materialsPerStrength.era4 : config.materialsPerStrength.early)),
   };
+  if (branch !== "infantry") {
+    cost.money = Math.ceil(cost.money * multiplier);
+    cost.materials = Math.ceil(cost.materials * (config.branchMaterialsMultiplier[branch] || config.branchMaterialsMultiplier.default));
+    cost.industry = Math.ceil((config.industryBase + strength * config.industryPerStrength) * (1 + branchLevel * config.industryPerBranchLevel));
+    if (branch === "air") cost.education = Math.ceil(config.airEducationBase + strength * config.airEducationPerStrength);
+  }
+  return cost;
+}
+
+export function trainingOptionsForNation(nation, era) {
+  const options = UNIT_TRAINING.infantry.strengths.map((strength) => ({
+    id: `infantry-${strength}`,
+    branch: "infantry",
+    label: `${UNIT_TRAINING.infantry.action} ${strength}`,
+    strength,
+    cost: trainingCost(strength, era),
+    description: UNIT_TRAINING.infantry.description,
+  }));
+  if (era < 4) return options;
+  for (const [branch, config] of Object.entries(UNIT_TRAINING)) {
+    if (branch === "infantry") continue;
+    const level = nation.tech?.branches?.[branch] || 0;
+    if (level <= 0) continue;
+    const strength = config.baseStrength + level * 2;
+    options.push({
+      id: branch,
+      branch,
+      label: `${config.action} ${config.label}`,
+      strength,
+      cost: trainingCost(strength, era, branch, level),
+      description: config.description,
+    });
+  }
+  return options;
 }
 
 export function factoryRequirements(nation, tiles) {
   const factories = countTiles(nation, tiles, TILE_TYPES.FACTORY);
+  const config = BALANCE.tech.factoryRequirements;
   return {
-    activeMines: 3 + factories * 2,
-    activeSchools: 2 + factories * 2,
-    population: 35 + factories * 8,
-    miningTier: 2,
-    educationTier: 2,
+    activeMines: config.activeMinesBase + factories * config.activePerFactory,
+    activeSchools: config.activeSchoolsBase + factories * config.activePerFactory,
+    population: config.populationBase + factories * config.populationPerFactory,
+    miningTier: config.miningTier,
+    educationTier: config.educationTier,
   };
 }
 
@@ -147,13 +208,14 @@ export function canBuildFactory(nation, tiles, era) {
 export function researchCost(category, currentTier) {
   const config = TECH_CATEGORIES[category];
   if (!config) return 0;
-  return Math.ceil(config.baseCost * Math.pow(1.85, currentTier));
+  return Math.ceil(config.baseCost * Math.pow(BALANCE.tech.research.costExponent, currentTier));
 }
 
 export function researchRequirement(category, nextTier) {
   const config = TECH_CATEGORIES[category];
-  const requiredActive = Math.max(1, nextTier * 2);
-  const resourceCost = Math.ceil((config?.baseCost || 250) * 0.08 * Math.pow(1.5, nextTier - 1));
+  const research = BALANCE.tech.research;
+  const requiredActive = Math.max(1, nextTier * research.activeTilesPerTier);
+  const resourceCost = Math.ceil((config?.baseCost || 250) * research.resourceCostRate * Math.pow(research.resourceCostExponent, nextTier - 1));
   return {
     activeTiles: requiredActive,
     resource: config?.resource,
@@ -165,7 +227,7 @@ export function canResearch(game, nation, category) {
   const config = TECH_CATEGORIES[category];
   if (!config) return { ok: false, reason: "Unknown technology." };
   const current = nation.tech[category] || 0;
-  if (current >= 4) return { ok: false, reason: "Maximum linear tier reached." };
+  if (current >= BALANCE.tech.research.maxTier) return { ok: false, reason: "Maximum linear tier reached." };
   const nextTier = current + 1;
   const req = researchRequirement(category, nextTier);
   const active = activeTiles(nation, game.tiles, config.tileType).length;
@@ -181,11 +243,12 @@ export function canResearch(game, nation, category) {
 export function branchCost(branch, currentLevel) {
   const config = MILITARY_BRANCHES[branch];
   if (!config) return null;
+  const research = BALANCE.tech.branchResearch;
   return {
-    money: Math.ceil(config.baseCost * Math.pow(1.9, currentLevel)),
-    materials: Math.ceil((config.materialCost || 0) * Math.pow(1.45, currentLevel)),
-    education: Math.ceil((config.educationCost || 20) * Math.pow(1.35, currentLevel)),
-    industry: Math.ceil(25 * Math.pow(1.35, currentLevel)),
+    money: Math.ceil(config.baseCost * Math.pow(research.moneyExponent, currentLevel)),
+    materials: Math.ceil((config.materialCost || 0) * Math.pow(research.materialsExponent, currentLevel)),
+    education: Math.ceil((config.educationCost || research.fallbackEducationCost) * Math.pow(research.educationExponent, currentLevel)),
+    industry: Math.ceil(research.industryBase * Math.pow(research.industryExponent, currentLevel)),
   };
 }
 
@@ -193,12 +256,12 @@ export function canResearchBranch(game, nation, branch) {
   const config = MILITARY_BRANCHES[branch];
   if (!config) return { ok: false, reason: "Unknown branch." };
   if (game.era < 4) return { ok: false, reason: "Military branches unlock in Era 4." };
-  if (nation.tech.military < 3) return { ok: false, reason: "Requires Military tier 3." };
+  if (nation.tech.military < BALANCE.tech.branchResearch.requiredMilitaryTier) return { ok: false, reason: `Requires Military tier ${BALANCE.tech.branchResearch.requiredMilitaryTier}.` };
   if (activeTiles(nation, game.tiles, TILE_TYPES.FACTORY).length < 1) {
     return { ok: false, reason: "Requires one active factory." };
   }
   const current = nation.tech.branches[branch] || 0;
-  if (current >= 3) return { ok: false, reason: "Branch is fully specialized." };
+  if (current >= BALANCE.tech.branchResearch.maxLevel) return { ok: false, reason: "Branch is fully specialized." };
   const cost = branchCost(branch, current);
   if (nation.money < cost.money) return { ok: false, reason: `Requires $${formatNumber(cost.money)}.` };
   for (const resource of ["materials", "education", "industry"]) {
@@ -215,42 +278,47 @@ export function productionForTile(nation, tile, era) {
   const mining = nation.tech.mining || 0;
   const education = nation.tech.education || 0;
   const military = nation.tech.military || 0;
-  const eraScale = 1 + (era - 1) * 0.2;
+  const eraScale = 1 + (era - 1) * BALANCE.production.eraScalePerEra;
   if (tile.type === TILE_TYPES.FARM) {
-    const bonus = tile.effects?.bountifulTurns > 0 ? 2 : 1;
+    const config = BALANCE.production[TILE_TYPES.FARM];
+    const bonus = tile.effects?.bountifulTurns > 0 ? config.bountifulMultiplier : 1;
     return {
-      food: Math.ceil((16 + farming * 8) * bonus * eraScale),
-      money: Math.ceil(28 + farming * 12),
-      people: farming >= 2 ? 1 : 0,
+      food: Math.ceil((config.foodBase + farming * config.foodPerTech) * bonus * eraScale),
+      money: Math.ceil(config.moneyBase + farming * config.moneyPerTech),
+      people: farming >= config.peopleTechTier ? config.people : 0,
     };
   }
   if (tile.type === TILE_TYPES.MINE) {
+    const config = BALANCE.production[TILE_TYPES.MINE];
     return {
-      materials: Math.ceil((9 + mining * 6) * eraScale),
-      money: Math.ceil(45 + mining * 18),
-      people: mining >= 3 ? 1 : 0,
+      materials: Math.ceil((config.materialsBase + mining * config.materialsPerTech) * eraScale),
+      money: Math.ceil(config.moneyBase + mining * config.moneyPerTech),
+      people: mining >= config.peopleTechTier ? config.people : 0,
     };
   }
   if (tile.type === TILE_TYPES.SCHOOL) {
+    const config = BALANCE.production[TILE_TYPES.SCHOOL];
     return {
-      education: Math.ceil((7 + education * 6) * eraScale),
-      money: Math.ceil(32 + education * 14),
-      people: education >= 3 ? 1 : 0,
+      education: Math.ceil((config.educationBase + education * config.educationPerTech) * eraScale),
+      money: Math.ceil(config.moneyBase + education * config.moneyPerTech),
+      people: education >= config.peopleTechTier ? config.people : 0,
     };
   }
   if (tile.type === TILE_TYPES.FACTORY) {
+    const config = BALANCE.production[TILE_TYPES.FACTORY];
     return {
-      industry: Math.ceil(8 + Math.min(nation.tech.mining, nation.tech.education) * 4),
-      money: Math.ceil(130 * eraScale),
-      materialsCost: 4 + era,
-      educationCost: 3 + Math.floor(era / 2),
-      people: era >= 4 ? 1 : 0,
+      industry: Math.ceil(config.industryBase + Math.min(nation.tech.mining, nation.tech.education) * config.industryPerTech),
+      money: Math.ceil(config.moneyBase * eraScale),
+      materialsCost: config.materialsCostBase + era,
+      educationCost: config.educationCostBase + Math.floor(era / config.educationCostEraDivisor),
+      people: era >= config.peopleEra ? config.people : 0,
     };
   }
   if (tile.type === TILE_TYPES.MILITARY) {
+    const config = BALANCE.production[TILE_TYPES.MILITARY];
     return {
-      money: Math.ceil(20 + military * 9),
-      materials: military >= 2 ? 2 : 0,
+      money: Math.ceil(config.moneyBase + military * config.moneyPerTech),
+      materials: military >= config.materialsTechTier ? config.materials : 0,
     };
   }
   return null;

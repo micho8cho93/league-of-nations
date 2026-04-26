@@ -4,15 +4,16 @@ import {
   WORKER_ROLES,
   isTileActive,
 } from "./utils.js";
+import { BALANCE } from "./balance.js";
 
-export const PERSONALITIES = [
-  "Builder",
-  "Trader",
-  "Scholar",
-  "Militarist",
-  "Expansionist",
-  "Defender",
-];
+export const PERSONALITIES = ["aggressive", "economic", "scientific", "balanced"];
+
+// Distributes personalities across bot nations in a fixed rotation.
+// For 5 bots: aggressive, economic, scientific, balanced, aggressive → 2/1/1/1
+export function personalitySequence(botCount) {
+  const rotation = ["aggressive", "economic", "scientific", "balanced"];
+  return Array.from({ length: botCount }, (_, i) => rotation[i % rotation.length]);
+}
 
 export const BOT_NAMES = [
   "Arden Republic",
@@ -26,29 +27,7 @@ export const BOT_NAMES = [
   "Namar Isles",
 ];
 
-export const STARTING_PROFILES = {
-  small: {
-    label: "Small Nation",
-    territoryTarget: 5,
-    population: 24,
-    money: 1800,
-    resources: { food: 80, materials: 40, education: 25, industry: 0 },
-  },
-  balanced: {
-    label: "Balanced Nation",
-    territoryTarget: 7,
-    population: 32,
-    money: 1350,
-    resources: { food: 110, materials: 55, education: 35, industry: 0 },
-  },
-  large: {
-    label: "Large Nation",
-    territoryTarget: 9,
-    population: 42,
-    money: 950,
-    resources: { food: 140, materials: 70, education: 45, industry: 0 },
-  },
-};
+export const STARTING_PROFILES = BALANCE.startingProfiles;
 
 export function profileSequence(nationCount) {
   const sequence = [];
@@ -63,7 +42,7 @@ export function createNation({
   color,
   isPlayer = false,
   profile = "balanced",
-  personality = "Builder",
+  personality = "balanced",
 }) {
   const start = STARTING_PROFILES[profile] || STARTING_PROFILES.balanced;
   const population = start.population;
@@ -77,6 +56,8 @@ export function createNation({
     active: true,
     capitalTileId: null,
     territory: [],
+    warExhaustion: BALANCE.war.exhaustion.min,
+    mobilizationLevel: BALANCE.war.mobilization.peacetimeLevel,
     population: {
       total: population,
       available: Math.max(0, population - 8),
@@ -217,34 +198,36 @@ export function militaryPower(nation, tiles = []) {
   const owned = tiles.length ? ownedTiles(nation, tiles) : [];
   const unitStrength = owned.reduce((sum, tile) => sum + (tile.unit?.strength || 0), 0);
   const staffedBases = owned.filter((tile) => tile.type === TILE_TYPES.MILITARY).reduce((sum, tile) => sum + (tile.workers || 0), 0);
+  const power = BALANCE.militaryPower;
   const branchPower =
-    nation.tech.branches.tanks * 10 +
-    nation.tech.branches.air * 9 +
-    nation.tech.branches.naval * 8;
-  return Math.round(staffedBases + unitStrength + nation.tech.military * 6 + branchPower);
+    nation.tech.branches.tanks * power.branch.tanks +
+    nation.tech.branches.air * power.branch.air +
+    nation.tech.branches.naval * power.branch.naval;
+  return Math.round(staffedBases + unitStrength + nation.tech.military * power.militaryTech + branchPower);
 }
 
 export function computeScore(nation, tiles) {
   if (!nation || !nation.active) return -Infinity;
   const owned = ownedTiles(nation, tiles);
+  const score = BALANCE.score;
   const resourceValue =
-    nation.resources.food * 0.5 +
-    nation.resources.materials * 2 +
-    nation.resources.education * 3 +
-    nation.resources.industry * 5;
+    nation.resources.food * score.resourceValues.food +
+    nation.resources.materials * score.resourceValues.materials +
+    nation.resources.education * score.resourceValues.education +
+    nation.resources.industry * score.resourceValues.industry;
   const buildingValue = BUILDING_TYPES.reduce((sum, type) => {
-    return sum + countTiles(nation, tiles, type) * (type === TILE_TYPES.FACTORY ? 180 : 75);
+    return sum + countTiles(nation, tiles, type) * (score.buildingValue[type] || score.buildingValue.default);
   }, 0);
   const techValue =
-    (nation.tech.farming + nation.tech.mining + nation.tech.education + nation.tech.military) * 220 +
-    Object.values(nation.tech.branches).reduce((sum, level) => sum + level * 260, 0);
+    (nation.tech.farming + nation.tech.mining + nation.tech.education + nation.tech.military) * score.techTierValue +
+    Object.values(nation.tech.branches).reduce((sum, level) => sum + level * score.branchTierValue, 0);
   return Math.round(
     nation.money +
       resourceValue +
-      nation.population.total * 18 +
-      owned.length * 90 +
+      nation.population.total * score.populationValue +
+      owned.length * score.territoryValue +
       buildingValue +
-      militaryPower(nation, tiles) * 22 +
+      militaryPower(nation, tiles) * score.militaryValue +
       techValue
   );
 }
@@ -254,5 +237,22 @@ export function serializeNation(nation) {
 }
 
 export function restoreNation(data) {
-  return JSON.parse(JSON.stringify(data));
+  const nation = JSON.parse(JSON.stringify(data));
+  return {
+    ...nation,
+    warExhaustion: normalizeWarExhaustion(nation.warExhaustion),
+    mobilizationLevel: normalizeMobilizationLevel(nation.mobilizationLevel),
+  };
+}
+
+function normalizeWarExhaustion(value) {
+  const config = BALANCE.war.exhaustion;
+  const numeric = Number.isFinite(value) ? value : config.min;
+  return Math.max(config.min, Math.min(config.max, numeric));
+}
+
+function normalizeMobilizationLevel(value) {
+  const config = BALANCE.war.mobilization;
+  const numeric = Number.isFinite(value) ? Math.round(value) : config.peacetimeLevel;
+  return Math.max(config.minLevel, Math.min(config.maxLevel, numeric));
 }

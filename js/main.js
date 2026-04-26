@@ -1,10 +1,11 @@
 import { SAVE_KEY, clampInt } from "./utils.js";
 import { GameState, clearSavedGame, readSavedGame } from "./game.js";
 import { HexMapRenderer } from "./map.js";
-import { bindUI } from "./ui.js";
+import { TUTORIAL_COMPLETED_KEY, bindUI } from "./ui.js";
 
 const setupScreen = document.getElementById("setup-screen");
 const setupForm = document.getElementById("setup-form");
+const setupReplayTutorialBtn = document.getElementById("setup-replay-tutorial-btn");
 const continueBtn = document.getElementById("continue-btn");
 const continueNote = document.getElementById("continue-note");
 const app = document.getElementById("app");
@@ -41,6 +42,11 @@ if (saved) {
 
 inputs.unlimitedMode.addEventListener("change", () => {
   inputs.maxTurns.disabled = inputs.unlimitedMode.checked;
+});
+
+setupReplayTutorialBtn.addEventListener("click", () => {
+  localStorage.removeItem(TUTORIAL_COMPLETED_KEY);
+  continueNote.textContent = "Tutorial will replay when you start or continue a game.";
 });
 
 setupForm.addEventListener("submit", (event) => {

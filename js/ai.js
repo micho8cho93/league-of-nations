@@ -4,13 +4,12 @@ import { canResearch, canResearchBranch } from "./tech.js";
 import { applyTrade, getDiplomacy, proposeAlliance } from "./trade.js";
 import { canStrategicallyDeclare, declareWar, nearestEnemyTile } from "./war.js";
 
+// First type in each list is built first each turn (overridden temporarily by food pressure)
 const PERSONALITY_BUILD_ORDER = {
-  Builder: [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
-  Trader: [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
-  Scholar: [TILE_TYPES.SCHOOL, TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
-  Militarist: [TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.FARM, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL],
-  Expansionist: [TILE_TYPES.FARM, TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY],
-  Defender: [TILE_TYPES.FARM, TILE_TYPES.MILITARY, TILE_TYPES.SCHOOL, TILE_TYPES.MINE, TILE_TYPES.FACTORY],
+  aggressive:  [TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.FARM, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL],
+  economic:    [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL, TILE_TYPES.MILITARY],
+  scientific:  [TILE_TYPES.SCHOOL, TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+  balanced:    [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
 };
 
 export async function processBotTurn(game, botId) {
@@ -20,12 +19,40 @@ export async function processBotTurn(game, botId) {
 
   staffCriticalTiles(game, bot);
 
-  if (game.era >= 3 && tryWarAction(game, bot)) return;
-  if (tryResearch(game, bot)) return;
-  if (game.era >= 4 && tryBranchResearch(game, bot)) return;
-  if (game.era >= 2 && tryDiplomacy(game, bot)) return;
-  if (tryBuild(game, bot)) return;
-  if (tryTrain(game, bot)) return;
+  // All personalities advance troops when already at war
+  if (game.era >= 3 && tryAdvanceTroops(game, bot)) return;
+
+  if (bot.personality === "aggressive") {
+    // War-first: declare → build military → train → research → light diplomacy
+    if (game.era >= 3 && tryDeclareWar(game, bot)) return;
+    if (tryBuild(game, bot)) return;
+    if (tryTrain(game, bot)) return;
+    if (tryResearch(game, bot)) return;
+    if (game.era >= 4 && tryBranchResearch(game, bot)) return;
+    if (game.era >= 2 && tryDiplomacy(game, bot)) return;
+  } else if (bot.personality === "economic") {
+    // Economy-first: build income → trade actively → research → minimal defense
+    if (tryBuild(game, bot)) return;
+    if (game.era >= 2 && tryDiplomacy(game, bot)) return;
+    if (tryResearch(game, bot)) return;
+    if (game.era >= 4 && tryBranchResearch(game, bot)) return;
+    if (tryTrain(game, bot)) return;
+  } else if (bot.personality === "scientific") {
+    // Research-first: advance tech → build schools → collaborate → light defense
+    if (tryResearch(game, bot)) return;
+    if (game.era >= 4 && tryBranchResearch(game, bot)) return;
+    if (tryBuild(game, bot)) return;
+    if (game.era >= 2 && tryDiplomacy(game, bot)) return;
+    if (tryTrain(game, bot)) return;
+  } else {
+    // Balanced: mixed strategy — original ordering
+    if (game.era >= 3 && tryDeclareWar(game, bot)) return;
+    if (tryResearch(game, bot)) return;
+    if (game.era >= 4 && tryBranchResearch(game, bot)) return;
+    if (game.era >= 2 && tryDiplomacy(game, bot)) return;
+    if (tryBuild(game, bot)) return;
+    if (tryTrain(game, bot)) return;
+  }
 
   game.addEvent(`${bot.name} conserved money and resources.`, { nationId: bot.id, type: "ai" });
 }
@@ -47,11 +74,12 @@ function staffCriticalTiles(game, bot) {
 }
 
 function tryResearch(game, bot) {
-  const categories = bot.personality === "Scholar"
-    ? ["education", "farming", "mining", "military"]
-    : bot.personality === "Militarist"
-      ? ["military", "mining", "farming", "education"]
-      : ["farming", "mining", "education", "military"];
+  // Category priority by personality — scientific chases education, aggressive chases military
+  const categories =
+    bot.personality === "scientific" ? ["education", "farming", "mining", "military"] :
+    bot.personality === "aggressive" ? ["military", "mining", "farming", "education"] :
+    bot.personality === "economic"   ? ["farming", "mining", "education", "military"] :
+    /* balanced */                     ["farming", "mining", "education", "military"];
   for (const category of categories) {
     const check = canResearch(game, bot, category);
     if (!check.ok) continue;
@@ -65,7 +93,11 @@ function tryResearch(game, bot) {
 }
 
 function tryBranchResearch(game, bot) {
-  const branches = bot.personality === "Militarist" ? ["tanks", "air", "naval"] : ["naval", "air", "tanks"];
+  // Aggressive tanks-first; scientific prefers air for era speed; others naval/trade routes
+  const branches =
+    bot.personality === "aggressive" ? ["tanks", "air", "naval"] :
+    bot.personality === "scientific" ? ["air", "naval", "tanks"] :
+    /* economic / balanced */          ["naval", "air", "tanks"];
   for (const branch of branches) {
     if (!canResearchBranch(game, bot, branch).ok) continue;
     const result = game.researchBranch(branch, bot.id);
@@ -78,14 +110,18 @@ function tryBranchResearch(game, bot) {
 }
 
 function tryDiplomacy(game, bot) {
-  if (game.rng() > 0.35) return false;
+  // Engagement rate: economic trades eagerly, aggressive rarely bothers
+  const diploChance = { aggressive: 0.10, economic: 0.70, scientific: 0.45, balanced: 0.35 };
+  if (game.rng() > (diploChance[bot.personality] ?? 0.35)) return false;
   const partners = Object.values(game.nations).filter((nation) => nation.id !== bot.id && nation.active);
   if (!partners.length) return false;
   const partner = partners[randInt(game.rng, 0, partners.length - 1)];
   const relation = getDiplomacy(game, bot.id, partner.id).relation;
 
   if (relation > 62 && game.rng() < 0.35) {
-    const result = proposeAlliance(game, bot.id, partner.id, bot.personality === "Militarist" ? "military" : "trade");
+    // Aggressive seeks military pacts; others prefer trade or research agreements
+    const allianceType = bot.personality === "aggressive" ? "military" : "trade";
+    const result = proposeAlliance(game, bot.id, partner.id, allianceType);
     if (result.ok && result.accepted) {
       game.addEvent(`${bot.name} formed an alliance with ${partner.name}.`, { nationId: bot.id, type: "diplomacy" });
       return true;
@@ -120,6 +156,7 @@ function chooseTradeRequest(bot, partner) {
 function tryBuild(game, bot) {
   const farms = activeTiles(bot, game.tiles, TILE_TYPES.FARM).length;
   const foodPressure = bot.resources.food < bot.population.total * 0.65;
+  // Food pressure overrides personality order to prevent famine
   const order = foodPressure ? [TILE_TYPES.FARM, ...PERSONALITY_BUILD_ORDER[bot.personality]] : PERSONALITY_BUILD_ORDER[bot.personality];
   for (const type of order) {
     const tile = chooseBuildTile(game, bot, type);
@@ -140,23 +177,40 @@ function chooseBuildTile(game, bot, type) {
     return check.ok;
   });
   if (!candidates.length) return null;
+  const p = bot.personality;
   const weighted = candidates.map((tile) => {
     let weight = 1;
+    // Farms: continent tiles are more fertile — universal preference
     if (type === TILE_TYPES.FARM && tile.landform === "continent") weight += 1;
-    if (type === TILE_TYPES.MINE && tile.regionId % 2 === 0) weight += 1;
-    if (type === TILE_TYPES.SCHOOL && tile.regionId % 3 === 0) weight += 1;
-    if (type === TILE_TYPES.MILITARY && game.neighbors(tile.id).some((n) => n.ownerId && n.ownerId !== bot.id)) weight += 3;
+    // Mines: economic bots strongly prioritize resource-rich regions
+    if (type === TILE_TYPES.MINE && tile.regionId % 2 === 0) weight += (p === "economic" ? 3 : 1);
+    // Schools: scientific bots want them anywhere
+    if (type === TILE_TYPES.SCHOOL) weight += (p === "scientific" ? 3 : 0);
+    // Military bases: aggressive bots prefer border tiles for offensive staging
+    if (type === TILE_TYPES.MILITARY && game.neighbors(tile.id).some((n) => n.ownerId && n.ownerId !== bot.id)) {
+      weight += (p === "aggressive" ? 5 : 3);
+    }
+    // Factories: economic bots prefer tiles adjacent to mines or farms
+    if (type === TILE_TYPES.FACTORY && p === "economic") {
+      const nearInfra = game.neighbors(tile.id).some((n) => n.ownerId === bot.id &&
+        (n.type === TILE_TYPES.MINE || n.type === TILE_TYPES.FARM));
+      if (nearInfra) weight += 2;
+    }
     return { value: tile, weight };
   });
   return pickWeighted(weighted, game.rng);
 }
 
 function tryTrain(game, bot) {
-  if (bot.personality !== "Militarist" && bot.personality !== "Defender" && game.rng() > 0.25) return false;
+  // Aggressive trains every turn; balanced 25%; economic/scientific 10% for minimal garrison
+  const trainChance = { aggressive: 1.0, balanced: 0.25, economic: 0.10, scientific: 0.10 };
+  if (game.rng() > (trainChance[bot.personality] ?? 0.25)) return false;
   const bases = game.tiles.filter((tile) => tile.ownerId === bot.id && tile.type === TILE_TYPES.MILITARY);
   if (!bases.length) return false;
   const base = bases.sort((a, b) => (a.unit?.strength || 0) - (b.unit?.strength || 0))[0];
-  const result = game.trainUnit(base.id, 3 + randInt(game.rng, 0, 3), bot.id, { silent: true });
+  // Aggressive trains larger units to project power faster
+  const strength = bot.personality === "aggressive" ? 4 + randInt(game.rng, 0, 3) : 3 + randInt(game.rng, 0, 3);
+  const result = game.trainUnit(base.id, strength, bot.id, { silent: true });
   if (result.ok) {
     game.addEvent(`${bot.name} trained new troops.`, { nationId: bot.id, type: "military", tileId: base.id });
     return true;
@@ -164,21 +218,28 @@ function tryTrain(game, bot) {
   return false;
 }
 
-function tryWarAction(game, bot) {
+function tryAdvanceTroops(game, bot) {
+  // All personalities push their troops when at war — no sitting still
   const enemy = nearestEnemyTile(game, bot.id);
-  if (enemy) {
-    const result = game.moveUnitToward(enemy.fromTileId, enemy.targetTileId, bot.id, { silent: true });
-    if (result.ok) {
-      game.addEvent(`${bot.name} advanced against an enemy front.`, { nationId: bot.id, type: "war" });
-      return true;
-    }
+  if (!enemy) return false;
+  const result = game.moveUnitToward(enemy.fromTileId, enemy.targetTileId, bot.id, { silent: true });
+  if (result.ok) {
+    game.addEvent(`${bot.name} advanced against an enemy front.`, { nationId: bot.id, type: "war" });
+    return true;
   }
+  return false;
+}
 
-  if (bot.personality !== "Militarist" && bot.personality !== "Expansionist") return false;
-  const targets = Object.values(game.nations).filter((nation) => {
-    return nation.id !== bot.id && nation.active && canStrategicallyDeclare(game, bot.id, nation.id);
-  });
-  if (!targets.length || militaryPower(bot, game.tiles) < 12) return false;
+function tryDeclareWar(game, bot) {
+  // Aggressive declares eagerly at power >= 8; balanced more cautiously at >= 12 with random gate
+  const threshold = bot.personality === "aggressive" ? 8 : 12;
+  if (militaryPower(bot, game.tiles) < threshold) return false;
+  if (bot.personality === "balanced" && game.rng() > 0.40) return false;
+  const targets = Object.values(game.nations).filter((nation) =>
+    nation.id !== bot.id && nation.active && canStrategicallyDeclare(game, bot.id, nation.id)
+  );
+  if (!targets.length) return false;
+  // Always target the weakest available opponent
   const target = targets.sort((a, b) => militaryPower(a, game.tiles) - militaryPower(b, game.tiles))[0];
   const result = declareWar(game, bot.id, target.id, "AI strategic opportunity");
   if (result.ok) {

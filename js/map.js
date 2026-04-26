@@ -246,6 +246,28 @@ function colorFromHex(hex) {
   return Number.parseInt(value, 16);
 }
 
+function visualTierForTile(tile, nations) {
+  const tech = nations[tile.ownerId]?.tech;
+  if (!tech) return 0;
+  if (tile.type === TILE_TYPES.FARM) return tech.farming || 0;
+  if (tile.type === TILE_TYPES.MINE) return tech.mining || 0;
+  if (tile.type === TILE_TYPES.SCHOOL) return tech.education || 0;
+  if (tile.type === TILE_TYPES.MILITARY) return tech.military || 0;
+  if (tile.type === TILE_TYPES.FACTORY) return Math.min(4, Math.max(tech.mining || 0, tech.education || 0));
+  return 0;
+}
+
+function strongestBranchForTile(tile, nations) {
+  if (tile.type !== TILE_TYPES.MILITARY) return { branch: tile.unit?.branch || "infantry", level: 0 };
+  const nation = nations[tile.ownerId];
+  const branches = nation?.tech?.branches || {};
+  const focus = nation?.military?.branchFocus;
+  if (focus && branches[focus] > 0) return { branch: focus, level: branches[focus] };
+  return Object.entries(branches).reduce((best, [branch, level]) => {
+    return level > best.level ? { branch, level } : best;
+  }, { branch: tile.unit?.branch || "infantry", level: 0 });
+}
+
 export class HexMapRenderer {
   constructor(canvas, { onSelect = null, onHover = null } = {}) {
     this.canvas = canvas;
@@ -390,7 +412,7 @@ export class HexMapRenderer {
     if (!mesh) return;
     const base = new THREE.Color(terrainColor(tile));
     if (tile.ownerId && this.nations[tile.ownerId]) {
-      base.lerp(new THREE.Color(this.nations[tile.ownerId].color), 0.35);
+      base.lerp(new THREE.Color(this.nations[tile.ownerId].color), 0.42);
     }
     if (tile.effects?.floodedTurns > 0) base.lerp(new THREE.Color(0x3d9dcc), 0.5);
     mesh.material.color = base;
@@ -398,6 +420,7 @@ export class HexMapRenderer {
     if (tile.id === this.selectedTileId) emissive.add(new THREE.Color(0xd8bd6a).multiplyScalar(0.38));
     if (tile.id === this.hoveredTileId) emissive.add(new THREE.Color(0xffffff).multiplyScalar(0.12));
     if (tile.ownerId && this.nations[tile.ownerId]) emissive.add(new THREE.Color(this.nations[tile.ownerId].color).multiplyScalar(0.18));
+    if (tile.isCapital) emissive.add(new THREE.Color(0xffd700).multiplyScalar(0.28));
     mesh.material.emissive = emissive;
     mesh.material.needsUpdate = true;
 
@@ -408,11 +431,17 @@ export class HexMapRenderer {
   }
 
   _updateDecoration(tile) {
+    const visualTier = visualTierForTile(tile, this.nations);
+    const branch = strongestBranchForTile(tile, this.nations);
     const signature = JSON.stringify({
       type: tile.type,
       ownerId: tile.ownerId,
       workers: tile.workers,
       unit: tile.unit?.strength || 0,
+      unitBranch: tile.unit?.branch || "infantry",
+      visualTier,
+      branch: branch.branch,
+      branchLevel: branch.level,
       capital: tile.isCapital,
       disabled: tile.effects?.disabledTurns || 0,
       flooded: tile.effects?.floodedTurns || 0,
@@ -435,80 +464,171 @@ export class HexMapRenderer {
   }
 
   _createDecoration(tile) {
-    if (tile.type === TILE_TYPES.EMPTY || tile.type === TILE_TYPES.WATER) return null;
+    if (tile.type === TILE_TYPES.WATER) return null;
     const THREE = window.THREE;
     const { x, z } = axialToWorld(tile.q, tile.r, HEX_SIZE);
     const group = new THREE.Group();
     group.position.set(x, HEX_HEIGHT + 0.02, z);
     const ownerColor = colorFromHex(this.nations[tile.ownerId]?.color || "#e2dcc8");
 
-    if (tile.isCapital) {
-      const crown = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.24, 0.16, 5),
-        new THREE.MeshStandardMaterial({ color: 0xe7c86a, metalness: 0.25, roughness: 0.45 })
+    // Ownership ring — shown on every owned land tile so nation borders are unambiguous
+    if (tile.ownerId && this.nations[tile.ownerId]) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.74, 0.032, 6, 6),
+        new THREE.MeshBasicMaterial({ color: ownerColor })
       );
-      crown.position.set(0, 0.58, 0);
-      group.add(crown);
+      ring.rotation.x = Math.PI / 2;
+      ring.rotation.z = Math.PI / 6; // align with hex flat-top orientation
+      ring.position.set(0, 0.04, 0);
+      group.add(ring);
     }
 
+    // Capital crown + pulsing gold glow ring
+    if (tile.isCapital) {
+      const crown = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.18, 0.28, 0.22, 5),
+        new THREE.MeshStandardMaterial({ color: 0xe7c86a, metalness: 0.45, roughness: 0.3, emissive: new THREE.Color(0xe7c86a).multiplyScalar(0.3) })
+      );
+      crown.position.set(0, 0.65, 0);
+      group.add(crown);
+      const glowRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.62, 0.05, 8, 32),
+        new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.88 })
+      );
+      glowRing.rotation.x = Math.PI / 2;
+      glowRing.position.set(0, 0.06, 0);
+      group.add(glowRing);
+      this.animated.push({ object: glowRing, kind: "pulse", baseOpacity: 0.88, phase: Math.random() * 6 });
+    }
+
+    // Empty owned tiles get only the ownership ring above; no building decorations
+    if (tile.type === TILE_TYPES.EMPTY) return group.children.length ? group : null;
+
+    const visualTier = visualTierForTile(tile, this.nations);
+    const branch = strongestBranchForTile(tile, this.nations);
+    const scale = 1 + visualTier * 0.055;
+
     if (tile.type === TILE_TYPES.FARM) {
-      for (let i = -1; i <= 1; i += 1) {
+      const plotCount = 3 + Math.min(2, Math.floor(visualTier / 2));
+      for (let i = 0; i < plotCount; i += 1) {
         const plot = new THREE.Mesh(
-          new THREE.BoxGeometry(0.18, 0.035, 0.72),
-          new THREE.MeshStandardMaterial({ color: i === 0 ? 0x7fc66c : 0x5fb15b })
+          new THREE.BoxGeometry(0.16, 0.035, 0.64 + visualTier * 0.04),
+          new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0x7fc66c : 0x5fb15b })
         );
-        plot.position.set(i * 0.25, 0.03, 0);
+        plot.position.set((i - (plotCount - 1) / 2) * 0.19, 0.03, 0);
         group.add(plot);
+      }
+      if (visualTier >= 2) {
+        const silo = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.1, 0.34 + visualTier * 0.04, 12),
+          new THREE.MeshStandardMaterial({ color: 0xded5a8, roughness: 0.62 })
+        );
+        silo.position.set(0.38, 0.2 + visualTier * 0.02, 0.22);
+        group.add(silo);
+      }
+      if (visualTier >= 4) {
+        const greenhouse = new THREE.Mesh(
+          new THREE.BoxGeometry(0.34, 0.18, 0.24),
+          new THREE.MeshStandardMaterial({ color: 0xb7e4d8, transparent: true, opacity: 0.76 })
+        );
+        greenhouse.position.set(-0.36, 0.16, -0.22);
+        group.add(greenhouse);
       }
       this._addWorkerDots(group, tile, 0xefe3a1, "bob");
     }
 
     if (tile.type === TILE_TYPES.MINE) {
       const rock = new THREE.Mesh(
-        new THREE.ConeGeometry(0.36, 0.45, 5),
+        new THREE.ConeGeometry(0.36 * scale, 0.45 + visualTier * 0.08, 5),
         new THREE.MeshStandardMaterial({ color: 0x4f4037, roughness: 0.9 })
       );
-      rock.position.set(0, 0.22, 0);
+      rock.position.set(0, 0.22 + visualTier * 0.04, 0);
       group.add(rock);
       const cart = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.16, 0.24),
+        new THREE.BoxGeometry(0.32 + visualTier * 0.025, 0.16, 0.24),
         new THREE.MeshStandardMaterial({ color: 0xb98852 })
       );
       cart.position.set(0.38, 0.11, -0.18);
       group.add(cart);
       this.animated.push({ object: cart, kind: "slide", baseX: cart.position.x, phase: Math.random() * 6 });
+      if (visualTier >= 2) {
+        const beam = new THREE.Mesh(
+          new THREE.BoxGeometry(0.08, 0.58, 0.08),
+          new THREE.MeshStandardMaterial({ color: 0x2e2a28, roughness: 0.8 })
+        );
+        beam.position.set(-0.36, 0.34, 0.18);
+        group.add(beam);
+        const arm = new THREE.Mesh(
+          new THREE.BoxGeometry(0.62, 0.06, 0.06),
+          new THREE.MeshStandardMaterial({ color: 0x2e2a28, roughness: 0.8 })
+        );
+        arm.position.set(-0.18, 0.62, 0.18);
+        arm.rotation.z = -0.35;
+        group.add(arm);
+      }
+      if (visualTier >= 4) {
+        const drill = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.05, 0.07, 0.42, 10),
+          new THREE.MeshStandardMaterial({ color: 0xc8c2b8, metalness: 0.32, roughness: 0.45 })
+        );
+        drill.position.set(0.18, 0.34, 0.34);
+        drill.rotation.z = 0.35;
+        group.add(drill);
+        this.animated.push({ object: drill, kind: "bob", baseY: drill.position.y, phase: Math.random() * 6 });
+      }
     }
 
     if (tile.type === TILE_TYPES.SCHOOL) {
       const building = new THREE.Mesh(
-        new THREE.BoxGeometry(0.58, 0.36, 0.42),
+        new THREE.BoxGeometry(0.58 + visualTier * 0.05, 0.36 + visualTier * 0.06, 0.42 + visualTier * 0.025),
         new THREE.MeshStandardMaterial({ color: 0x7aa2d8 })
       );
-      building.position.set(0, 0.22, 0);
+      building.position.set(0, 0.22 + visualTier * 0.03, 0);
       group.add(building);
       const roof = new THREE.Mesh(
         new THREE.ConeGeometry(0.45, 0.2, 4),
         new THREE.MeshStandardMaterial({ color: 0xe4d6a5 })
       );
-      roof.position.set(0, 0.52, 0);
+      roof.position.set(0, 0.52 + visualTier * 0.06, 0);
       roof.rotation.y = Math.PI / 4;
       group.add(roof);
+      if (visualTier >= 2) {
+        for (const xOffset of [-0.38, 0.38]) {
+          const wing = new THREE.Mesh(
+            new THREE.BoxGeometry(0.18, 0.24 + visualTier * 0.035, 0.28),
+            new THREE.MeshStandardMaterial({ color: 0x557fb8 })
+          );
+          wing.position.set(xOffset, 0.2 + visualTier * 0.025, -0.02);
+          group.add(wing);
+        }
+      }
+      if (visualTier >= 4) {
+        const observatory = new THREE.Mesh(
+          new THREE.SphereGeometry(0.15, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+          new THREE.MeshStandardMaterial({ color: 0xd9ecff, metalness: 0.12 })
+        );
+        observatory.position.set(0.02, 0.82, 0.04);
+        group.add(observatory);
+      }
       this._addWorkerDots(group, tile, 0xd9ecff, "orbit");
     }
 
     if (tile.type === TILE_TYPES.FACTORY) {
       const body = new THREE.Mesh(
-        new THREE.BoxGeometry(0.72, 0.38, 0.48),
+        new THREE.BoxGeometry(0.72 + visualTier * 0.055, 0.38 + visualTier * 0.06, 0.48 + visualTier * 0.035),
         new THREE.MeshStandardMaterial({ color: 0x383d46, roughness: 0.7 })
       );
-      body.position.set(0, 0.25, 0);
+      body.position.set(0, 0.25 + visualTier * 0.03, 0);
       group.add(body);
-      const stack = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.1, 0.48, 12),
-        new THREE.MeshStandardMaterial({ color: 0x707783 })
-      );
-      stack.position.set(0.22, 0.66, -0.12);
-      group.add(stack);
+      const stackCount = visualTier >= 3 ? 3 : visualTier >= 1 ? 2 : 1;
+      for (let i = 0; i < stackCount; i += 1) {
+        const stack = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.07, 0.1, 0.48 + visualTier * 0.08, 12),
+          new THREE.MeshStandardMaterial({ color: 0x707783 })
+        );
+        stack.position.set(0.12 + i * 0.17, 0.66 + visualTier * 0.07, -0.12 + (i % 2) * 0.18);
+        group.add(stack);
+      }
       const gear = new THREE.Mesh(
         new THREE.TorusGeometry(0.16, 0.035, 8, 16),
         new THREE.MeshStandardMaterial({ color: 0xd6a84c, metalness: 0.15 })
@@ -521,24 +641,70 @@ export class HexMapRenderer {
 
     if (tile.type === TILE_TYPES.MILITARY) {
       const base = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.42, 0.48, 0.16, 6),
+        new THREE.CylinderGeometry(0.42 * scale, 0.48 * scale, 0.16 + visualTier * 0.02, 6),
         new THREE.MeshStandardMaterial({ color: 0x733838 })
       );
       base.position.set(0, 0.1, 0);
       group.add(base);
       const tower = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.2, 0.48, 6),
+        new THREE.CylinderGeometry(0.15, 0.2, 0.48 + visualTier * 0.08, 6),
         new THREE.MeshStandardMaterial({ color: 0xb55151 })
       );
-      tower.position.set(0, 0.42, 0);
+      tower.position.set(0, 0.42 + visualTier * 0.04, 0);
       group.add(tower);
+      if (branch.level > 0 || visualTier >= 3) {
+        const hangar = new THREE.Mesh(
+          new THREE.BoxGeometry(0.38, 0.2, 0.28),
+          new THREE.MeshStandardMaterial({ color: 0x5f3437, roughness: 0.7 })
+        );
+        hangar.position.set(-0.34, 0.17, -0.16);
+        group.add(hangar);
+      }
+      if (branch.branch === "tanks" && branch.level > 0) {
+        const tank = new THREE.Mesh(
+          new THREE.BoxGeometry(0.34, 0.14, 0.22),
+          new THREE.MeshStandardMaterial({ color: 0x53664f, roughness: 0.7 })
+        );
+        tank.position.set(0.38, 0.24, 0.26);
+        group.add(tank);
+        const barrel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.025, 0.025, 0.3, 8),
+          new THREE.MeshStandardMaterial({ color: 0x3d4839 })
+        );
+        barrel.position.set(0.55, 0.28, 0.26);
+        barrel.rotation.z = Math.PI / 2;
+        group.add(barrel);
+      }
+      if (branch.branch === "air" && branch.level > 0) {
+        const plane = new THREE.Mesh(
+          new THREE.ConeGeometry(0.12, 0.42, 3),
+          new THREE.MeshStandardMaterial({ color: 0xb8c6d8, metalness: 0.2 })
+        );
+        plane.position.set(0.36, 0.58, 0.2);
+        plane.rotation.z = -Math.PI / 2;
+        group.add(plane);
+        this.animated.push({ object: plane, kind: "bob", baseY: plane.position.y, phase: Math.random() * 6 });
+      }
+      if (branch.branch === "naval" && branch.level > 0) {
+        const ship = new THREE.Mesh(
+          new THREE.BoxGeometry(0.36, 0.12, 0.16),
+          new THREE.MeshStandardMaterial({ color: 0x3f6f82, roughness: 0.55 })
+        );
+        ship.position.set(0.36, 0.22, -0.28);
+        group.add(ship);
+      }
       this._addWorkerDots(group, tile, ownerColor, "march");
     }
 
     if (tile.unit?.strength > 0) {
+      const unitColor =
+        tile.unit.branch === "tanks" ? 0x53664f :
+        tile.unit.branch === "air" ? 0xb8c6d8 :
+        tile.unit.branch === "naval" ? 0x3f6f82 :
+        ownerColor;
       const unit = new THREE.Mesh(
         new THREE.SphereGeometry(0.18 + Math.min(0.18, tile.unit.strength * 0.01), 16, 12),
-        new THREE.MeshStandardMaterial({ color: ownerColor, emissive: new THREE.Color(ownerColor).multiplyScalar(0.18) })
+        new THREE.MeshStandardMaterial({ color: unitColor, emissive: new THREE.Color(unitColor).multiplyScalar(0.18) })
       );
       unit.position.set(0.42, 0.62, 0.32);
       group.add(unit);
@@ -698,6 +864,7 @@ export class HexMapRenderer {
     for (const item of this.animated) {
       if (!item.object.parent) continue;
       if (item.kind === "spin") item.object.rotation.z += 0.03 * (item.speed || 1);
+      if (item.kind === "pulse") item.object.material.opacity = item.baseOpacity * (0.6 + 0.4 * Math.sin(time * 2.2 + item.phase));
       if (item.kind === "bob") item.object.position.y = item.baseY + Math.sin(time * 3 + item.phase) * 0.035;
       if (item.kind === "slide") item.object.position.x = item.baseX + Math.sin(time * 2 + item.phase) * 0.12;
       if (item.kind === "march") {

@@ -43,6 +43,7 @@
       </div>
       <div id="continue-note" class="continue-note"></div>
       <div class="setup-actions">
+        <button id="setup-replay-tutorial-btn" type="button" class="secondary-btn">Replay Tutorial</button>
         <button id="continue-btn" type="button" class="secondary-btn">Continue</button>
         <button type="submit" class="primary-btn">Start New Game</button>
       </div>
@@ -50,7 +51,7 @@
   </div>
 
   <div id="app" class="app" hidden>
-    <header class="topbar">
+    <header id="top-panel" class="topbar">
       <div class="brand-block">
         <div class="brand">League of Nations</div>
         <div id="phase-label" class="phase-label">Player Turn</div>
@@ -59,8 +60,10 @@
       <div class="top-actions">
         <button id="save-btn" class="secondary-btn">Save</button>
         <button id="new-game-btn" class="secondary-btn">New</button>
+        <button id="replay-tutorial-btn" class="secondary-btn">Tutorial</button>
         <button id="end-turn-btn" class="primary-btn">End Turn</button>
       </div>
+      <button id="top-collapse-btn" class="icon-btn panel-toggle top-toggle" type="button" aria-controls="top-panel" aria-expanded="true" aria-label="Collapse top panel">↑</button>
     </header>
 
     <main class="game-shell">
@@ -73,31 +76,35 @@
         </section>
       </section>
 
-      <aside class="side-panel">
-        <section class="panel">
-          <h2>Resources</h2>
-          <div id="resource-panel"></div>
-        </section>
-        <section class="panel">
-          <h2>Nations</h2>
-          <div id="nation-panel"></div>
-        </section>
-        <section class="panel">
-          <h2>Diplomacy</h2>
-          <div id="diplomacy-panel"></div>
-        </section>
-        <section class="panel">
-          <h2>Technology</h2>
-          <div id="tech-panel"></div>
-        </section>
-        <section class="panel">
-          <h2>Last Turn</h2>
-          <div id="summary-panel"></div>
-        </section>
+      <aside id="side-panel" class="side-panel">
+        <button id="side-collapse-btn" class="icon-btn panel-toggle side-toggle" type="button" aria-controls="side-panel" aria-expanded="true" aria-label="Collapse side panel">→</button>
+        <div class="side-panel-content">
+          <section class="panel">
+            <h2>Resources</h2>
+            <div id="resource-panel"></div>
+          </section>
+          <section class="panel">
+            <h2>Nations</h2>
+            <div id="nation-panel"></div>
+          </section>
+          <section class="panel">
+            <h2>Diplomacy</h2>
+            <div id="diplomacy-panel"></div>
+          </section>
+          <section class="panel">
+            <h2>Technology</h2>
+            <div id="tech-panel"></div>
+          </section>
+          <section class="panel">
+            <h2>Last Turn</h2>
+            <div id="summary-panel"></div>
+          </section>
+        </div>
       </aside>
     </main>
 
-    <footer class="event-feed">
+    <footer id="bottom-panel" class="event-feed">
+      <button id="bottom-collapse-btn" class="icon-btn panel-toggle bottom-toggle" type="button" aria-controls="bottom-panel" aria-expanded="true" aria-label="Collapse event feed">↓</button>
       <div class="feed-title">Event Feed</div>
       <div id="event-feed-content" class="feed-content"></div>
     </footer>

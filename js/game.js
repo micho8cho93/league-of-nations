@@ -16,16 +16,16 @@ import {
   randomSeed,
   tileId,
 } from "./utils.js";
+import { BALANCE } from "./balance.js";
 import {
   BOT_NAMES,
-  PERSONALITIES,
-  activeTiles,
   addHistory,
   addPopulation,
   computeScore,
   createNation,
   earnMoney,
   militaryPower,
+  personalitySequence,
   profileSequence,
   removePopulation,
   restoreNation,
@@ -52,12 +52,18 @@ import {
 import {
   applyTrade,
   breakAlliance,
+  embargoNation,
   expireAlliances,
   getDiplomacy,
+  processTradeRoutes,
   proposeAlliance,
+  removeTradeRoutesForNation,
 } from "./trade.js";
 import {
   activeWarsFor,
+  applyBattleWarExhaustion,
+  applyWarExhaustionIncome,
+  applyWarExhaustionProduction,
   areAtWar,
   canEnterTile,
   declareWar as declareWarHelper,
@@ -66,6 +72,8 @@ import {
   findPath,
   getAdjacentMilitaryActions,
   resolveCombat,
+  siegeRequirementForTile,
+  updateWarReadinessForTurn,
   warUpkeep,
 } from "./war.js";
 import { maybeRunGlobalEvent, scheduleEraEvent, tickTileEffects } from "./events.js";
@@ -85,7 +93,9 @@ export class GameState {
     this.tileIndex = buildTileIndex(this.tiles);
     this.diplomacy = data.diplomacy || {};
     this.wars = data.wars || {};
+    this.sieges = data.sieges || {};
     this.trades = data.trades || [];
+    this.tradeRoutes = data.tradeRoutes || [];
     this.alliances = data.alliances || [];
     this.events = data.events || [];
     this.eraReports = data.eraReports || [];
@@ -130,10 +140,11 @@ export class GameState {
       color: colors[0],
       isPlayer: true,
       profile: profiles[0],
-      personality: "Builder",
+      personality: "balanced",
     });
     nations[player.id] = player;
 
+    const personalities = personalitySequence(settings.nationCount - 1);
     for (let i = 1; i < settings.nationCount; i += 1) {
       const bot = createNation({
         id: `bot-${i}`,
@@ -141,7 +152,7 @@ export class GameState {
         color: colors[i % colors.length],
         isPlayer: false,
         profile: profiles[i],
-        personality: PERSONALITIES[(i + Math.floor(settings.seed % PERSONALITIES.length)) % PERSONALITIES.length],
+        personality: personalities[i - 1],
       });
       nations[bot.id] = bot;
       botIds.push(bot.id);
@@ -156,6 +167,9 @@ export class GameState {
       botIds,
     });
     game.addEvent(`Game started with ${settings.nationCount} nations on a ${settings.mapSize.toLowerCase()} map.`, { type: "system" });
+    for (const botId of botIds) {
+      game.addEvent(`${game.nations[botId].name} plays as a ${game.nations[botId].personality} nation.`, { nationId: botId, type: "ai" });
+    }
     game.save();
     return game;
   }
@@ -176,7 +190,9 @@ export class GameState {
       map,
       diplomacy: saveData.diplomacy || {},
       wars: saveData.wars || {},
+      sieges: saveData.sieges || {},
       trades: saveData.trades || [],
+      tradeRoutes: saveData.tradeRoutes || [],
       alliances: saveData.alliances || [],
       events: saveData.events || [],
       eraReports: saveData.eraReports || [],
@@ -355,27 +371,36 @@ export class GameState {
     return { ok: true, changed: -removed, cost: 0 };
   }
 
-  trainUnit(tileIdValue, strength, nationId = this.playerId, { silent = false } = {}) {
+  trainUnit(tileIdValue, strength, nationId = this.playerId, { silent = false, branch = "infantry" } = {}) {
     const tile = this.tileById(tileIdValue);
     const nation = this.nations[nationId];
     const amount = Math.max(1, Math.floor(Number(strength) || 1));
+    const unitBranch = branch || "infantry";
     if (!tile || tile.ownerId !== nationId || tile.type !== TILE_TYPES.MILITARY) {
       return { ok: false, reason: "Training requires an owned military base." };
     }
-    const cost = trainingCost(amount, this.era);
+    if (unitBranch !== "infantry" && (this.era < 4 || (nation.tech.branches[unitBranch] || 0) <= 0)) {
+      return { ok: false, reason: "Research this military branch before deploying it." };
+    }
+    const cost = trainingCost(amount, this.era, unitBranch, nation.tech.branches[unitBranch] || 0);
     if (nation.money < cost.money) return { ok: false, reason: `Requires $${cost.money}.` };
     if (nation.population.available < cost.people) return { ok: false, reason: `Requires ${cost.people} available population.` };
     if (nation.resources.materials < cost.materials) return { ok: false, reason: `Requires ${cost.materials} materials.` };
+    if (cost.education && nation.resources.education < cost.education) return { ok: false, reason: `Requires ${cost.education} education.` };
+    if (cost.industry && nation.resources.industry < cost.industry) return { ok: false, reason: `Requires ${cost.industry} industry.` };
     nation.money -= cost.money;
     nation.population.available -= cost.people;
     nation.resources.materials -= cost.materials;
+    if (cost.education) nation.resources.education -= cost.education;
+    if (cost.industry) nation.resources.industry -= cost.industry;
     nation.workers.soldiers += cost.people;
     nation.stats.moneySpent += cost.money;
     nation.military.unitsTrained += amount;
-    tile.unit = tile.unit || { nationId, strength: 0, branch: "infantry", movedTurn: 0 };
+    tile.unit = tile.unit || { nationId, strength: 0, branch: unitBranch, movedTurn: 0 };
     tile.unit.nationId = nationId;
+    if (unitBranch !== "infantry" || !tile.unit.branch) tile.unit.branch = unitBranch;
     tile.unit.strength += amount;
-    if (!silent) this.addEvent(`${nation.name} trained ${amount} troop strength.`, { nationId, type: "military", tileId: tile.id });
+    if (!silent) this.addEvent(`${nation.name} ${unitBranch === "infantry" ? "trained" : "deployed"} ${amount} ${unitBranch} strength.`, { nationId, type: "military", tileId: tile.id });
     this.changed("train");
     return { ok: true, cost };
   }
@@ -387,6 +412,7 @@ export class GameState {
   }
 
   moveOrAttackUnit(fromTileId, toTileId, nationId = this.playerId, { silent = false, path = null } = {}) {
+    this.cleanupSieges();
     const from = this.tileById(fromTileId);
     const to = this.tileById(toTileId);
     const nation = this.nations[nationId];
@@ -396,12 +422,13 @@ export class GameState {
     const gate = canEnterTile(this, nationId, to);
     if (!gate.ok) return gate;
 
-    const movementCost = to.type === TILE_TYPES.WATER ? 60 : 30;
+    const movementCost = to.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
     if (!spendMoney(nation, movementCost)) return { ok: false, reason: `Requires $${movementCost} to move troops.` };
 
     if (!to.ownerId || to.ownerId === nationId) {
       const wasUnowned = !to.ownerId;
       const moving = from.unit;
+      this.clearSiegesFromTile(from.id, nationId);
       from.unit = null;
       to.ownerId = nationId;
       to.unit = to.unit || { nationId, strength: 0, branch: moving.branch, movedTurn: this.turn };
@@ -419,7 +446,7 @@ export class GameState {
     const defender = this.nations[defenderId];
     const attackingStrength = from.unit.strength;
     const defense = defenderStrength(to);
-    const outcome = resolveCombat(this, nationId, defenderId, attackingStrength, defense, to);
+    const outcome = resolveCombat(this, nationId, defenderId, attackingStrength, defense, to, from);
     const report = {
       id: `battle-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       turn: this.turn,
@@ -433,8 +460,11 @@ export class GameState {
       attackerWins: outcome.attackerWins,
       attack: outcome.attack,
       defense: outcome.defense,
+      modifiers: outcome.modifiers,
       losses: outcome.losses,
       capitalCaptured: false,
+      territoryChanged: false,
+      siege: null,
     };
     this.applyCombatOutcome(from, to, outcome, nationId, defenderId, report);
     this.addEvent(
@@ -454,31 +484,130 @@ export class GameState {
     removePopulation(defender, Math.min(defender.population.total, outcome.losses.defender));
     this.normalizeTileWorkers(attackerId);
     this.normalizeTileWorkers(defenderId);
+    applyBattleWarExhaustion(this, attackerId, defenderId, outcome.losses, outcome.attackerWins);
     attacker.military.unitsLost += outcome.losses.attacker;
     defender.military.unitsLost += outcome.losses.defender;
+    const war = this.wars[pairKey(attackerId, defenderId)];
+    if (war) war.battles += 1;
     if (outcome.attackerWins) {
       attacker.military.battlesWon += 1;
       defender.military.battlesLost += 1;
+      const siege = this.progressSiegeIfNeeded(from, to, outcome, attackerId, defenderId, report);
+      if (siege && !siege.completed) {
+        from.unit.strength = outcome.survivingAttackStrength;
+        from.unit.movedTurn = this.turn;
+        if (to.unit) {
+          to.unit.strength = Math.max(0, to.unit.strength - outcome.losses.defender);
+          if (to.unit.strength <= 0) to.unit = null;
+        }
+        this.recomputeTerritories();
+        return;
+      }
       const capitalCaptured = to.isCapital;
+      this.clearSiegesForTile(to.id);
+      this.clearSiegesFromTile(from.id, attackerId);
       to.ownerId = attackerId;
       to.workers = 0;
       to.unit = { nationId: attackerId, strength: outcome.survivingAttackStrength, branch: from.unit.branch, movedTurn: this.turn };
       from.unit = null;
       attacker.stats.tilesCaptured += 1;
+      report.territoryChanged = true;
       if (capitalCaptured) {
+        // Capital capture rule: losing your capital means immediate elimination.
+        // The capital tile marker is cleared so it doesn't mislead after conquest.
+        to.isCapital = false;
         report.capitalCaptured = true;
         attacker.military.capitalsCaptured += 1;
+        this.addEvent(
+          `${attacker.name} captured the capital of ${defender.name}! ${defender.name} is eliminated.`,
+          { nationId: attackerId, type: "war", tileId: to.id }
+        );
         this.conquerNation(defenderId, attackerId);
       }
     } else {
       attacker.military.battlesLost += 1;
       defender.military.battlesWon += 1;
+      this.clearSiegesForTile(to.id, attackerId);
+      this.clearSiegesFromTile(from.id, attackerId);
       from.unit = null;
       if (to.unit) to.unit.strength = Math.max(1, outcome.survivingDefenseStrength);
     }
-    const war = this.wars[pairKey(attackerId, defenderId)];
-    if (war) war.battles += 1;
     this.recomputeTerritories();
+  }
+
+  progressSiegeIfNeeded(from, to, outcome, attackerId, defenderId, report) {
+    const required = siegeRequirementForTile(to);
+    if (required <= 0) return null;
+    const existing = this.sieges[to.id];
+    const sameSiege =
+      existing &&
+      existing.attackerId === attackerId &&
+      existing.defenderId === defenderId &&
+      existing.fromTileId === from.id;
+    const progress = (sameSiege ? existing.progress : 0) + BALANCE.war.siege.progressPerVictory;
+    const siege = {
+      tileId: to.id,
+      attackerId,
+      defenderId,
+      fromTileId: from.id,
+      progress,
+      required,
+      startedTurn: sameSiege ? existing.startedTurn : this.turn,
+      updatedTurn: this.turn,
+    };
+    report.siege = {
+      ...siege,
+      completed: progress >= required,
+    };
+    if (progress >= required) {
+      delete this.sieges[to.id];
+      return { ...siege, completed: true };
+    }
+    this.sieges[to.id] = siege;
+    return { ...siege, completed: false };
+  }
+
+  clearSiegesForTile(tileIdValue, attackerId = null) {
+    const siege = this.sieges[tileIdValue];
+    if (!siege) return false;
+    if (attackerId && siege.attackerId !== attackerId) return false;
+    delete this.sieges[tileIdValue];
+    return true;
+  }
+
+  clearSiegesFromTile(fromTileId, attackerId = null) {
+    let cleared = 0;
+    for (const [tileIdValue, siege] of Object.entries(this.sieges)) {
+      if (siege.fromTileId !== fromTileId) continue;
+      if (attackerId && siege.attackerId !== attackerId) continue;
+      delete this.sieges[tileIdValue];
+      cleared += 1;
+    }
+    return cleared;
+  }
+
+  cleanupSieges() {
+    let cleared = 0;
+    for (const [tileIdValue, siege] of Object.entries(this.sieges)) {
+      const target = this.tileById(siege.tileId);
+      const staging = this.tileById(siege.fromTileId);
+      const attacker = this.nations[siege.attackerId];
+      const defender = this.nations[siege.defenderId];
+      const valid =
+        target &&
+        staging &&
+        attacker?.active &&
+        defender?.active &&
+        target.ownerId === siege.defenderId &&
+        staging.ownerId === siege.attackerId &&
+        staging.unit?.nationId === siege.attackerId &&
+        staging.unit?.strength > 0 &&
+        this.neighbors(target.id).some((tile) => tile.id === staging.id);
+      if (valid) continue;
+      delete this.sieges[tileIdValue];
+      cleared += 1;
+    }
+    return cleared;
   }
 
   conquerNation(defenderId, winnerId) {
@@ -488,11 +617,16 @@ export class GameState {
     defender.active = false;
     for (const tile of this.tiles) {
       if (tile.ownerId === defenderId) {
+        this.clearSiegesForTile(tile.id);
         tile.ownerId = winnerId;
         if (tile.unit?.nationId === defenderId) tile.unit = null;
       }
     }
+    for (const [tileIdValue, siege] of Object.entries(this.sieges)) {
+      if (siege.attackerId === defenderId || siege.defenderId === defenderId) delete this.sieges[tileIdValue];
+    }
     for (const war of activeWarsFor(this, defenderId)) endWar(this, war.attackerId, war.defenderId);
+    removeTradeRoutesForNation(this, defenderId, "conquest");
     this.addEvent(`${winner.name} conquered ${defender.name}.`, { nationId: winnerId, type: "war" });
     this.recomputeTerritories();
   }
@@ -539,6 +673,15 @@ export class GameState {
     return result;
   }
 
+  embargo(targetId, nationId = this.playerId) {
+    const result = embargoNation(this, nationId, targetId);
+    if (result.ok) {
+      this.addEvent(`${this.nations[nationId].name} embargoed ${this.nations[targetId].name}.`, { nationId, type: "diplomacy" });
+      this.changed("embargo");
+    }
+    return result;
+  }
+
   research(category, nationId = this.playerId) {
     const nation = this.nations[nationId];
     const check = canResearch(this, nation, category);
@@ -568,6 +711,25 @@ export class GameState {
     return { ok: true, cost: check.cost, nextLevel: check.nextLevel };
   }
 
+  // Returns per-turn food production stats for a nation so the UI can display
+  // produced / consumed / net without duplicating game logic in the renderer.
+  foodFlowFor(nationId) {
+    const nation = this.nations[nationId];
+    if (!nation?.active) return { produced: 0, consumed: 0, net: 0, capacity: 0 };
+    const consumed = foodConsumptionFor(nation, this.era);
+    let produced = 0;
+    for (const tile of this.tiles) {
+      if (tile.ownerId !== nationId) continue;
+      const production = productionForTile(nation, tile, this.era);
+      if (production?.food) {
+        const exhaustedProduction = applyWarExhaustionProduction(nation, production.food);
+        produced += applyStockpileDiminishingReturns(nation, "food", exhaustedProduction);
+      }
+    }
+    const capacity = nation.territory.length * BALANCE.population.capacityPerTile;
+    return { produced, consumed, net: produced - consumed, capacity };
+  }
+
   async endTurn() {
     if (this.isProcessingTurn || this.gameOver) return;
     if (this.pendingEraReport) {
@@ -580,6 +742,7 @@ export class GameState {
     this.changed("phase");
     for (const botId of this.botIds) {
       if (this.gameOver) break;
+      if (!this.nations[botId]?.active) continue; // skip eliminated nations
       await processBotTurn(this, botId);
       this.changed("ai");
       await delay(130);
@@ -603,6 +766,8 @@ export class GameState {
       turn: this.turn,
       money: 0,
       food: 0,
+      foodProduced: 0,
+      foodConsumed: 0,
       materials: 0,
       education: 0,
       industry: 0,
@@ -612,22 +777,38 @@ export class GameState {
       notes: [],
     };
 
+    const foodProducedByNation = {};
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
+      const warReadiness = updateWarReadinessForTurn(this, nation.id);
       const upkeep = warUpkeep(this, nation.id);
       if (upkeep > 0) {
-        nation.stats.turnsAtWar += activeWarsFor(this, nation.id).length;
+        nation.stats.turnsAtWar += warReadiness.activeWars;
         const paid = Math.min(nation.money, upkeep);
         nation.money -= paid;
         nation.stats.moneySpent += paid;
         summary.upkeep += paid;
         if (paid < upkeep) {
-          const deserters = Math.ceil((upkeep - paid) / 60);
+          const deserters = Math.ceil((upkeep - paid) / BALANCE.war.deserterShortfallDivisor);
           this.reduceNationUnits(nation.id, deserters);
           summary.notes.push(`${nation.name} could not fully fund the war effort.`);
         }
       }
-      this.produceForNation(nation, summary);
-      this.consumeFood(nation, summary);
+      const populationUpkeep = populationMaintenanceFor(nation);
+      if (populationUpkeep > 0) {
+        const paid = Math.min(nation.money, populationUpkeep);
+        nation.money -= paid;
+        nation.stats.moneySpent += paid;
+        summary.upkeep += paid;
+      }
+      const foodProduced = this.produceForNation(nation, summary);
+      foodProducedByNation[nation.id] = foodProduced;
+    }
+
+    const tradeResult = processTradeRoutes(this, summary);
+
+    for (const nation of Object.values(this.nations).filter((item) => item.active)) {
+      const routeFood = tradeResult.foodProduced[nation.id] || 0;
+      this.consumeFood(nation, summary, (foodProducedByNation[nation.id] || 0) + routeFood);
     }
 
     for (const alliance of expireAlliances(this)) {
@@ -642,6 +823,7 @@ export class GameState {
 
     tickTileEffects(this);
     this.lastSummary = summary;
+    this.cleanupSieges();
     this.recomputeTerritories();
     this.checkVictory();
     const nextEra = checkEraAdvancement(this);
@@ -657,13 +839,15 @@ export class GameState {
 
   produceForNation(nation, summary) {
     let populationGain = 0;
+    let foodProduced = 0;
     for (const tile of this.tiles.filter((item) => item.ownerId === nation.id)) {
       const production = productionForTile(nation, tile, this.era);
       if (!production) continue;
       if (tile.type === TILE_TYPES.FACTORY) {
         if (nation.resources.materials < production.materialsCost || nation.resources.education < production.educationCost) {
-          earnMoney(nation, 20);
-          summary.money += 20;
+          const fallbackIncome = applyWarExhaustionIncome(nation, BALANCE.costs.factoryFallbackMoney);
+          earnMoney(nation, fallbackIncome);
+          summary.money += fallbackIncome;
           continue;
         }
         nation.resources.materials -= production.materialsCost;
@@ -671,39 +855,106 @@ export class GameState {
       }
       for (const resource of ["food", "materials", "education", "industry"]) {
         if (production[resource]) {
-          nation.resources[resource] += production[resource];
-          nation.stats.resourcesProduced += production[resource];
-          summary[resource] += production[resource];
+          const exhaustedProduction = applyWarExhaustionProduction(nation, production[resource]);
+          const produced = applyStockpileDiminishingReturns(nation, resource, exhaustedProduction);
+          nation.resources[resource] += produced;
+          nation.stats.resourcesProduced += produced;
+          summary[resource] += produced;
+          // Track food produced separately for the growth calculation in consumeFood
+          if (resource === "food") foodProduced += produced;
         }
       }
       if (production.money) {
-        earnMoney(nation, production.money);
-        summary.money += production.money;
+        const income = applyWarExhaustionIncome(nation, production.money);
+        earnMoney(nation, income);
+        summary.money += income;
       }
+      // High-tier tech tiles grant a small bonus person representing skilled population growth.
+      // This is an earned reward for technology investment, not automatic growth.
       if (production.people) populationGain += production.people;
     }
-    const farmCount = activeTiles(nation, this.tiles, TILE_TYPES.FARM).length;
-    if (farmCount > 0 && nation.resources.food > nation.population.total) {
-      populationGain += Math.floor(farmCount * (1 + nation.tech.farming * 0.35));
-    }
+    // Apply tech-based people bonuses (farming t2+, mining t3+, etc.)
+    // These are small and deliberate — not the main growth driver.
     if (populationGain > 0) {
       addPopulation(nation, populationGain);
       summary.population += populationGain;
     }
+    summary.foodProduced += foodProduced;
+    return foodProduced;
   }
 
-  consumeFood(nation, summary) {
-    const consumption = Math.ceil(nation.population.total * (0.55 + this.era * 0.04));
+  consumeFood(nation, summary, foodProduced) {
+    // Each person consumes food every turn; rate rises slightly each era (urbanization costs more).
+    const consumption = foodConsumptionFor(nation, this.era);
+    summary.foodConsumed += consumption;
+
+    // Deduct from stored stockpile
     nation.resources.food -= consumption;
-    if (nation.resources.food >= 0) return;
-    const deficit = Math.abs(nation.resources.food);
-    nation.resources.food = 0;
-    const deaths = Math.max(1, Math.ceil(deficit / 7));
+
+    // Stockpile depleted: famine kills population
+    if (nation.resources.food < 0) {
+      const deficit = Math.abs(nation.resources.food);
+      nation.resources.food = 0;
+      const deaths = Math.max(1, Math.ceil(deficit / BALANCE.population.famineFoodPerDeath));
       const removed = removePopulation(nation, deaths);
       this.normalizeTileWorkers(nation.id);
       summary.deaths += removed;
-    if (removed > 0) {
-      this.addEvent(`${nation.name} lost ${removed} people to food shortages.`, { nationId: nation.id, type: "resource" });
+      if (removed > 0) {
+        this.addEvent(`${nation.name} lost ${removed} people to famine.`, { nationId: nation.id, type: "resource" });
+      }
+      // Famine blocks growth — return early
+      return;
+    }
+
+    // Per-turn surplus: how much more food was produced than consumed this turn.
+    // Growth is driven by surplus flow, not stockpile size.
+    const surplus = foodProduced - consumption;
+
+    if (surplus < BALANCE.population.growth.minimumFoodSurplus) {
+      // Production cannot keep up with consumption; stockpile is absorbing the gap.
+      // Log a warning when the deficit is meaningful. For bot nations, only log severe
+      // shortfalls (>30% of consumption) to avoid flooding the event feed.
+      const severeDeficit = Math.abs(surplus) >= Math.ceil(consumption * 0.3);
+      if (surplus <= -3 && (nation.isPlayer || severeDeficit)) {
+        this.addEvent(
+          `${nation.name}: food output (${foodProduced}) below consumption (${consumption}). Stockpile shrinking.`,
+          { nationId: nation.id, type: "resource" }
+        );
+      }
+      // No growth without a positive food production surplus.
+      return;
+    }
+
+    // Surplus is positive: evaluate population growth.
+    //
+    // Growth is capped by territory capacity — every owned tile can sustain a
+    // limited number of people. Expansion is needed to
+    // keep growing once the cap is approached.
+    const capacity = nation.territory.length * BALANCE.population.capacityPerTile;
+    const headroom = Math.max(0, capacity - nation.population.total);
+
+    if (headroom <= 0) {
+      // At territory limit — player must expand to resume growth
+      return;
+    }
+
+    // surplusRatio: how comfortable the food situation is (0 = barely positive, 1 = very well-fed)
+    const surplusRatio = Math.min(1, surplus / Math.max(1, consumption));
+
+    // headroomFraction: slows growth naturally as territory fills up, encouraging expansion
+    const headroomFraction = headroom / capacity;
+
+    // Base growth is 1–3 people per turn depending on food abundance,
+    // then scaled down toward zero as the territory cap approaches.
+    let baseGrowth;
+    if (surplusRatio >= BALANCE.population.growth.thrivingSurplusRatio) baseGrowth = BALANCE.population.growth.thrivingGrowth;
+    else if (surplusRatio >= BALANCE.population.growth.comfortableSurplusRatio) baseGrowth = BALANCE.population.growth.comfortableGrowth;
+    else baseGrowth = BALANCE.population.growth.marginalGrowth;
+
+    const growth = Math.round(baseGrowth * headroomFraction);
+    if (growth > 0) {
+      addPopulation(nation, growth);
+      summary.population += growth;
     }
   }
 
@@ -877,7 +1128,9 @@ export class GameState {
       map: deepClone(this.map),
       diplomacy: deepClone(this.diplomacy),
       wars: deepClone(this.wars),
+      sieges: deepClone(this.sieges),
       trades: deepClone(this.trades),
+      tradeRoutes: deepClone(this.tradeRoutes),
       alliances: deepClone(this.alliances),
       events: deepClone(this.events),
       eraReports: deepClone(this.eraReports),
@@ -926,6 +1179,25 @@ function normalizeSettings(raw) {
 function typeLabel(type) {
   if (type === TILE_TYPES.MILITARY) return "Military Base";
   return String(type).replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+function foodConsumptionFor(nation, era) {
+  return Math.ceil(nation.population.total * (BALANCE.population.foodConsumptionBase + era * BALANCE.population.foodConsumptionPerEra));
+}
+
+function populationMaintenanceFor(nation) {
+  return Math.ceil(nation.population.total * BALANCE.population.upkeepMoneyPerPerson);
+}
+
+function applyStockpileDiminishingReturns(nation, resource, amount) {
+  if (!BALANCE.stockpiles.resources.includes(resource)) return amount;
+  const softCap = BALANCE.stockpiles.softCaps[resource];
+  if (!softCap || amount <= 0) return amount;
+  const current = nation.resources[resource] || 0;
+  if (current <= softCap) return amount;
+  const pressure = softCap / current;
+  const multiplier = Math.max(BALANCE.stockpiles.minimumMultiplier, pressure);
+  return Math.max(1, Math.ceil(amount * multiplier));
 }
 
 function diffSnapshots(before, after) {

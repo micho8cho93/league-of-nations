@@ -19,11 +19,76 @@ import {
   canResearch,
   canResearchBranch,
   eraLabel,
+  productionForTile,
   researchCost,
-  trainingCost,
+  trainingOptionsForNation,
 } from "./tech.js";
-import { ALLIANCE_TYPES, getDiplomacy, relationLabel } from "./trade.js";
+import { ALLIANCE_TYPES, getDiplomacy, projectTradeRouteYield, relationLabel } from "./trade.js";
 import { computeScore, militaryPower } from "./nation.js";
+import { warUpkeep } from "./war.js";
+import { BALANCE } from "./balance.js";
+
+const PANEL_STATE_KEY = "league-of-nations-panel-state";
+export const TUTORIAL_COMPLETED_KEY = "leagueOfNationsTutorialCompleted";
+const DEFAULT_PANEL_STATE = {
+  top: false,
+  side: false,
+  bottom: false,
+};
+
+const TUTORIAL_STEPS = [
+  {
+    title: "Welcome",
+    body: "Grow your nation by managing land, resources, technology, and relationships with rival nations.",
+    target: "#app",
+  },
+  {
+    title: "Map and Ownership",
+    body: "The map is made of tiles. Colored tiles belong to nations; nearby open land can become part of your country.",
+    target: ".map-section",
+  },
+  {
+    title: "Selecting Tiles",
+    body: "Select a tile on the map to inspect it. Your owned tiles are where most building and worker choices happen.",
+    target: ".map-section",
+  },
+  {
+    title: "Resources",
+    body: "Food supports people. Materials build things. Money pays for projects. Population supplies workers and troops.",
+    target: "#resource-panel",
+  },
+  {
+    title: "Buildings and Actions",
+    body: "Use the tile panel to build farms, mines, schools, factories, or military sites when the tile allows it.",
+    target: "#tile-popup",
+    prepare: "selectPlayerTile",
+  },
+  {
+    title: "Technology and Eras",
+    body: "Research improves your nation. Strong progress moves the world into later eras with more options.",
+    target: "#tech-panel",
+  },
+  {
+    title: "Diplomacy Unlocks",
+    body: "Diplomacy and trade unlock in Era 2. War unlocks later, so early turns are about growth and preparation.",
+    target: "#diplomacy-panel",
+  },
+  {
+    title: "End Turn",
+    body: "When you are done making choices, end the turn. Other nations act, resources update, and events appear below.",
+    target: "#end-turn-btn",
+  },
+  {
+    title: "Event Feed",
+    body: "Watch the event feed for growth, shortages, diplomacy, battles, and era changes after each turn.",
+    target: "#bottom-panel",
+  },
+  {
+    title: "Ready",
+    body: "You can replay this tutorial any time from the Tutorial button. Good luck building your league.",
+    target: "#replay-tutorial-btn",
+  },
+];
 
 export function bindUI(game, renderer) {
   return new GameUI(game, renderer);
@@ -35,20 +100,32 @@ class GameUI {
     this.renderer = renderer;
     this.reportDialogId = null;
     this.victoryShown = false;
+    this.panelState = loadPanelState();
+    this.tutorial = null;
+    this.savedPanelStateForTutorial = null;
     this.cacheDom();
+    this.applyPanelState();
     this.bindEvents();
     this.game.on((event) => this.handleGameEvent(event));
     this.render();
+    window.setTimeout(() => this.maybeStartTutorial(), 0);
     window.setInterval(() => this.renderStatus(), 1000);
   }
 
   cacheDom() {
     this.app = document.getElementById("app");
+    this.topPanel = document.getElementById("top-panel");
+    this.sidePanel = document.getElementById("side-panel");
+    this.bottomPanel = document.getElementById("bottom-panel");
+    this.topCollapseBtn = document.getElementById("top-collapse-btn");
+    this.sideCollapseBtn = document.getElementById("side-collapse-btn");
+    this.bottomCollapseBtn = document.getElementById("bottom-collapse-btn");
     this.statusStrip = document.getElementById("status-strip");
     this.phaseLabel = document.getElementById("phase-label");
     this.endTurnBtn = document.getElementById("end-turn-btn");
     this.saveBtn = document.getElementById("save-btn");
     this.newGameBtn = document.getElementById("new-game-btn");
+    this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
     this.resourcePanel = document.getElementById("resource-panel");
     this.nationPanel = document.getElementById("nation-panel");
     this.diplomacyPanel = document.getElementById("diplomacy-panel");
@@ -80,10 +157,51 @@ class GameUI {
     this.newGameBtn.addEventListener("click", () => {
       this.showConfirmNewGame();
     });
+    this.replayTutorialBtn.addEventListener("click", () => this.startTutorial({ replay: true }));
     this.dialogCloseBtn.addEventListener("click", () => this.closeDialog());
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
     this.diplomacyPanel.addEventListener("click", (event) => this.handleDiplomacyClick(event));
     this.techPanel.addEventListener("click", (event) => this.handleTechClick(event));
+    this.topCollapseBtn.addEventListener("click", () => this.togglePanel("top"));
+    this.sideCollapseBtn.addEventListener("click", () => this.togglePanel("side"));
+    this.bottomCollapseBtn.addEventListener("click", () => this.togglePanel("bottom"));
+  }
+
+  togglePanel(panel) {
+    this.panelState = {
+      ...this.panelState,
+      [panel]: !this.panelState[panel],
+    };
+    savePanelState(this.panelState);
+    this.applyPanelState();
+  }
+
+  applyPanelState() {
+    const { top, side, bottom } = this.panelState;
+    this.app.classList.toggle("panel-collapsed-top", top);
+    this.app.classList.toggle("panel-collapsed-side", side);
+    this.app.classList.toggle("panel-collapsed-bottom", bottom);
+
+    this.setPanelButton(this.topCollapseBtn, this.topPanel, top, "top", "↑", "↓");
+    this.setPanelButton(this.sideCollapseBtn, this.sidePanel, side, "side", "→", "←");
+    this.setPanelButton(this.bottomCollapseBtn, this.bottomPanel, bottom, "event feed", "↓", "↑");
+    this.scheduleMapResize();
+  }
+
+  setPanelButton(button, panel, collapsed, label, expandedIcon, collapsedIcon) {
+    button.textContent = collapsed ? collapsedIcon : expandedIcon;
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${label} panel`);
+    panel.classList.toggle("panel-collapsed", collapsed);
+  }
+
+  scheduleMapResize() {
+    for (const delay of [0, 120, 260]) {
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+        this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId);
+      }, delay);
+    }
   }
 
   handleGameEvent(event) {
@@ -93,6 +211,119 @@ class GameUI {
     }
     if (event.type === "game_over") this.showVictory();
     this.render();
+  }
+
+  // Tutorial flow stays local to the UI layer: it reads game state for anchors,
+  // highlights existing controls, and only writes completion to localStorage.
+  maybeStartTutorial() {
+    if (localStorage.getItem(TUTORIAL_COMPLETED_KEY) === "true") return;
+    this.startTutorial();
+  }
+
+  startTutorial({ replay = false } = {}) {
+    if (this.tutorial) this.closeTutorial({ markComplete: false, restorePanels: false });
+    this.savedPanelStateForTutorial = { ...this.panelState };
+    this.panelState = { top: false, side: false, bottom: false };
+    this.applyPanelState();
+    this.tutorial = {
+      index: 0,
+      replay,
+      overlay: this.createTutorialOverlay(),
+      highlighted: null,
+    };
+    document.body.append(this.tutorial.overlay);
+    document.body.classList.add("tutorial-active");
+    this.showTutorialStep(0);
+  }
+
+  createTutorialOverlay() {
+    const overlay = document.createElement("div");
+    overlay.className = "tutorial-overlay";
+    overlay.innerHTML = `
+      <div class="tutorial-scrim" aria-hidden="true"></div>
+      <section class="tutorial-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+        <div class="tutorial-step-count"></div>
+        <h2 id="tutorial-title"></h2>
+        <p id="tutorial-body"></p>
+        <div class="tutorial-actions">
+          <button type="button" class="secondary-btn" data-tutorial-action="skip">Skip tutorial</button>
+          <button type="button" class="secondary-btn" data-tutorial-action="back">Back</button>
+          <button type="button" class="primary-btn" data-tutorial-action="next">Next</button>
+        </div>
+      </section>
+    `;
+    overlay.addEventListener("click", (event) => this.handleTutorialClick(event));
+    return overlay;
+  }
+
+  handleTutorialClick(event) {
+    const button = event.target.closest("[data-tutorial-action]");
+    if (!button || !this.tutorial) return;
+    const action = button.dataset.tutorialAction;
+    if (action === "skip") {
+      this.closeTutorial({ markComplete: true });
+      return;
+    }
+    if (action === "back") {
+      this.showTutorialStep(this.tutorial.index - 1);
+      return;
+    }
+    if (this.tutorial.index >= TUTORIAL_STEPS.length - 1) {
+      this.closeTutorial({ markComplete: true });
+      return;
+    }
+    this.showTutorialStep(this.tutorial.index + 1);
+  }
+
+  showTutorialStep(index) {
+    if (!this.tutorial) return;
+    const nextIndex = Math.max(0, Math.min(index, TUTORIAL_STEPS.length - 1));
+    const step = TUTORIAL_STEPS[nextIndex];
+    this.tutorial.index = nextIndex;
+    this.prepareTutorialStep(step);
+    this.clearTutorialHighlight();
+
+    const overlay = this.tutorial.overlay;
+    overlay.querySelector(".tutorial-step-count").textContent = `Step ${nextIndex + 1} of ${TUTORIAL_STEPS.length}`;
+    overlay.querySelector("#tutorial-title").textContent = step.title;
+    overlay.querySelector("#tutorial-body").textContent = step.body;
+    overlay.querySelector("[data-tutorial-action='back']").disabled = nextIndex === 0;
+    overlay.querySelector("[data-tutorial-action='next']").textContent = nextIndex === TUTORIAL_STEPS.length - 1 ? "Finish" : "Next";
+
+    const target = document.querySelector(step.target);
+    if (target && !target.hidden) {
+      target.classList.add("tutorial-highlight");
+      this.tutorial.highlighted = target;
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  prepareTutorialStep(step) {
+    if (step.prepare !== "selectPlayerTile") return;
+    const tile = this.game.tiles.find((item) => item.ownerId === this.game.playerId && isLand(item));
+    if (!tile) return;
+    this.game.selectTile(tile.id);
+    this.renderer.focusTile(tile.id);
+  }
+
+  clearTutorialHighlight() {
+    if (!this.tutorial?.highlighted) return;
+    this.tutorial.highlighted.classList.remove("tutorial-highlight");
+    this.tutorial.highlighted = null;
+  }
+
+  closeTutorial({ markComplete = true, restorePanels = true } = {}) {
+    if (!this.tutorial) return;
+    this.clearTutorialHighlight();
+    this.tutorial.overlay.remove();
+    this.tutorial = null;
+    document.body.classList.remove("tutorial-active");
+    if (markComplete) localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
+    if (restorePanels && this.savedPanelStateForTutorial) {
+      this.panelState = { ...this.savedPanelStateForTutorial };
+      this.applyPanelState();
+    }
+    this.savedPanelStateForTutorial = null;
   }
 
   render() {
@@ -126,14 +357,134 @@ class GameUI {
 
   renderResources() {
     const player = this.game.player;
-    const foodNeed = Math.ceil(player.population.total * (0.55 + this.game.era * 0.04));
+    const flows = this.projectResourceFlows(player);
+    const foodClass = flows.food < 0 || player.resources.food + flows.food < 0 ? "bad" : "good";
     this.resourcePanel.innerHTML = `
-      ${resourceRow("Food", player.resources.food, foodNeed > player.resources.food ? "bad" : "good", `Consumes ${foodNeed}/turn`)}
-      ${resourceRow("Materials", player.resources.materials, "warn", "Mining and military")}
-      ${resourceRow("Education", player.resources.education, "blue", "Research and factories")}
-      ${resourceRow("Industry", player.resources.industry, "good", "Factories and branches")}
-      ${resourceRow("Military Power", militaryPower(player, this.game.tiles), "bad", "Defense and conquest")}
+      ${resourceRow({
+        id: "money",
+        label: "Money",
+        icon: "🪙",
+        value: `$${formatNumber(player.money)}`,
+        className: flows.moneyNet < 0 ? "bad" : "good",
+        note: "Buildings, units, diplomacy",
+        rate: `${signed(flows.moneyNet)}/turn`,
+        tooltip: `Generated from taxes, trade, and industry. Used for buildings, units, and diplomacy. Current income: ${signed(flows.moneyNet)}/turn${flows.upkeep ? ` after $${formatNumber(flows.upkeep)} war upkeep` : ""}.`,
+      })}
+      ${resourceRow({
+        id: "food",
+        label: "Food",
+        icon: "🌾",
+        value: player.resources.food,
+        className: foodClass,
+        note: `Produced ${formatNumber(flows.foodProduced)}, consumes ${formatNumber(flows.foodConsumed)}/turn`,
+        rate: `${signed(flows.food)}/turn`,
+        tooltip: `Produced by farms and fertile land. Consumed by population each turn. Shortages slow or reduce population. Current net food: ${signed(flows.food)}/turn (${formatNumber(flows.foodProduced)} produced, ${formatNumber(flows.foodConsumed)} consumed).`,
+      })}
+      ${resourceRow({
+        id: "materials",
+        label: "Materials",
+        icon: "⛏️",
+        value: player.resources.materials,
+        className: flows.materials < 0 ? "bad" : "warn",
+        note: "Mining, factories, military",
+        rate: `${signed(flows.materials)}/turn`,
+        tooltip: `Generated by mines and advanced military infrastructure. Used for buildings, unit training, factories, and military specialization. Current materials flow: ${signed(flows.materials)}/turn.`,
+      })}
+      ${resourceRow({
+        id: "population",
+        label: "Population",
+        icon: "👥",
+        value: player.population.total,
+        className: flows.population < 0 ? "bad" : "good",
+        note: `${formatNumber(player.population.available)} free people`,
+        rate: `${signed(flows.population)}/turn`,
+        tooltip: `Population supplies workers and soldiers. It grows when food production beats consumption and territory has capacity. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`,
+      })}
+      ${resourceRow({
+        id: "education",
+        label: "Education",
+        icon: "📚",
+        value: player.resources.education,
+        className: flows.education < 0 ? "bad" : "blue",
+        note: "Research and factories",
+        rate: `${signed(flows.education)}/turn`,
+        tooltip: `Generated by schools. Used for research, factories, and advanced military branches. Current education flow: ${signed(flows.education)}/turn.`,
+      })}
+      ${resourceRow({
+        id: "industry",
+        label: "Industry",
+        icon: "🏭",
+        value: player.resources.industry,
+        className: "good",
+        note: "Factories and branches",
+        rate: `${signed(flows.industry)}/turn`,
+        tooltip: `Generated by factories when they have enough workers, materials, and education. Used for late-era development and military branches. Current industry flow: ${signed(flows.industry)}/turn.`,
+      })}
+      ${resourceRow({
+        id: "military",
+        label: "Military Power",
+        icon: "🛡️",
+        value: militaryPower(player, this.game.tiles),
+        className: "bad",
+        note: "Defense and conquest",
+        rate: "",
+        tooltip: "Military power summarizes trained units, military buildings, and branch bonuses. It helps defend territory and win wars.",
+      })}
     `;
+    this.resourcePanel.querySelectorAll("[data-tooltip]").forEach((row) => {
+      createTooltip(row, row.dataset.tooltip);
+    });
+  }
+
+  projectResourceFlows(player) {
+    const foodFlow = this.game.foodFlowFor(player.id);
+    const flows = {
+      money: 0,
+      moneyNet: 0,
+      upkeep: warUpkeep(this.game, player.id),
+      food: 0,
+      foodProduced: 0,
+      foodConsumed: foodFlow.consumed,
+      materials: 0,
+      education: 0,
+      industry: 0,
+      population: 0,
+      capacity: foodFlow.capacity,
+    };
+    const available = { ...player.resources };
+    for (const tile of this.game.tiles.filter((item) => item.ownerId === player.id)) {
+      const production = productionForTile(player, tile, this.game.era);
+      if (!production) continue;
+      if (tile.type === TILE_TYPES.FACTORY) {
+        if (available.materials < production.materialsCost || available.education < production.educationCost) {
+          flows.money += 20;
+          continue;
+        }
+        available.materials -= production.materialsCost;
+        available.education -= production.educationCost;
+        flows.materials -= production.materialsCost;
+        flows.education -= production.educationCost;
+      }
+      for (const resource of ["food", "materials", "education", "industry"]) {
+        if (!production[resource]) continue;
+        flows[resource] += production[resource];
+        available[resource] += production[resource];
+        if (resource === "food") flows.foodProduced += production[resource];
+      }
+      if (production.money) flows.money += production.money;
+      if (production.people) flows.population += production.people;
+    }
+    const trade = projectTradeRouteYield(this.game, player.id);
+    flows.money += trade.money;
+    flows.food += trade.food;
+    flows.foodProduced += trade.food;
+    flows.materials += trade.materials;
+    flows.education += trade.education;
+    flows.industry += trade.industry;
+    flows.food -= flows.foodConsumed;
+    flows.moneyNet = flows.money - flows.upkeep;
+    flows.population += projectedFoodGrowth(player, flows);
+    return flows;
   }
 
   renderNations() {
@@ -163,16 +514,20 @@ class GameUI {
       const diplo = getDiplomacy(this.game, this.game.playerId, id);
       const activeAlliances = this.game.alliances.filter((alliance) => alliance.active && alliance.members.includes(this.game.playerId) && alliance.members.includes(id));
       const war = this.game.wars[`${[this.game.playerId, id].sort().join("|")}`]?.active;
+      const route = this.game.tradeRoutes.find((item) => item.status !== "removed" && item.members?.includes(this.game.playerId) && item.members?.includes(id));
+      const routeText = route ? `Route ${route.status}${route.status === "disrupted" ? ` until T${route.disruptedUntil}` : ""}` : "No trade route";
+      const embargoActive = (diplo.embargoes?.[this.game.playerId] || 0) > this.game.turn;
       return `
         <div class="diplo-row">
           <div class="row-head">
             <strong><span style="color:${nation.color}">■</span> ${escapeHtml(nation.name)}</strong>
             <span class="mini-pill ${war ? "bad" : ""}">${war ? "War" : relationLabel(diplo.relation)} ${diplo.relation}</span>
           </div>
-          <div class="muted">${nation.personality} · ${activeAlliances.length ? activeAlliances.map((a) => a.label).join(", ") : "No active alliance"}</div>
+          <div class="muted">${nation.personality} · ${activeAlliances.length ? activeAlliances.map((a) => a.label).join(", ") : "No active alliance"} · ${routeText}</div>
           <div class="row-actions">
             <button class="secondary-btn" data-diplo="trade" data-id="${id}">Trade</button>
             <button class="secondary-btn" data-diplo="alliance" data-id="${id}">Alliance</button>
+            <button class="secondary-btn" data-diplo="embargo" data-id="${id}" ${war || embargoActive ? "disabled" : ""}>${embargoActive ? "Embargoed" : `Embargo $${BALANCE.trade.embargo.cost}`}</button>
             <button class="danger-btn" data-diplo="war" data-id="${id}" ${this.game.era < 3 || war ? "disabled" : ""}>Declare War</button>
           </div>
         </div>
@@ -327,10 +682,11 @@ class GameUI {
 
   renderMilitaryControls(tile) {
     if (tile.type !== TILE_TYPES.MILITARY && !tile.unit?.strength) return "";
+    const player = this.game.player;
     const train = tile.type === TILE_TYPES.MILITARY
-      ? [3, 6].map((amount) => {
-          const cost = trainingCost(amount, this.game.era);
-          return `<button class="secondary-btn" data-tile-action="train" data-amount="${amount}">Train ${amount} ($${cost.money})</button>`;
+      ? trainingOptionsForNation(player, this.game.era).map((option) => {
+          const cost = formatCost(option.cost);
+          return `<button class="secondary-btn" data-tile-action="train" data-amount="${option.strength}" data-branch="${option.branch}" title="${escapeHtml(option.description)}">${escapeHtml(option.label)} (${cost})</button>`;
         }).join("")
       : "";
     const moves = this.game.militaryActions(tile.id).map((action) => {
@@ -373,7 +729,7 @@ class GameUI {
     if (action === "build") result = this.game.buildTile(tileId, button.dataset.type);
     if (action === "workers") result = this.game.assignWorkers(tileId, Number(button.dataset.amount));
     if (action === "destroy") result = this.game.destroyTile(tileId);
-    if (action === "train") result = this.game.trainUnit(tileId, Number(button.dataset.amount));
+    if (action === "train") result = this.game.trainUnit(tileId, Number(button.dataset.amount), this.game.playerId, { branch: button.dataset.branch || "infantry" });
     if (action === "move") result = this.game.moveOrAttackUnit(tileId, button.dataset.target);
     if (result && !result.ok) this.showNotice("Action blocked", result.reason);
     this.render();
@@ -386,6 +742,10 @@ class GameUI {
     const id = button.dataset.id;
     if (action === "trade") this.openTradeDialog(id);
     if (action === "alliance") this.openAllianceDialog(id);
+    if (action === "embargo") {
+      const result = this.game.embargo(id);
+      if (!result.ok) this.showNotice("Embargo blocked", result.reason);
+    }
     if (action === "war") {
       const result = this.game.declareWar(id);
       if (!result.ok) this.showNotice("War blocked", result.reason);
@@ -617,13 +977,98 @@ function pill(text) {
   return `<span class="status-pill">${escapeHtml(text)}</span>`;
 }
 
-function resourceRow(label, value, className = "", note = "") {
+function loadPanelState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null");
+    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PANEL_STATE };
+    return {
+      top: Boolean(parsed.top),
+      side: Boolean(parsed.side),
+      bottom: Boolean(parsed.bottom),
+    };
+  } catch {
+    return { ...DEFAULT_PANEL_STATE };
+  }
+}
+
+function savePanelState(state) {
+  localStorage.setItem(PANEL_STATE_KEY, JSON.stringify({
+    top: Boolean(state.top),
+    side: Boolean(state.side),
+    bottom: Boolean(state.bottom),
+  }));
+}
+
+function resourceRow({
+  id,
+  label,
+  icon,
+  value,
+  className = "",
+  note = "",
+  rate = "",
+  tooltip = "",
+}) {
   return `
-    <div class="resource-row">
-      <div class="row-head"><strong>${escapeHtml(label)}</strong><span class="${className}">${formatNumber(value)}</span></div>
-      <div class="muted">${escapeHtml(note)}</div>
+    <div class="resource-row has-tooltip" data-resource="${escapeHtml(id)}" data-tooltip="${escapeHtml(tooltip)}">
+      <div class="resource-main">
+        <span class="resource-icon" aria-hidden="true">${icon}</span>
+        <div class="resource-copy">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(note)}</span>
+        </div>
+      </div>
+      <div class="resource-value">
+        <strong class="${className}">${typeof value === "number" ? formatNumber(value) : escapeHtml(value)}</strong>
+        ${rate ? `<span class="${className}">${escapeHtml(rate)}</span>` : ""}
+      </div>
     </div>
   `;
+}
+
+export function createTooltip(element, content) {
+  if (!element || !content) return null;
+  const id = `tooltip-${Math.random().toString(36).slice(2)}`;
+  element.classList.add("has-tooltip");
+  element.setAttribute("tabindex", "0");
+  element.setAttribute("aria-describedby", id);
+
+  const tooltip = document.createElement("div");
+  tooltip.id = id;
+  tooltip.className = "ui-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.textContent = content;
+  element.append(tooltip);
+
+  const close = () => element.classList.remove("tooltip-open");
+  element.addEventListener("blur", close);
+  element.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  element.addEventListener("click", () => {
+    const wasOpen = element.classList.contains("tooltip-open");
+    document.querySelectorAll(".tooltip-open").forEach((item) => item.classList.remove("tooltip-open"));
+    if (wasOpen) return;
+    element.classList.add("tooltip-open");
+    window.setTimeout(() => {
+      document.addEventListener("pointerdown", (event) => {
+        if (!element.contains(event.target)) close();
+      }, { once: true });
+    }, 0);
+  });
+  return tooltip;
+}
+
+function projectedFoodGrowth(player, flows) {
+  const stockAfterFood = player.resources.food + flows.food;
+  if (stockAfterFood < 0) return -Math.max(1, Math.ceil(Math.abs(stockAfterFood) / 7));
+  if (flows.food < 0) return 0;
+  const headroom = Math.max(0, flows.capacity - player.population.total);
+  if (headroom <= 0 || flows.capacity <= 0) return 0;
+  const surplusRatio = Math.min(1, flows.food / Math.max(1, flows.foodConsumed));
+  const headroomFraction = headroom / flows.capacity;
+  const baseGrowth = surplusRatio >= 0.8 ? 3 : surplusRatio >= 0.4 ? 2 : 1;
+  return Math.round(baseGrowth * headroomFraction);
 }
 
 function summaryLine(label, value, className = "") {
@@ -632,6 +1077,15 @@ function summaryLine(label, value, className = "") {
 
 function metric(label, value) {
   return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function formatCost(cost) {
+  const parts = [`$${formatNumber(cost.money || 0)}`];
+  for (const resource of ["materials", "education", "industry"]) {
+    if (cost[resource]) parts.push(`${formatNumber(cost[resource])} ${resource}`);
+  }
+  if (cost.people) parts.push(`${formatNumber(cost.people)} pop`);
+  return parts.join(", ");
 }
 
 function tradeField(name, label, value) {
