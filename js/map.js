@@ -525,9 +525,11 @@ export class HexMapRenderer {
     this.selectedTileId = null;
     this.militaryHighlights = normalizeMilitaryHighlights();
     this.hoveredTileId = null;
-    this.map = null;
-    this.nations = {};
-    this._initThree();
+	    this.map = null;
+	    this.nations = {};
+	    this.minCamRadius = 8.5;
+	    this.maxCamRadius = 78;
+	    this._initThree();
     this._bindInput();
     this._animate = this._animate.bind(this);
     requestAnimationFrame(this._animate);
@@ -538,7 +540,7 @@ export class HexMapRenderer {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x091019);
+	    this.scene.background = new THREE.Color(0x102333);
 
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
     this.target = new THREE.Vector3(0, 0, 0);
@@ -577,12 +579,13 @@ export class HexMapRenderer {
     window.addEventListener("resize", () => this._resize());
   }
 
-  setMap(map) {
-    this.map = map;
-    this.camRadius = Math.max(22, map.radius * HEX_SIZE * 2.35);
-    this.target.set(0, 0, 0);
-    this._updateCamera();
-    this._clearGroups();
+	  setMap(map) {
+	    this.map = map;
+	    this.target.set(0, 0, 0);
+	    this._setZoomBoundsForMap(map);
+	    this.camRadius = this.maxCamRadius;
+	    this._updateCamera();
+	    this._clearGroups();
 
     const THREE = window.THREE;
     for (const tile of map.tiles) {
@@ -1869,10 +1872,10 @@ export class HexMapRenderer {
     this.canvas.addEventListener(
       "wheel",
       (event) => {
-        event.preventDefault();
-        this.camRadius = clamp(this.camRadius * Math.exp(event.deltaY * 0.0014), 8.5, 78);
-        this._updateCamera();
-      },
+	        event.preventDefault();
+	        this.camRadius = clamp(this.camRadius * Math.exp(event.deltaY * 0.0014), this.minCamRadius, this.maxCamRadius);
+	        this._updateCamera();
+	      },
       { passive: false }
     );
     this.canvas.addEventListener("pointerleave", () => {
@@ -1895,25 +1898,94 @@ export class HexMapRenderer {
     return hits[0]?.object?.userData?.tileId || null;
   }
 
-  _resize() {
-    const width = Math.max(1, this.canvas.clientWidth);
-    const height = Math.max(1, this.canvas.clientHeight);
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-    this._updateNationLabels();
-  }
-
-  _updateCamera() {
-    const THREE = window.THREE;
-    const sinP = Math.sin(this.camPolar);
-    const x = this.target.x + this.camRadius * sinP * Math.cos(this.camAzimuth);
-    const z = this.target.z + this.camRadius * sinP * Math.sin(this.camAzimuth);
-    const y = this.target.y + this.camRadius * Math.cos(this.camPolar);
-    this.camera.position.set(x, y, z);
-    this.camera.lookAt(this.target);
-    this._updateNationLabels();
-  }
+	  _resize() {
+	    const wasAtFit = !this.maxCamRadius || Math.abs(this.camRadius - this.maxCamRadius) < 0.5;
+	    const width = Math.max(1, this.canvas.clientWidth);
+	    const height = Math.max(1, this.canvas.clientHeight);
+	    this.renderer.setSize(width, height, false);
+	    this.camera.aspect = width / height;
+	    this.camera.updateProjectionMatrix();
+	    if (this.map) {
+	      this._setZoomBoundsForMap(this.map);
+	      if (wasAtFit || this.camRadius > this.maxCamRadius) this.camRadius = this.maxCamRadius;
+	      if (this.camRadius < this.minCamRadius) this.camRadius = this.minCamRadius;
+	      this._updateCamera();
+	      return;
+	    }
+	    this._updateNationLabels();
+	  }
+	
+	  _updateCamera() {
+	    this._positionCamera(this.camRadius);
+	    this._updateNationLabels();
+	  }
+	
+	  _positionCamera(radius) {
+	    const THREE = window.THREE;
+	    const sinP = Math.sin(this.camPolar);
+	    const x = this.target.x + radius * sinP * Math.cos(this.camAzimuth);
+	    const z = this.target.z + radius * sinP * Math.sin(this.camAzimuth);
+	    const y = this.target.y + radius * Math.cos(this.camPolar);
+	    this.camera.position.set(x, y, z);
+	    this.camera.lookAt(this.target);
+	    this.camera.updateMatrixWorld();
+	  }
+	
+	  _setZoomBoundsForMap(map) {
+	    const fitRadius = this._fitCameraRadiusToMap(map);
+	    this.maxCamRadius = fitRadius;
+	    this.minCamRadius = Math.max(6.5, Math.min(18, fitRadius * 0.22));
+	  }
+	
+	  _fitCameraRadiusToMap(map) {
+	    const points = this._mapFitPoints(map);
+	    if (!points.length) return 24;
+	    let low = 6;
+	    let high = Math.max(24, map.radius * HEX_SIZE * 7);
+	    while (!this._cameraRadiusFits(high, points)) high *= 1.35;
+	    for (let i = 0; i < 24; i += 1) {
+	      const mid = (low + high) / 2;
+	      if (this._cameraRadiusFits(mid, points)) high = mid;
+	      else low = mid;
+	    }
+	    return high;
+	  }
+	
+	  _mapFitPoints(map) {
+	    if (!map?.tiles?.length) return [];
+	    let minX = Infinity;
+	    let maxX = -Infinity;
+	    let minZ = Infinity;
+	    let maxZ = -Infinity;
+	    for (const tile of map.tiles) {
+	      const { x, z } = axialToWorld(tile.q, tile.r, HEX_SIZE);
+	      minX = Math.min(minX, x - HEX_SIZE);
+	      maxX = Math.max(maxX, x + HEX_SIZE);
+	      minZ = Math.min(minZ, z - HEX_SIZE);
+	      maxZ = Math.max(maxZ, z + HEX_SIZE);
+	    }
+	    const THREE = window.THREE;
+	    return [
+	      new THREE.Vector3(minX, 0, minZ),
+	      new THREE.Vector3(minX, 0, maxZ),
+	      new THREE.Vector3(maxX, 0, minZ),
+	      new THREE.Vector3(maxX, 0, maxZ),
+	      new THREE.Vector3((minX + maxX) / 2, 0, minZ),
+	      new THREE.Vector3((minX + maxX) / 2, 0, maxZ),
+	      new THREE.Vector3(minX, 0, (minZ + maxZ) / 2),
+	      new THREE.Vector3(maxX, 0, (minZ + maxZ) / 2),
+	    ];
+	  }
+	
+	  _cameraRadiusFits(radius, points) {
+	    this._positionCamera(radius);
+	    const margin = 0.9;
+	    for (const point of points) {
+	      const projected = point.clone().project(this.camera);
+	      if (projected.z >= 1 || Math.abs(projected.x) > margin || Math.abs(projected.y) > margin) return false;
+	    }
+	    return true;
+	  }
 
   _clearGroups() {
     const groups = [this.tileGroup, this.territoryBorderGroup, this.highlightGroup, this.decorationGroup, this.effectGroup];

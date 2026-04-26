@@ -134,7 +134,7 @@ function readSetup() {
   return {
     playerName: inputs.playerName.value,
     mapSize: inputs.mapSize.value,
-    nationCount: clampInt(inputs.nationCount.value, 2, 10, 5),
+    nationCount: clampInt(inputs.nationCount.value, 2, 16, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: inputs.unlimitedMode.checked,
@@ -260,7 +260,7 @@ function syncLobbyInputs(settings, editable) {
 function readLobbySetup() {
   return {
     mapSize: lobbyInputs.mapSize.value,
-    nationCount: clampInt(lobbyInputs.nationCount.value, 2, 10, 5),
+    nationCount: clampInt(lobbyInputs.nationCount.value, 2, 16, 5),
     maxTurns: lobbyInputs.unlimitedMode.checked ? 0 : clampInt(lobbyInputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(lobbyInputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: lobbyInputs.unlimitedMode.checked,
@@ -372,47 +372,8 @@ function findAssignedNation(snapshot, sessionId) {
 }
 
 function renderMultiplayerSnapshotDebug(snapshot, assignedNationId) {
-  const container = document.querySelector(".side-panel-content");
-  if (!container) return;
-
-  let panel = document.getElementById("multiplayer-snapshot-panel");
-  if (!panel) {
-    panel = document.createElement("details");
-    panel.id = "multiplayer-snapshot-panel";
-    panel.className = "panel side-section multiplayer-snapshot-panel";
-    panel.open = true;
-    const summary = document.createElement("summary");
-    summary.textContent = "Multiplayer Snapshot";
-    const body = document.createElement("div");
-    body.className = "multiplayer-snapshot-body";
-    panel.append(summary, body);
-    container.prepend(panel);
-  }
-
-  const body = panel.querySelector(".multiplayer-snapshot-body");
-  const nations = snapshot.nations || Object.values(snapshot.gameState?.nations || {});
-  const assigned = nations.find((nation) => nation.id === assignedNationId);
-  body.innerHTML = "";
-
-  const status = document.createElement("p");
-  status.className = "muted";
-  status.textContent = `Game started. You control ${assigned?.name || "an assigned nation"}.`;
-  body.append(status);
-
-  const list = document.createElement("div");
-  list.className = "snapshot-nation-list";
-  for (const nation of nations) {
-    const row = document.createElement("div");
-    row.className = "snapshot-nation-row";
-    const name = document.createElement("strong");
-    name.textContent = `${nation.id === assignedNationId ? "You: " : ""}${nation.name}`;
-    const meta = document.createElement("span");
-    meta.className = "mini-pill";
-    meta.textContent = nation.bot ? "Bot" : "Human";
-    row.append(name, meta);
-    list.append(row);
-  }
-  body.append(list);
+  // Kept as a hook for console debugging without adding visible UI chrome.
+  window.__leagueOfNationsSnapshotDebug = { snapshot, assignedNationId };
 }
 
 function deepClone(value) {

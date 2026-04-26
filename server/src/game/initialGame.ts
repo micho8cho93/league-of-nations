@@ -1,7 +1,7 @@
 type ControllerType = "human" | "bot";
 
 export interface InitialGameSettings {
-  mapSize: "Small" | "Medium" | "Large";
+  mapSize: "Small" | "Medium" | "Large" | "Extra Large" | "Enormous";
   nationCount: number;
   maxTurns: number;
   turnTimerMinutes: number;
@@ -137,6 +137,8 @@ const MAP_SIZES = {
   Small: { radius: 7 },
   Medium: { radius: 10 },
   Large: { radius: 13 },
+  "Extra Large": { radius: 18 },
+  Enormous: { radius: 24 },
 } as const;
 
 const TILE_TYPES = {
@@ -226,6 +228,12 @@ const NATION_NAMES = [
   "Istrian Commonwealth",
   "Kestral Accord",
   "Namar Isles",
+  "Maritane Compact",
+  "Aurelian Federation",
+  "Peregrine States",
+  "Valora Assembly",
+  "Rookhaven League",
+  "Sable Coast",
 ];
 
 const HEX_DIRECTIONS = [

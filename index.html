@@ -19,16 +19,18 @@
         </label>
         <label class="field">
           <span>Map size</span>
-          <select id="setup-map-size">
-            <option>Small</option>
-            <option selected>Medium</option>
-            <option>Large</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Total nations</span>
-          <input id="setup-nation-count" type="number" min="2" max="10" step="1" value="5" />
-        </label>
+	          <select id="setup-map-size">
+	            <option>Small</option>
+	            <option selected>Medium</option>
+	            <option>Large</option>
+	            <option>Extra Large</option>
+	            <option>Enormous</option>
+	          </select>
+	        </label>
+	        <label class="field">
+	          <span>Total nations</span>
+	          <input id="setup-nation-count" type="number" min="2" max="16" step="1" value="5" />
+	        </label>
         <label class="field">
           <span>Max turns</span>
           <input id="setup-max-turns" type="number" min="10" max="120" step="1" value="30" />
@@ -83,16 +85,18 @@
           <div class="setup-grid lobby-settings">
             <label class="field">
               <span>Map size</span>
-              <select id="lobby-map-size">
-                <option>Small</option>
-                <option>Medium</option>
-                <option>Large</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Total nations</span>
-              <input id="lobby-nation-count" type="number" min="2" max="10" step="1" />
-            </label>
+	              <select id="lobby-map-size">
+	                <option>Small</option>
+	                <option>Medium</option>
+	                <option>Large</option>
+	                <option>Extra Large</option>
+	                <option>Enormous</option>
+	              </select>
+	            </label>
+	            <label class="field">
+	              <span>Total nations</span>
+	              <input id="lobby-nation-count" type="number" min="2" max="16" step="1" />
+	            </label>
             <label class="field">
               <span>Max turns</span>
               <input id="lobby-max-turns" type="number" min="10" max="120" step="1" />
@@ -113,50 +117,37 @@
     </section>
   </div>
 
-  <div id="app" class="app" hidden>
-    <main class="game-shell">
-      <section class="map-section">
-        <header id="top-panel" class="topbar">
-          <div class="brand-block">
-            <div class="brand">League of Nations</div>
-            <div id="phase-label" class="phase-label">Player Turn</div>
-          </div>
-          <div id="status-strip" class="status-strip"></div>
-          <div id="action-counter" class="action-counter" aria-live="polite">Actions left: 10</div>
-          <div class="top-actions">
-            <button id="tech-tree-btn" class="secondary-btn">Tech Tree</button>
-            <button id="replay-tutorial-btn" class="secondary-btn">Tutorial</button>
-            <button id="end-turn-btn" class="primary-btn">End Turn</button>
-          </div>
-        </header>
-        <canvas id="map-canvas"></canvas>
-        <div id="board-actions" class="board-actions" aria-label="Board tools">
-          <button id="leaderboard-btn" class="secondary-btn" type="button">Leaderboard</button>
-          <button id="board-diplomacy-btn" class="secondary-btn" type="button">Diplomacy</button>
-          <button id="board-trade-btn" class="secondary-btn" type="button">Trade</button>
-        </div>
-        <div id="tooltip" class="tooltip" hidden></div>
-        <section id="tile-popup" class="tile-popup" hidden>
-          <button id="tile-close-btn" class="icon-btn close-btn" aria-label="Close tile popup">×</button>
-          <div id="tile-popup-content"></div>
-        </section>
-      </section>
-
-      <aside id="side-panel" class="side-panel">
-        <button id="side-collapse-btn" class="icon-btn panel-toggle side-toggle" type="button" aria-controls="side-panel" aria-expanded="true" aria-label="Collapse side panel">→</button>
-        <div class="side-panel-content">
-          <details class="panel side-section" data-side-section="resources" open>
-            <summary>Resources</summary>
-            <div id="resource-panel"></div>
-          </details>
-          <details class="panel side-section" data-side-section="summary">
-            <summary>Last Turn</summary>
-            <div id="summary-panel"></div>
-          </details>
-        </div>
-      </aside>
-    </main>
-  </div>
+	  <div id="app" class="app" hidden>
+	    <main class="game-shell">
+	      <section class="map-section">
+	        <header id="top-panel" class="topbar">
+	          <div class="brand-block">
+	            <div class="brand">League of Nations</div>
+	            <div id="phase-label" class="phase-label">Player Turn</div>
+	          </div>
+	          <div id="status-strip" class="status-strip"></div>
+	          <div class="tool-dock" aria-label="Game tools">
+	            <button id="action-counter" class="tool-circle action-counter" type="button" aria-label="Actions left" title="Actions left">10</button>
+	            <button id="tech-tree-btn" class="tool-circle" type="button" aria-label="Tech tree" title="Tech Tree">T</button>
+	            <button id="replay-tutorial-btn" class="tool-circle" type="button" aria-label="Tutorial" title="Tutorial">?</button>
+	            <button id="leaderboard-btn" class="tool-circle" type="button" aria-label="Leaderboard" title="Leaderboard">#</button>
+	            <button id="board-diplomacy-btn" class="tool-circle" type="button" aria-label="Diplomacy" title="Diplomacy">D</button>
+	            <button id="board-trade-btn" class="tool-circle" type="button" aria-label="Trade" title="Trade">$</button>
+	          </div>
+	          <div class="top-actions">
+	            <button id="end-turn-btn" class="primary-btn">End Turn</button>
+	          </div>
+	          <div id="resource-panel" class="resource-strip" aria-label="Resources"></div>
+	        </header>
+	        <canvas id="map-canvas"></canvas>
+	        <div id="tooltip" class="tooltip" hidden></div>
+	        <section id="tile-popup" class="tile-popup" hidden>
+	          <button id="tile-close-btn" class="icon-btn close-btn" aria-label="Close tile popup">×</button>
+	          <div id="tile-popup-content"></div>
+	        </section>
+	      </section>
+	    </main>
+	  </div>
 
   <div id="dialog-backdrop" class="dialog-backdrop" hidden>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">

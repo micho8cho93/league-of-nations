@@ -1430,12 +1430,13 @@ export class GameState {
 }
 
 function normalizeSettings(raw) {
-  const nationCount = clamp(Math.floor(Number(raw.nationCount) || 5), 2, 10);
+  const nationCount = clamp(Math.floor(Number(raw.nationCount) || 5), 2, 16);
   const unlimitedMode = Boolean(raw.unlimitedMode);
   const turnTimerMinutes = clamp(Math.floor(Number(raw.turnTimerMinutes ?? raw.timeLimitMinutes) || 0), 0, 240);
+  const mapSizes = ["Small", "Medium", "Large", "Extra Large", "Enormous"];
   return {
     playerName: String(raw.playerName || "Republic of Nova").trim().slice(0, 40) || "Republic of Nova",
-    mapSize: ["Small", "Medium", "Large"].includes(raw.mapSize) ? raw.mapSize : "Medium",
+    mapSize: mapSizes.includes(raw.mapSize) ? raw.mapSize : "Medium",
     nationCount,
     maxTurns: unlimitedMode ? 0 : clamp(Math.floor(Number(raw.maxTurns) || 30), 10, 120),
     turnTimerMinutes,

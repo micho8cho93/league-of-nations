@@ -25,6 +25,12 @@ const MULTIPLAYER_NATION_NAMES = [
   "Istrian Commonwealth",
   "Kestral Accord",
   "Namar Isles",
+  "Maritane Compact",
+  "Aurelian Federation",
+  "Peregrine States",
+  "Valora Assembly",
+  "Rookhaven League",
+  "Sable Coast",
 ];
 
 interface JoinOptions {
@@ -88,7 +94,7 @@ class LeagueRoomState extends Schema {
 }
 
 export class LeagueRoom extends Room {
-  maxClients = 10;
+  maxClients = 16;
   state = new LeagueRoomState();
   private gameState: ServerGameState | null = null;
   private resolvingTurn = false;
@@ -244,7 +250,7 @@ export class LeagueRoom extends Room {
 
     if (payload.nationCount !== undefined) {
       const minimumNations = Math.max(2, this.state.players.size, this.highestClaimedNationIndex());
-      this.state.settings.nationCount = clampInteger(payload.nationCount, minimumNations, 10, this.state.settings.nationCount);
+      this.state.settings.nationCount = clampInteger(payload.nationCount, minimumNations, 16, this.state.settings.nationCount);
       this.maxClients = this.state.settings.nationCount;
     }
 
@@ -613,7 +619,7 @@ function nationIndex(nationId: string) {
 
 function sanitizeMapSize(value: unknown) {
   const mapSize = String(value ?? "");
-  return ["Small", "Medium", "Large"].includes(mapSize) ? mapSize : "Medium";
+  return ["Small", "Medium", "Large", "Extra Large", "Enormous"].includes(mapSize) ? mapSize : "Medium";
 }
 
 function clampInteger(value: unknown, min: number, max: number, fallback: number) {

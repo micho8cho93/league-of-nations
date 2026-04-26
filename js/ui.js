@@ -30,16 +30,7 @@ import { computeScore, militaryPower } from "./nation.js";
 import { warUpkeep } from "./war.js";
 import { BALANCE } from "./balance.js";
 
-const PANEL_STATE_KEY = "league-of-nations-panel-state";
-const SIDE_SECTION_STATE_KEY = "league-of-nations-side-sections";
 export const TUTORIAL_COMPLETED_KEY = "leagueOfNationsTutorialCompleted";
-const DEFAULT_PANEL_STATE = {
-  side: false,
-};
-const DEFAULT_SIDE_SECTION_STATE = {
-  resources: true,
-  summary: false,
-};
 
 const TUTORIAL_STEPS = [
   {
@@ -48,44 +39,59 @@ const TUTORIAL_STEPS = [
     target: "#app",
   },
   {
-    title: "Map and Ownership",
-    body: "The map is made of tiles. Colored tiles belong to nations; nearby open land can become part of your country.",
-    target: ".map-section",
-  },
-  {
-    title: "Selecting Tiles",
-    body: "Select a tile on the map to inspect it. Your owned tiles are where most building and worker choices happen.",
+    title: "Map",
+    body: "The map fills the screen. Zoom out to see the whole world, then select tiles to inspect land, water, owners, buildings, and units.",
     target: ".map-section",
   },
   {
     title: "Resources",
-    body: "Food supports people. Materials build things. Money pays for projects. Population supplies workers and troops.",
+    body: "Your resource strip runs across the top. It shows money, food, materials, population, happiness, education, industry, and military power.",
     target: "#resource-panel",
   },
   {
-    title: "Buildings and Actions",
+    title: "Actions",
+    body: "The numbered circle shows actions left this turn. Open it for a quick reminder of used actions and what you can do next.",
+    target: "#action-counter",
+  },
+  {
+    title: "Tile Controls",
     body: "Use the tile panel to build farms, mines, schools, factories, or military sites when the tile allows it.",
     target: "#tile-popup",
     prepare: "selectPlayerTile",
   },
   {
-    title: "Technology and Eras",
-    body: "Open the tech tree to research improvements. Strong progress moves the world into later eras with more options.",
+    title: "Technology",
+    body: "Open the tech button to research improvements. Strong progress moves the world into later eras with more options.",
     target: "#tech-tree-btn",
   },
   {
-    title: "Diplomacy Unlocks",
-    body: "Diplomacy and trade unlock in Era 2. War unlocks later, so early turns are about growth and preparation.",
+    title: "Tutorial",
+    body: "The question-mark button replays this walkthrough whenever you want a refresher.",
+    target: "#replay-tutorial-btn",
+  },
+  {
+    title: "Leaderboard",
+    body: "The rank button opens the leaderboard so you can compare score, territory, population, happiness, and military power.",
+    target: "#leaderboard-btn",
+  },
+  {
+    title: "Diplomacy",
+    body: "The diplomacy button opens relations, alliances, embargoes, and wars. Diplomacy and trade unlock in Era 2; war unlocks later.",
     target: "#board-diplomacy-btn",
   },
   {
+    title: "Trade",
+    body: "The trade button shows active trade routes and projected route yield once trade is unlocked.",
+    target: "#board-trade-btn",
+  },
+  {
     title: "End Turn",
-    body: "When you are done making choices, end the turn. Other nations act, resources update, and the last-turn summary updates.",
+    body: "When you are done making choices, end the turn. Other nations act and resources update for the next round.",
     target: "#end-turn-btn",
   },
   {
     title: "Ready",
-    body: "You can replay this tutorial any time from the Tutorial button. Good luck building your league.",
+    body: "That is the new layout. Good luck building your league.",
     target: "#replay-tutorial-btn",
   },
 ];
@@ -101,13 +107,10 @@ class GameUI {
     this.multiplayerClient = options.multiplayerClient || null;
     this.victoryShown = false;
     this.militarySelection = null;
-    this.panelState = loadPanelState();
-    this.sideSectionState = loadSideSectionState();
     this.tutorial = null;
-    this.savedPanelStateForTutorial = null;
     this.turnTimeoutInProgress = false;
     this.cacheDom();
-    this.applyPanelState();
+    this.scheduleMapResize();
     this.bindEvents();
     this.unsubscribeGame = this.game.on((event) => this.handleGameEvent(event));
     this.render();
@@ -129,8 +132,6 @@ class GameUI {
   cacheDom() {
     this.app = document.getElementById("app");
     this.topPanel = document.getElementById("top-panel");
-    this.sidePanel = document.getElementById("side-panel");
-    this.sideCollapseBtn = document.getElementById("side-collapse-btn");
     this.statusStrip = document.getElementById("status-strip");
     this.phaseLabel = document.getElementById("phase-label");
     this.actionCounter = document.getElementById("action-counter");
@@ -141,7 +142,6 @@ class GameUI {
     this.endTurnBtn = document.getElementById("end-turn-btn");
     this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
     this.resourcePanel = document.getElementById("resource-panel");
-    this.summaryPanel = document.getElementById("summary-panel");
     this.tilePopup = document.getElementById("tile-popup");
     this.tilePopupContent = document.getElementById("tile-popup-content");
     this.tileCloseBtn = document.getElementById("tile-close-btn");
@@ -168,6 +168,7 @@ class GameUI {
       this.clearMilitarySelection();
       this.game.endTurn();
     });
+    this.actionCounter.addEventListener("click", () => this.openActionDialog());
     this.replayTutorialBtn.addEventListener("click", () => this.startTutorial({ replay: true }));
     this.techTreeBtn.addEventListener("click", () => this.openTechDialog());
     this.leaderboardBtn.addEventListener("click", () => this.openLeaderboardDialog());
@@ -177,39 +178,6 @@ class GameUI {
     this.dialogBody.addEventListener("click", (event) => this.handleTechClick(event));
     this.dialogBody.addEventListener("click", (event) => this.handleDiplomacyClick(event));
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
-    this.sidePanel.querySelectorAll("[data-side-section]").forEach((section) => {
-      const key = section.dataset.sideSection;
-      if (Object.prototype.hasOwnProperty.call(this.sideSectionState, key)) section.open = Boolean(this.sideSectionState[key]);
-      section.addEventListener("toggle", () => {
-        this.sideSectionState = { ...this.sideSectionState, [key]: section.open };
-        saveSideSectionState(this.sideSectionState);
-      });
-    });
-    this.sideCollapseBtn.addEventListener("click", () => this.togglePanel("side"));
-  }
-
-  togglePanel(panel) {
-    this.panelState = {
-      ...this.panelState,
-      [panel]: !this.panelState[panel],
-    };
-    savePanelState(this.panelState);
-    this.applyPanelState();
-  }
-
-  applyPanelState() {
-    const { side } = this.panelState;
-    this.app.classList.toggle("panel-collapsed-side", side);
-
-    this.setPanelButton(this.sideCollapseBtn, this.sidePanel, side, "side", "→", "←");
-    this.scheduleMapResize();
-  }
-
-  setPanelButton(button, panel, collapsed, label, expandedIcon, collapsedIcon) {
-    button.textContent = collapsed ? collapsedIcon : expandedIcon;
-    button.setAttribute("aria-expanded", String(!collapsed));
-    button.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${label} panel`);
-    panel.classList.toggle("panel-collapsed", collapsed);
   }
 
   scheduleMapResize() {
@@ -241,13 +209,10 @@ class GameUI {
     this.startTutorial();
   }
 
-  startTutorial({ replay = false } = {}) {
-    if (this.tutorial) this.closeTutorial({ markComplete: false, restorePanels: false });
-    this.savedPanelStateForTutorial = { ...this.panelState };
-    this.panelState = { side: false };
-    this.applyPanelState();
-    this.tutorial = {
-      index: 0,
+	  startTutorial({ replay = false } = {}) {
+	    if (this.tutorial) this.closeTutorial({ markComplete: false, restorePanels: false });
+	    this.tutorial = {
+	      index: 0,
       replay,
       overlay: this.createTutorialOverlay(),
       highlighted: null,
@@ -333,28 +298,22 @@ class GameUI {
     this.tutorial.highlighted = null;
   }
 
-  closeTutorial({ markComplete = true, restorePanels = true } = {}) {
-    if (!this.tutorial) return;
-    this.clearTutorialHighlight();
+	  closeTutorial({ markComplete = true, restorePanels = true } = {}) {
+	    if (!this.tutorial) return;
+	    this.clearTutorialHighlight();
     this.tutorial.overlay.remove();
-    this.tutorial = null;
-    document.body.classList.remove("tutorial-active");
-    if (markComplete) localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
-    if (restorePanels && this.savedPanelStateForTutorial) {
-      this.panelState = { ...this.savedPanelStateForTutorial };
-      this.applyPanelState();
-    }
-    this.savedPanelStateForTutorial = null;
-  }
+	    this.tutorial = null;
+	    document.body.classList.remove("tutorial-active");
+	    if (markComplete) localStorage.setItem(TUTORIAL_COMPLETED_KEY, "true");
+	  }
 
-  render() {
-    this.renderStatus();
-    this.renderResources();
-    this.refreshBoardDialogs();
-    this.refreshTechDialog();
-    this.renderSummary();
-    this.renderTilePopup();
-    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights());
+	  render() {
+	    this.renderStatus();
+	    this.renderResources();
+	    this.refreshBoardDialogs();
+	    this.refreshTechDialog();
+	    this.renderTilePopup();
+	    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights());
     if (this.game.gameOver) this.showVictory();
   }
 
@@ -497,33 +456,34 @@ class GameUI {
     return !this.isServerAuthoritative() || this.activeTurnNationId() === this.game.playerId;
   }
 
-  renderActionCounter() {
-    if (!this.actionCounter) return;
-    const player = this.game.player;
-    const remaining = Math.max(0, Number(player.actionsRemaining) || 0);
-    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
-    this.actionCounter.textContent = `Actions left: ${remaining}`;
-    this.actionCounter.title = `${used} used this turn`;
-    this.actionCounter.classList.toggle("no-actions", remaining <= 0);
-  }
+	  renderActionCounter() {
+	    if (!this.actionCounter) return;
+	    const player = this.game.player;
+	    const remaining = Math.max(0, Number(player.actionsRemaining) || 0);
+	    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
+	    this.actionCounter.textContent = String(remaining);
+	    this.actionCounter.title = `${remaining} actions left. ${used} used this turn.`;
+	    this.actionCounter.setAttribute("aria-label", `${remaining} actions left`);
+	    this.actionCounter.classList.toggle("no-actions", remaining <= 0);
+	  }
 
-  renderActionSummary() {
-    const player = this.game.player;
-    const remaining = Math.max(0, Number(player.actionsRemaining) || 0);
-    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
+	  renderActionSummaryHtml() {
+	    const player = this.game.player;
+	    const remaining = Math.max(0, Number(player.actionsRemaining) || 0);
+	    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
     const nextAction = this.militarySelection
       ? `Choose a highlighted tile to move or attack from ${this.militarySelection.sourceTileId}.`
       : this.game.selectedTileId
         ? "Use tile controls, choose a military target, or inspect another tile."
         : "Select a tile or end the turn when ready.";
-    this.actionSummaryPanel.innerHTML = `
-      <div class="metric-grid">
-        ${metric("Available", remaining)}
-        ${metric("Used", used)}
-      </div>
-      <p class="${remaining <= 0 ? "bad" : "muted"}">${escapeHtml(nextAction)}</p>
-    `;
-  }
+	    return `
+	      <div class="metric-grid">
+	        ${metric("Available", remaining)}
+	        ${metric("Used", used)}
+	      </div>
+	      <p class="${remaining <= 0 ? "bad" : "muted"}">${escapeHtml(nextAction)}</p>
+	    `;
+	  }
 
   flashActionCounter() {
     if (!this.actionCounter) return;
@@ -845,12 +805,16 @@ class GameUI {
     return categoryRows + `<div class="tech-row"><strong>Era 4 Branches</strong></div>` + branchRows;
   }
 
-  openTechDialog() {
-    this.openDialog("Tech Tree", this.renderTechTreeHtml());
-  }
-
-  openLeaderboardDialog() {
-    this.openDialog("Nation Leaderboard", this.renderLeaderboardHtml());
+	  openTechDialog() {
+	    this.openDialog("Tech Tree", this.renderTechTreeHtml());
+	  }
+	
+	  openActionDialog() {
+	    this.openDialog("Actions", this.renderActionSummaryHtml());
+	  }
+	
+	  openLeaderboardDialog() {
+	    this.openDialog("Nation Leaderboard", this.renderLeaderboardHtml());
   }
 
   openDiplomacyDialog() {
@@ -863,6 +827,7 @@ class GameUI {
 
   refreshBoardDialogs() {
     if (this.dialogBackdrop.hidden) return;
+    if (this.dialogTitle.textContent === "Actions") this.dialogBody.innerHTML = this.renderActionSummaryHtml();
     if (this.dialogTitle.textContent === "Nation Leaderboard") this.dialogBody.innerHTML = this.renderLeaderboardHtml();
     if (this.dialogTitle.textContent === "Diplomacy") this.dialogBody.innerHTML = this.renderDiplomacyHtml();
     if (this.dialogTitle.textContent === "Trade") this.dialogBody.innerHTML = this.renderTradeRoutesHtml();
@@ -871,26 +836,6 @@ class GameUI {
   refreshTechDialog() {
     if (this.dialogBackdrop.hidden || this.dialogTitle.textContent !== "Tech Tree") return;
     this.dialogBody.innerHTML = this.renderTechTreeHtml();
-  }
-
-  renderSummary() {
-    const summary = this.game.lastSummary;
-    if (!summary) {
-      this.summaryPanel.innerHTML = `<p class="muted">End a turn to see the round summary.</p>`;
-      return;
-    }
-    this.summaryPanel.innerHTML = `
-      ${summaryLine("Money", signed(summary.money))}
-      ${summaryLine("Food", signed(summary.food))}
-      ${summaryLine("Materials", signed(summary.materials))}
-      ${summaryLine("Education", signed(summary.education))}
-      ${summaryLine("Industry", signed(summary.industry))}
-      ${summaryLine("Population", signed(summary.population))}
-      ${summaryLine("Happiness", signed(summary.happiness || 0), (summary.happiness || 0) < 0 ? "bad" : (summary.happiness || 0) > 0 ? "good" : "")}
-      ${summaryLine("Deaths", formatNumber(summary.deaths), summary.deaths ? "bad" : "")}
-      ${summaryLine("War Upkeep", `$${formatNumber(summary.upkeep)}`)}
-      ${summary.notes.map((note) => `<div class="summary-row muted">${escapeHtml(note)}</div>`).join("")}
-    `;
   }
 
   renderTilePopup() {
@@ -1356,44 +1301,6 @@ function pill(text) {
   return `<span class="status-pill">${escapeHtml(text)}</span>`;
 }
 
-// Panel collapse state is a harmless UI preference. Active game progress remains session-only;
-// future persistence should use server/database storage rather than localStorage.
-function loadPanelState() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null");
-    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PANEL_STATE };
-    return {
-      side: Boolean(parsed.side),
-    };
-  } catch {
-    return { ...DEFAULT_PANEL_STATE };
-  }
-}
-
-function savePanelState(state) {
-  localStorage.setItem(PANEL_STATE_KEY, JSON.stringify({
-    side: Boolean(state.side),
-  }));
-}
-
-function loadSideSectionState() {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(SIDE_SECTION_STATE_KEY) || "null");
-    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SIDE_SECTION_STATE };
-    return Object.fromEntries(
-      Object.entries(DEFAULT_SIDE_SECTION_STATE).map(([key, defaultValue]) => [key, parsed[key] ?? defaultValue])
-    );
-  } catch {
-    return { ...DEFAULT_SIDE_SECTION_STATE };
-  }
-}
-
-function saveSideSectionState(state) {
-  sessionStorage.setItem(SIDE_SECTION_STATE_KEY, JSON.stringify(Object.fromEntries(
-    Object.keys(DEFAULT_SIDE_SECTION_STATE).map((key) => [key, Boolean(state[key])])
-  )));
-}
-
 function resourceRow({
   id,
   label,
@@ -1514,10 +1421,6 @@ function projectedFoodGrowth(game, player, flows) {
     surplusRatio >= growth.comfortableSurplusRatio ? growth.comfortableGrowth :
     growth.marginalGrowth;
   return Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(player, game.tiles));
-}
-
-function summaryLine(label, value, className = "") {
-  return `<div class="summary-row"><div class="row-head"><span>${escapeHtml(label)}</span><strong class="${className}">${escapeHtml(value)}</strong></div></div>`;
 }
 
 function metric(label, value) {

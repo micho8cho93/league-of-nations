@@ -574,11 +574,13 @@ test("turn timer skips expired online turns before accepting stale actions", asy
 });
 
 test("generated maps respect water bounds and keep enough viable starting land", () => {
-  for (const [seed, mapSize, nationCount] of [
-    [101, "Small", 5],
-    [202, "Medium", 8],
-    [303, "Large", 10],
-  ] as const) {
+	  for (const [seed, mapSize, nationCount] of [
+	    [101, "Small", 5],
+	    [202, "Medium", 8],
+	    [303, "Large", 10],
+	    [404, "Extra Large", 14],
+	    [505, "Enormous", 16],
+	  ] as const) {
     const game = createInitialServerGame({
       mapSize,
       nationCount,

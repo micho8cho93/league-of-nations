@@ -4,6 +4,8 @@ export const MAP_SIZES = {
   Small: { label: "Small", radius: 7 },
   Medium: { label: "Medium", radius: 10 },
   Large: { label: "Large", radius: 13 },
+  "Extra Large": { label: "Extra Large", radius: 18 },
+  Enormous: { label: "Enormous", radius: 24 },
 };
 
 export const TILE_TYPES = {

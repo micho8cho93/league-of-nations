@@ -26,6 +26,12 @@ export const BOT_NAMES = [
   "Istrian Commonwealth",
   "Kestral Accord",
   "Namar Isles",
+  "Maritane Compact",
+  "Aurelian Federation",
+  "Peregrine States",
+  "Valora Assembly",
+  "Rookhaven League",
+  "Sable Coast",
 ];
 
 export const STARTING_PROFILES = BALANCE.startingProfiles;
