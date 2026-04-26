@@ -107,8 +107,9 @@ button:disabled {
   position: fixed;
   inset: 0;
   display: grid;
-  place-items: center;
+  place-items: safe center;
   padding: 20px;
+  overflow: auto;
   background:
     linear-gradient(180deg, rgba(8, 12, 18, 0.2), rgba(8, 12, 18, 0.88)),
     radial-gradient(circle at 50% 12%, #25394b 0, #101721 44%, #090d13 100%);
@@ -117,6 +118,9 @@ button:disabled {
 
 .setup-panel {
   width: min(760px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  margin: auto 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(17, 24, 33, 0.96);
@@ -182,6 +186,103 @@ button:disabled {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.join-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.multiplayer-error {
+  margin-top: 12px;
+  border: 1px solid #9a4d4d;
+  border-radius: 7px;
+  background: #371c20;
+  color: #ffd6d6;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.lobby-panel {
+  width: min(940px, 100%);
+}
+
+.lobby-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.lobby-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.lobby-head strong {
+  color: var(--gold);
+  letter-spacing: 0.08em;
+}
+
+.lobby-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.lobby-section {
+  border: 1px solid #2b3b4a;
+  border-radius: 8px;
+  background: #111a24;
+  padding: 14px;
+}
+
+.lobby-section h2 {
+  margin: 0 0 12px;
+  color: var(--gold);
+  font-size: 16px;
+}
+
+.lobby-player-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lobby-player {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #34475a;
+  border-radius: 7px;
+  background: #0e1720;
+  padding: 9px 10px;
+}
+
+.lobby-player strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lobby-player span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lobby-settings input:disabled,
+.lobby-settings select:disabled {
+  color: var(--muted);
+  opacity: 1;
 }
 
 .app {
@@ -613,6 +714,7 @@ button:disabled {
 
 .resource-row,
 .nation-row,
+.snapshot-nation-row,
 .diplo-row,
 .trade-row,
 .tech-row,
@@ -625,6 +727,7 @@ button:disabled {
 
 .resource-row:first-child,
 .nation-row:first-child,
+.snapshot-nation-row:first-child,
 .diplo-row:first-child,
 .trade-row:first-child,
 .tech-row:first-child,
@@ -647,6 +750,16 @@ button:disabled {
 
 .resource-row:first-child {
   padding-top: 9px;
+}
+
+.snapshot-nation-list {
+  display: grid;
+  gap: 2px;
+}
+
+.snapshot-nation-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
 
 .resource-row:hover,
@@ -1055,7 +1168,9 @@ textarea {
   }
 
   .setup-grid,
-  .form-grid {
+  .form-grid,
+  .join-panel,
+  .lobby-layout {
     grid-template-columns: 1fr;
   }
 

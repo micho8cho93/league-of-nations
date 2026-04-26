@@ -1,5 +1,3 @@
-export const SAVE_KEY = "league-of-nations-fresh-v1";
-export const SAVE_VERSION = 1;
 export const MAX_ACTIONS_PER_TURN = 10;
 
 export const MAP_SIZES = {

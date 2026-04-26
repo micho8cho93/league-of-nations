@@ -1,8 +1,6 @@
 import {
   BUILDING_TYPES,
   MAX_ACTIONS_PER_TURN,
-  SAVE_KEY,
-  SAVE_VERSION,
   TILE_TYPES,
   WORKER_MIN,
   WORKER_ROLE_BY_TILE,
@@ -30,8 +28,6 @@ import {
   personalitySequence,
   profileSequence,
   removePopulation,
-  restoreNation,
-  serializeNation,
   spendMoney,
 } from "./nation.js";
 import {
@@ -157,7 +153,7 @@ export class GameState {
     this.map = data.map;
     this.tiles = this.map.tiles;
     this.tileIndex = buildTileIndex(this.tiles);
-    this.assignNationVisualColors();
+    if (!data.preserveNationColors) this.assignNationVisualColors();
     this.diplomacy = data.diplomacy || {};
     this.wars = data.wars || {};
     this.sieges = data.sieges || {};
@@ -225,7 +221,6 @@ export class GameState {
     for (const botId of botIds) {
       game.addEvent(`${game.nations[botId].name} plays as a ${game.nations[botId].personality} nation.`, { nationId: botId, type: "ai" });
     }
-    game.save();
     return game;
   }
 
@@ -238,39 +233,6 @@ export class GameState {
     orderedIds.forEach((id, index) => {
       if (this.nations[id]) this.nations[id].color = nationColor(index);
     });
-  }
-
-  static fromSave(saveData) {
-    if (!saveData || saveData.version !== SAVE_VERSION) throw new Error("Unsupported save data.");
-    const nations = {};
-    for (const [id, nation] of Object.entries(saveData.nations || {})) nations[id] = restoreNation(nation);
-    const map = deepClone(saveData.map);
-    const game = new GameState({
-      settings: saveData.settings,
-      turn: saveData.turn,
-      era: saveData.era,
-      phase: "player",
-      nations,
-      playerId: saveData.playerId,
-      botIds: saveData.botIds || [],
-      map,
-      diplomacy: saveData.diplomacy || {},
-      wars: saveData.wars || {},
-      sieges: saveData.sieges || {},
-      trades: saveData.trades || [],
-      tradeRoutes: saveData.tradeRoutes || [],
-      alliances: saveData.alliances || [],
-      events: saveData.events || [],
-      eraReports: saveData.eraReports || [],
-      pendingEraReport: null,
-      globalEvents: saveData.globalEvents || {},
-      gameOver: saveData.gameOver || null,
-      lastSummary: saveData.lastSummary || null,
-      eraStartSnapshot: saveData.eraStartSnapshot || null,
-      startedAt: saveData.startedAt || Date.now(),
-    });
-    if (saveData.phase && saveData.phase !== "player") game.resetTurnActions(saveData.playerId);
-    return game;
   }
 
   get player() {
@@ -984,7 +946,7 @@ export class GameState {
     return { produced, consumed, net: produced - consumed, capacity };
   }
 
-  async endTurn() {
+  async endTurn({ onBotTurn = null } = {}) {
     if (this.isProcessingTurn || this.gameOver) return;
     this.isProcessingTurn = true;
     this.phase = "ai";
@@ -995,6 +957,7 @@ export class GameState {
       this.resetTurnActions(botId);
       await processBotTurn(this, botId);
       this.changed("ai");
+      if (onBotTurn) await onBotTurn(botId, this);
       await delay(130);
     }
     this.phase = "round";
@@ -1005,10 +968,13 @@ export class GameState {
       this.turnStartedAt = Date.now();
       this.phase = "player";
       this.rng = mulberry32((this.settings.seed || 1) + this.turn * 7919 + this.events.length * 131);
-      this.resetTurnActions(this.playerId);
+      // Local/offline games have one human nation; multiplayer games reset every
+      // server-owned human nation after the authoritative round resolves.
+      for (const nation of Object.values(this.nations)) {
+        if (nation.active && !this.botIds.includes(nation.id)) this.resetTurnActions(nation.id);
+      }
     }
     this.isProcessingTurn = false;
-    this.save();
     this.changed("turn_end");
   }
 
@@ -1280,7 +1246,6 @@ export class GameState {
     this.phase = "player";
     this.isProcessingTurn = false;
     this.resetTurnActions(this.playerId);
-    this.save();
     this.changed("era");
     return { ok: true };
   }
@@ -1356,47 +1321,6 @@ export class GameState {
 
   changed(source) {
     this.emit({ type: "state_changed", source });
-    this.save();
-  }
-
-  save() {
-    if (typeof localStorage === "undefined") return { ok: false, reason: "localStorage unavailable." };
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this.toSaveData()));
-      return { ok: true };
-    } catch (error) {
-      console.warn("Save failed", error);
-      return { ok: false, reason: "Save failed." };
-    }
-  }
-
-  toSaveData() {
-    return {
-      version: SAVE_VERSION,
-      savedAt: Date.now(),
-      settings: this.settings,
-      turn: this.turn,
-      era: this.era,
-      phase: this.phase,
-      playerId: this.playerId,
-      botIds: [...this.botIds],
-      nations: Object.fromEntries(Object.entries(this.nations).map(([id, nation]) => [id, serializeNation(nation)])),
-      map: deepClone(this.map),
-      diplomacy: deepClone(this.diplomacy),
-      wars: deepClone(this.wars),
-      sieges: deepClone(this.sieges),
-      trades: deepClone(this.trades),
-      tradeRoutes: deepClone(this.tradeRoutes),
-      alliances: deepClone(this.alliances),
-      events: deepClone(this.events),
-      eraReports: deepClone(this.eraReports),
-      pendingEraReport: deepClone(this.pendingEraReport),
-      globalEvents: deepClone(this.globalEvents),
-      gameOver: deepClone(this.gameOver),
-      lastSummary: deepClone(this.lastSummary),
-      eraStartSnapshot: deepClone(this.eraStartSnapshot),
-      startedAt: this.startedAt,
-    };
   }
 
   militaryActions(tileIdValue, nationId = this.playerId) {
@@ -1414,20 +1338,6 @@ export class GameState {
   getValidAttackTargets(tileIdValue, nationId = this.playerId) {
     return getValidAttackTargets(this, tileIdValue, nationId);
   }
-}
-
-export function readSavedGame() {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-export function clearSavedGame() {
-  if (typeof localStorage !== "undefined") localStorage.removeItem(SAVE_KEY);
 }
 
 function normalizeSettings(raw) {

@@ -101,14 +101,15 @@ const TUTORIAL_STEPS = [
   },
 ];
 
-export function bindUI(game, renderer) {
-  return new GameUI(game, renderer);
+export function bindUI(game, renderer, options = {}) {
+  return new GameUI(game, renderer, options);
 }
 
 class GameUI {
-  constructor(game, renderer) {
+  constructor(game, renderer, options = {}) {
     this.game = game;
     this.renderer = renderer;
+    this.multiplayerClient = options.multiplayerClient || null;
     this.victoryShown = false;
     this.militarySelection = null;
     this.panelState = loadPanelState();
@@ -118,10 +119,18 @@ class GameUI {
     this.cacheDom();
     this.applyPanelState();
     this.bindEvents();
-    this.game.on((event) => this.handleGameEvent(event));
+    this.unsubscribeGame = this.game.on((event) => this.handleGameEvent(event));
     this.render();
     window.setTimeout(() => this.maybeStartTutorial(), 0);
     window.setInterval(() => this.renderStatus(), 1000);
+  }
+
+  setGame(game) {
+    if (this.unsubscribeGame) this.unsubscribeGame();
+    this.game = game;
+    this.unsubscribeGame = this.game.on((event) => this.handleGameEvent(event));
+    this.clearMilitarySelection();
+    this.render();
   }
 
   cacheDom() {
@@ -136,7 +145,6 @@ class GameUI {
     this.phaseLabel = document.getElementById("phase-label");
     this.actionCounter = document.getElementById("action-counter");
     this.endTurnBtn = document.getElementById("end-turn-btn");
-    this.saveBtn = document.getElementById("save-btn");
     this.newGameBtn = document.getElementById("new-game-btn");
     this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
     this.resourcePanel = document.getElementById("resource-panel");
@@ -166,12 +174,13 @@ class GameUI {
       this.game.selectTile(null);
     });
     this.endTurnBtn.addEventListener("click", () => {
+      if (this.isServerAuthoritative()) {
+        this.clearMilitarySelection();
+        this.sendPlayerAction({ type: "endTurn" });
+        return;
+      }
       this.clearMilitarySelection();
       this.game.endTurn();
-    });
-    this.saveBtn.addEventListener("click", () => {
-      const result = this.game.save();
-      this.showNotice("Save", result.ok ? "Game saved." : result.reason);
     });
     this.newGameBtn.addEventListener("click", () => {
       this.showConfirmNewGame();
@@ -245,6 +254,7 @@ class GameUI {
 
   // Tutorial flow stays local to the UI layer: it reads game state for anchors,
   // highlights existing controls, and only writes completion to localStorage.
+  // It does not persist active game progress.
   maybeStartTutorial() {
     if (localStorage.getItem(TUTORIAL_COMPLETED_KEY) === "true") return;
     this.startTutorial();
@@ -386,6 +396,17 @@ class GameUI {
         this.render();
         return;
       }
+      if (this.isServerAuthoritative()) {
+        this.sendPlayerAction({
+          type: "moveOrAttackUnit",
+          fromTileId: sourceTileId,
+          toTileId: tileId,
+        });
+        this.game.selectTile(tileId);
+        this.renderer.focusTile(tileId);
+        this.render();
+        return;
+      }
       const result = this.game.moveOrAttackUnit(sourceTileId, tileId, this.game.playerId);
       if (result.ok) {
         this.game.selectTile(tileId);
@@ -432,10 +453,25 @@ class GameUI {
     };
   }
 
+  isServerAuthoritative() {
+    return Boolean(this.game.serverAuthoritative && this.multiplayerClient?.room);
+  }
+
+  sendPlayerAction(payload) {
+    const nationId = this.game.playerId;
+    const nation = this.game.nations[nationId];
+    if (!nation || nation.bot || nation.controllerType === "bot") {
+      this.showNotice("Action blocked", "You do not control that nation.");
+      return;
+    }
+    this.multiplayerClient.sendPlayerAction({ ...payload, nationId });
+  }
+
   renderStatus() {
     const player = this.game.player;
     this.phaseLabel.textContent = phaseLabel(this.game.phase, this.game.isProcessingTurn);
     this.endTurnBtn.disabled = this.game.isProcessingTurn || Boolean(this.game.gameOver);
+    this.endTurnBtn.textContent = "End Turn";
     this.renderActionCounter();
     const turnLimit = this.game.settings.unlimitedMode ? "Unlimited" : `${this.game.turn}/${this.game.settings.maxTurns}`;
     this.statusStrip.innerHTML = [
@@ -674,7 +710,7 @@ class GameUI {
       this.diplomacyPanel.innerHTML = `<p class="muted">Diplomacy, trade, and alliances unlock in Era 2.</p>`;
       return;
     }
-    const rows = this.game.botIds.map((id) => {
+    const rows = this.diplomacyTargetIds().map((id) => {
       const nation = this.game.nations[id];
       if (!nation) return "";
       const diplo = getDiplomacy(this.game, this.game.playerId, id);
@@ -708,6 +744,12 @@ class GameUI {
         </div>
       `).join("");
     this.diplomacyPanel.innerHTML = rows + (allianceRows ? `<hr />${allianceRows}` : "");
+  }
+
+  diplomacyTargetIds() {
+    return Object.values(this.game.nations)
+      .filter((nation) => nation.id !== this.game.playerId && nation.active)
+      .map((nation) => nation.id);
   }
 
   renderTrade() {
@@ -942,6 +984,25 @@ class GameUI {
     if (!button) return;
     const tileId = this.game.selectedTileId;
     const action = button.dataset.tileAction;
+    if (this.isServerAuthoritative()) {
+      // Multiplayer/server-authoritative logic: UI sends intent only. The
+      // Colyseus room validates and mutates, then returns a fresh snapshot.
+      if (action === "build") this.sendPlayerAction({ type: "buildTile", tileId, buildingType: button.dataset.type });
+      if (action === "workers") this.sendPlayerAction({ type: "assignWorkers", tileId, amount: Number(button.dataset.amount) });
+      if (action === "destroy") this.sendPlayerAction({ type: "destroyTile", tileId });
+      if (action === "train") this.sendPlayerAction({
+        type: "trainUnit",
+        tileId,
+        strength: Number(button.dataset.amount),
+        branch: button.dataset.branch || "infantry",
+      });
+      if (action === "move" && this.militarySelection?.targetActions.has(button.dataset.target)) {
+        this.sendPlayerAction({ type: "moveOrAttackUnit", fromTileId: tileId, toTileId: button.dataset.target });
+        this.clearMilitarySelection();
+      }
+      return;
+    }
+    // Local/offline logic: solo games keep mutating the local GameState directly.
     let result = null;
     if (action === "build") result = this.game.buildTile(tileId, button.dataset.type);
     if (action === "workers") result = this.game.assignWorkers(tileId, Number(button.dataset.amount));
@@ -1010,6 +1071,13 @@ class GameUI {
     const id = button.dataset.id;
     if (action === "trade") this.openTradeDialog(id);
     if (action === "alliance") this.openAllianceDialog(id);
+    if (this.isServerAuthoritative()) {
+      if (action === "embargo") this.sendPlayerAction({ type: "embargo", targetId: id });
+      if (action === "war") this.sendPlayerAction({ type: "declareWar", targetId: id });
+      if (action === "break") this.sendPlayerAction({ type: "breakAlliance", allianceId: id });
+      return;
+    }
+    // Local/offline logic: diplomacy mutates the local GameState directly.
     if (action === "embargo") {
       const result = this.game.embargo(id);
       if (!result.ok) this.showNotice("Embargo blocked", result.reason);
@@ -1027,12 +1095,20 @@ class GameUI {
   handleTechClick(event) {
     const techButton = event.target.closest("[data-tech]");
     if (techButton) {
+      if (this.isServerAuthoritative()) {
+        this.sendPlayerAction({ type: "research", category: techButton.dataset.tech });
+        return;
+      }
       const result = this.game.research(techButton.dataset.tech);
       if (!result.ok) this.showNotice("Research blocked", result.reason);
       return;
     }
     const branchButton = event.target.closest("[data-branch]");
     if (branchButton) {
+      if (this.isServerAuthoritative()) {
+        this.sendPlayerAction({ type: "researchBranch", branch: branchButton.dataset.branch });
+        return;
+      }
       const result = this.game.researchBranch(branchButton.dataset.branch);
       if (!result.ok) this.showNotice("Specialization blocked", result.reason);
     }
@@ -1070,6 +1146,16 @@ class GameUI {
           industry: Number(data.get(`${prefix}-industry`) || 0),
           people: Number(data.get(`${prefix}-people`) || 0),
         });
+        if (this.isServerAuthoritative()) {
+          this.sendPlayerAction({
+            type: "trade",
+            partnerId,
+            offer: bundle("offer"),
+            request: bundle("request"),
+          });
+          this.closeDialog();
+          return;
+        }
         const result = this.game.trade(partnerId, bundle("offer"), bundle("request"));
         this.closeDialog();
         this.showNotice("Trade", result.reason || (result.accepted ? "Accepted." : "Rejected."));
@@ -1088,6 +1174,15 @@ class GameUI {
     `, () => {
       this.dialogBody.querySelectorAll("[data-alliance-type]").forEach((btn) => {
         btn.addEventListener("click", () => {
+          if (this.isServerAuthoritative()) {
+            this.sendPlayerAction({
+              type: "proposeAlliance",
+              partnerId,
+              allianceType: btn.dataset.allianceType,
+            });
+            this.closeDialog();
+            return;
+          }
           const result = this.game.proposeAlliance(partnerId, btn.dataset.allianceType);
           this.closeDialog();
           this.showNotice("Alliance", result.reason || (result.accepted ? "Accepted." : "Rejected."));
@@ -1144,7 +1239,7 @@ class GameUI {
 
   showConfirmNewGame() {
     this.openDialog("Start New Game", `
-      <p>This will return to the setup screen. Your current game is already saved unless you clear browser storage.</p>
+      <p>This will return to the setup screen and end the current session-only game.</p>
       <div class="row-actions">
         <button id="confirm-new-game" class="danger-btn">Return to Setup</button>
       </div>
@@ -1195,6 +1290,8 @@ function pill(text) {
   return `<span class="status-pill">${escapeHtml(text)}</span>`;
 }
 
+// Panel collapse state is a harmless UI preference. Active game progress remains session-only;
+// future persistence should use server/database storage rather than localStorage.
 function loadPanelState() {
   try {
     const parsed = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null");

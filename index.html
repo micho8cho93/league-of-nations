@@ -44,10 +44,73 @@
       <div id="continue-note" class="continue-note"></div>
       <div class="setup-actions">
         <button id="setup-replay-tutorial-btn" type="button" class="secondary-btn">Replay Tutorial</button>
-        <button id="continue-btn" type="button" class="secondary-btn">Continue</button>
+        <button id="enter-code-btn" type="button" class="secondary-btn">Enter Code</button>
+        <button id="create-match-btn" type="button" class="secondary-btn">Create Match</button>
         <button type="submit" class="primary-btn">Start New Game</button>
       </div>
+      <div id="join-panel" class="join-panel" hidden>
+        <label class="field">
+          <span>Room code</span>
+          <input id="join-room-code" type="text" maxlength="8" autocomplete="off" placeholder="ABCDE" />
+        </label>
+        <button id="join-match-btn" type="button" class="primary-btn">Join Match</button>
+      </div>
+      <div id="multiplayer-error" class="multiplayer-error" role="alert" hidden></div>
     </form>
+  </div>
+
+  <div id="lobby-screen" class="setup-screen" hidden>
+    <section class="setup-panel lobby-panel" aria-labelledby="lobby-title">
+      <div class="lobby-head">
+        <div>
+          <div id="lobby-title" class="setup-title">Lobby</div>
+          <div class="setup-subtitle">Room code <strong id="lobby-room-code">-----</strong></div>
+        </div>
+        <div class="lobby-head-actions">
+          <button id="lobby-start-btn" type="button" class="primary-btn">Start Game</button>
+          <button id="leave-lobby-btn" type="button" class="secondary-btn">Leave</button>
+        </div>
+      </div>
+
+      <div class="lobby-layout">
+        <section class="lobby-section">
+          <h2>Players</h2>
+          <div id="lobby-player-list" class="lobby-player-list"></div>
+        </section>
+
+        <section class="lobby-section">
+          <h2>Game Settings</h2>
+          <div class="setup-grid lobby-settings">
+            <label class="field">
+              <span>Map size</span>
+              <select id="lobby-map-size">
+                <option>Small</option>
+                <option>Medium</option>
+                <option>Large</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Total nations</span>
+              <input id="lobby-nation-count" type="number" min="2" max="10" step="1" />
+            </label>
+            <label class="field">
+              <span>Max turns</span>
+              <input id="lobby-max-turns" type="number" min="10" max="120" step="1" />
+            </label>
+            <label class="field">
+              <span>Time limit minutes</span>
+              <input id="lobby-time-limit" type="number" min="0" max="240" step="5" />
+            </label>
+            <label class="field checkbox-field">
+              <input id="lobby-unlimited" type="checkbox" />
+              <span>Unlimited mode</span>
+            </label>
+          </div>
+        </section>
+      </div>
+
+      <div id="lobby-status" class="continue-note"></div>
+    </section>
   </div>
 
   <div id="app" class="app" hidden>
@@ -59,7 +122,6 @@
       <div id="status-strip" class="status-strip"></div>
       <div id="action-counter" class="action-counter" aria-live="polite">Actions left: 10</div>
       <div class="top-actions">
-        <button id="save-btn" class="secondary-btn">Save</button>
         <button id="new-game-btn" class="secondary-btn">New</button>
         <button id="replay-tutorial-btn" class="secondary-btn">Tutorial</button>
         <button id="end-turn-btn" class="primary-btn">End Turn</button>
@@ -134,6 +196,7 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://unpkg.com/@colyseus/sdk@^0.17.0/dist/colyseus.js"></script>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>
