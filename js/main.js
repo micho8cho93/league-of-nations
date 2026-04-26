@@ -231,6 +231,7 @@ function renderLobby(nextLobbyState) {
       `;
       row.querySelector("strong").textContent = player.name;
       row.querySelector("span").textContent = [
+        player.nationId ? `Nation ${player.nationId.replace(/^nation-/, "")}` : "",
         player.host ? "Host" : "Player",
         player.connected ? "" : "Disconnected",
       ].filter(Boolean).join(" · ");

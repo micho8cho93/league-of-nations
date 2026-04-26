@@ -152,6 +152,7 @@ function readPlayer(player = {}) {
   return {
     sessionId: player.sessionId || "",
     name: player.name || "Player",
+    nationId: player.nationId || "",
     host: Boolean(player.host),
     ready: Boolean(player.ready),
     connected: player.connected !== false,

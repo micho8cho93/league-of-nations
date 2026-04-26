@@ -1,6 +1,7 @@
 import { Room, type Client } from "colyseus";
 import { MapSchema, Schema, type } from "@colyseus/schema";
 import { createInitialGameState } from "../game/createInitialGameState.js";
+import { applyServerPlayerAction } from "../game/actions.js";
 import {
   serializeGameSnapshot,
   type InitialGameSettings,
@@ -16,6 +17,7 @@ const ROOM_CODE_LENGTH = 5;
 
 interface JoinOptions {
   playerName?: unknown;
+  nationId?: unknown;
 }
 
 interface SettingsPayload {
@@ -49,6 +51,7 @@ interface PlayerActionPayload {
 class LobbyPlayer extends Schema {
   @type("string") sessionId = "";
   @type("string") name = "";
+  @type("string") nationId = "";
   @type("boolean") host = false;
   @type("boolean") ready = false;
   @type("boolean") connected = true;
@@ -148,11 +151,12 @@ export class LeagueRoom extends Room {
     });
   }
 
-  onAuth() {
+  onAuth(_client: Client, options: JoinOptions = {}) {
     if (this.state.status !== "lobby") {
       throw new Error(`Room ${this.roomId} is already ${this.state.status}; new players can only join during the lobby.`);
     }
 
+    this.assertNationAvailable(options.nationId);
     return true;
   }
 
@@ -161,10 +165,12 @@ export class LeagueRoom extends Room {
       throw new Error(`Room ${this.roomId} is already ${this.state.status}; new players can only join during the lobby.`);
     }
 
+    const assignedNationId = this.assertNationAvailable(options.nationId);
     const isFirstPlayer = this.state.players.size === 0;
     const player = new LobbyPlayer();
     player.sessionId = client.sessionId;
     player.name = sanitizePlayerName(options.playerName, `Player ${this.state.players.size + 1}`);
+    player.nationId = assignedNationId;
     player.host = isFirstPlayer;
     player.ready = isFirstPlayer;
     player.connected = true;
@@ -179,6 +185,7 @@ export class LeagueRoom extends Room {
       roomCode: this.state.roomCode,
       sessionId: client.sessionId,
       host: player.host,
+      nationId: player.nationId,
     });
   }
 
@@ -221,7 +228,7 @@ export class LeagueRoom extends Room {
     }
 
     if (payload.nationCount !== undefined) {
-      const minimumNations = Math.max(2, this.state.players.size);
+      const minimumNations = Math.max(2, this.state.players.size, this.highestClaimedNationIndex());
       this.state.settings.nationCount = clampInteger(payload.nationCount, minimumNations, 10, this.state.settings.nationCount);
       this.maxClients = this.state.settings.nationCount;
     }
@@ -284,6 +291,7 @@ export class LeagueRoom extends Room {
     return Array.from(this.state.players.values()).map((player) => ({
       sessionId: player.sessionId,
       name: player.name,
+      nationId: player.nationId,
       host: player.host,
       ready: player.ready,
       connected: player.connected,
@@ -342,6 +350,10 @@ export class LeagueRoom extends Room {
     const type = String(payload?.type || "");
     if (!type) return { ok: false, reason: "Action type is required." };
 
+    if (!this.state.players.has(client.sessionId)) {
+      return { ok: false, reason: "You are not a player in this match." };
+    }
+
     const nationId = String(payload.nationId || "");
     const nation = nationId ? this.gameState.nations[nationId] : null;
     if (!nation) return { ok: false, reason: "Unknown nation." };
@@ -349,16 +361,16 @@ export class LeagueRoom extends Room {
     if (nation.bot || nation.controllerType === "bot") return { ok: false, reason: "Bot nations are controlled by the server." };
     if (!nation.active) return { ok: false, reason: "That nation is no longer active." };
     if (this.endedNationIds.has(nationId)) return { ok: false, reason: "That nation has already ended this turn." };
+    if (type !== "endTurn" && this.activeTurnNationId() !== nationId) {
+      return { ok: false, reason: "It is not your turn." };
+    }
 
     return { ok: true, nationId };
   }
 
   private applyPlayerAction(type: string, nationId: string, payload: PlayerActionPayload) {
     if (!this.gameState) return { ok: false, reason: "Game state is unavailable." };
-    void type;
-    void nationId;
-    void payload;
-    return { ok: false, reason: "Only lobby startup and end-turn synchronization are enabled on this server build." };
+    return applyServerPlayerAction(this.gameState, type, nationId, payload);
   }
 
   private async acceptEndTurn(nationId: string) {
@@ -426,9 +438,48 @@ export class LeagueRoom extends Room {
     return ordered.map((player) => ({
       sessionId: player.sessionId,
       name: player.name,
+      nationId: player.nationId,
       host: player.host,
       connected: player.connected,
     }));
+  }
+
+  private activeTurnNationId() {
+    if (!this.gameState) return "";
+    const seats = this.gameState.seats || [];
+    const index = Math.max(0, Math.min(seats.length - 1, this.gameState.currentTurnIndex || 0));
+    return seats[index]?.nationId || "";
+  }
+
+  private assertNationAvailable(requestedNationId?: unknown) {
+    const rawRequested = String(requestedNationId ?? "").trim();
+    const requested = sanitizeNationId(requestedNationId);
+    const claimed = this.claimedNationIds();
+    const capacity = this.state.settings.nationCount;
+
+    if (rawRequested && !requested) throw new Error("Requested nation is invalid.");
+
+    if (requested) {
+      const index = nationIndex(requested);
+      if (index < 1 || index > capacity) throw new Error(`Nation ${requested} is not available in this match.`);
+      if (claimed.has(requested)) throw new Error(`Nation ${requested} is already taken.`);
+      return requested;
+    }
+
+    for (let index = 1; index <= capacity; index += 1) {
+      const nationId = `nation-${index}`;
+      if (!claimed.has(nationId)) return nationId;
+    }
+
+    throw new Error(`Room ${this.roomId} is full; no nations are available.`);
+  }
+
+  private claimedNationIds() {
+    return new Set(Array.from(this.state.players.values()).map((player) => player.nationId).filter(Boolean));
+  }
+
+  private highestClaimedNationIndex() {
+    return Array.from(this.claimedNationIds()).reduce((highest, nationId) => Math.max(highest, nationIndex(nationId)), 0);
   }
 
   private generateRoomCodeSingle() {
@@ -455,6 +506,16 @@ export class LeagueRoom extends Room {
 function sanitizePlayerName(value: unknown, fallback: string) {
   const name = String(value ?? "").trim().slice(0, 40);
   return name || fallback;
+}
+
+function sanitizeNationId(value: unknown) {
+  const nationId = String(value ?? "").trim().toLowerCase();
+  return /^nation-\d+$/.test(nationId) ? nationId : "";
+}
+
+function nationIndex(nationId: string) {
+  const match = /^nation-(\d+)$/.exec(nationId);
+  return match ? Number(match[1]) : 0;
 }
 
 function sanitizeMapSize(value: unknown) {

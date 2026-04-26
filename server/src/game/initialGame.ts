@@ -14,6 +14,7 @@ export interface SeatPlayer {
   name: string;
   host: boolean;
   connected: boolean;
+  nationId: string;
 }
 
 interface Nation {
@@ -140,6 +141,7 @@ const TILE_TYPES = {
   FARM: "farm",
   MINE: "mine",
   SCHOOL: "school",
+  FACTORY: "factory",
   MILITARY: "military",
   WATER: "water",
   MOUNTAIN: "mountain",
@@ -157,6 +159,7 @@ const WORKER_MIN = {
   [TILE_TYPES.FARM]: 2,
   [TILE_TYPES.MINE]: 3,
   [TILE_TYPES.SCHOOL]: 3,
+  [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
 };
 
@@ -357,10 +360,11 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
 
 function createSeatAssignments(nationCount: number, players: SeatPlayer[]): SeatAssignment[] {
   const assignments: SeatAssignment[] = [];
+  const playersByNation = new Map(players.map((player) => [player.nationId, player]));
 
   for (let index = 0; index < nationCount; index += 1) {
-    const player = players[index];
     const nationId = `nation-${index + 1}`;
+    const player = playersByNation.get(nationId);
     if (player) {
       assignments.push({
         nationId,
