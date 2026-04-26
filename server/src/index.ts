@@ -2,7 +2,7 @@ import { defineRoom, defineServer, matchMaker } from "colyseus";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { LeagueRoom } from "./rooms/LeagueRoom.js";
 
-const port = Number(process.env.PORT ?? 2567);
+const port = Number(process.env.PORT || 2567);
 const localFrontendOrigins = [
   "http://localhost:3000",
   "http://localhost:5173",

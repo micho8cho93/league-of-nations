@@ -1,11 +1,7 @@
 import { Room, type Client } from "colyseus";
 import { MapSchema, Schema, type } from "@colyseus/schema";
-// The authoritative multiplayer room reuses the browser game's rules engine so
-// server validation/mutation stays aligned with local/offline play.
-// @ts-expect-error The shared game engine is plain ESM JavaScript.
-import { GameState as SharedGameState } from "../../../js/game.js";
+import { createInitialGameState } from "../game/createInitialGameState.js";
 import {
-  createInitialServerGame,
   serializeGameSnapshot,
   type InitialGameSettings,
   type SeatPlayer,
@@ -13,7 +9,6 @@ import {
 } from "../game/initialGame.js";
 
 type RoomStatus = "lobby" | "playing" | "finished";
-type RuntimeGameState = InstanceType<typeof SharedGameState>;
 
 const ROOM_CODE_CHANNEL = "$league-of-nations-room-codes";
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -79,7 +74,7 @@ class LeagueRoomState extends Schema {
 export class LeagueRoom extends Room {
   maxClients = 10;
   state = new LeagueRoomState();
-  private gameState: RuntimeGameState | null = null;
+  private gameState: ServerGameState | null = null;
   private endedNationIds = new Set<string>();
   private resolvingTurn = false;
 
@@ -296,15 +291,7 @@ export class LeagueRoom extends Room {
   }
 
   private createRuntimeGame() {
-    const data = createInitialServerGame(this.snapshotSettings(), this.orderedSeatPlayers());
-    const firstHuman = data.seats.find((seat) => seat.controllerType === "human")?.nationId;
-    const runtime = new SharedGameState({
-      ...data,
-      playerId: firstHuman || data.seats[0]?.nationId || "nation-1",
-      preserveNationColors: true,
-    });
-    runtime.seats = data.seats;
-    return runtime;
+    return createInitialGameState(this.roomId, this.snapshotSettings(), this.orderedSeatPlayers());
   }
 
   private async handlePlayerAction(client: Client, payload: PlayerActionPayload) {
@@ -319,9 +306,8 @@ export class LeagueRoom extends Room {
     let result: { ok?: boolean; reason?: string; [key: string]: unknown } = { ok: false, reason: "Unknown action." };
 
     try {
-      // Multiplayer/server-authoritative logic: clients send intent only. The
-      // Colyseus room validates ownership/status, runs existing rule checks by
-      // invoking GameState methods, mutates server-owned state, then snapshots.
+      // The Railway-safe server snapshot supports lobby startup and coordinated
+      // end-turn messages without importing the browser rules engine.
       if (type === "endTurn") {
         result = await this.acceptEndTurn(nationId);
       } else {
@@ -369,50 +355,10 @@ export class LeagueRoom extends Room {
 
   private applyPlayerAction(type: string, nationId: string, payload: PlayerActionPayload) {
     if (!this.gameState) return { ok: false, reason: "Game state is unavailable." };
-
-    switch (type) {
-      case "buildTile":
-        return this.gameState.buildTile(requiredString(payload.tileId, "Tile"), requiredString(payload.buildingType, "Building type"), nationId);
-      case "assignWorkers":
-        return this.gameState.assignWorkers(requiredString(payload.tileId, "Tile"), integerValue(payload.amount, 0), nationId);
-      case "destroyTile":
-        return this.gameState.destroyTile(requiredString(payload.tileId, "Tile"), nationId);
-      case "trainUnit":
-        return this.gameState.trainUnit(requiredString(payload.tileId, "Tile"), integerValue(payload.strength ?? payload.amount, 1), nationId, {
-          branch: stringValue(payload.branch, "infantry"),
-        });
-      case "moveOrAttackUnit":
-        return this.gameState.moveOrAttackUnit(
-          requiredString(payload.fromTileId ?? payload.tileId, "Source tile"),
-          requiredString(payload.toTileId ?? payload.targetId, "Target tile"),
-          nationId
-        );
-      case "declareWar":
-        return this.gameState.declareWar(requiredString(payload.targetId, "Target nation"), nationId, "Player declaration");
-      case "trade":
-        return this.gameState.trade(
-          requiredString(payload.partnerId ?? payload.targetId, "Trade partner"),
-          objectValue(payload.offer),
-          objectValue(payload.request),
-          nationId
-        );
-      case "proposeAlliance":
-        return this.gameState.proposeAlliance(
-          requiredString(payload.partnerId ?? payload.targetId, "Alliance partner"),
-          stringValue(payload.allianceType, "trade"),
-          nationId
-        );
-      case "breakAlliance":
-        return this.gameState.breakAlliance(requiredString(payload.allianceId ?? payload.targetId, "Alliance"), nationId);
-      case "embargo":
-        return this.gameState.embargo(requiredString(payload.targetId, "Target nation"), nationId);
-      case "research":
-        return this.gameState.research(requiredString(payload.category, "Research category"), nationId);
-      case "researchBranch":
-        return this.gameState.researchBranch(requiredString(payload.branch, "Research branch"), nationId);
-      default:
-        return { ok: false, reason: `Unsupported action "${type}".` };
-    }
+    void type;
+    void nationId;
+    void payload;
+    return { ok: false, reason: "Only lobby startup and end-turn synchronization are enabled on this server build." };
   }
 
   private async acceptEndTurn(nationId: string) {
@@ -428,19 +374,31 @@ export class LeagueRoom extends Room {
     }
 
     this.resolvingTurn = true;
+    this.gameState.isProcessingTurn = true;
     try {
-      await this.gameState.endTurn({
-        onBotTurn: async () => {
-          this.broadcastGameSnapshot();
-        },
-      });
+      this.advanceTurn();
       this.endedNationIds.clear();
       this.finishIfGameOver();
     } finally {
+      this.gameState.isProcessingTurn = false;
       this.resolvingTurn = false;
     }
 
     return { ok: true, advancedTurn: true };
+  }
+
+  private advanceTurn() {
+    if (!this.gameState) return;
+    this.gameState.turn += 1;
+    this.gameState.turnNumber = this.gameState.turn;
+    this.gameState.currentTurnIndex = (this.gameState.currentTurnIndex + 1) % Math.max(1, this.gameState.seats.length);
+    this.gameState.turnStartedAt = Date.now();
+
+    for (const nation of Object.values(this.gameState.nations)) {
+      if (!nation.active) continue;
+      nation.actionsRemaining = 10;
+      nation.actionsUsedThisTurn = 0;
+    }
   }
 
   private broadcastGameSnapshot() {
@@ -508,27 +466,6 @@ function clampInteger(value: unknown, min: number, max: number, fallback: number
   const numeric = Math.floor(Number(value));
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(min, Math.min(max, numeric));
-}
-
-function requiredString(value: unknown, label: string) {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) throw new Error(`${label} is required.`);
-  return normalized;
-}
-
-function stringValue(value: unknown, fallback: string) {
-  const normalized = String(value ?? "").trim();
-  return normalized || fallback;
-}
-
-function integerValue(value: unknown, fallback: number) {
-  const numeric = Math.floor(Number(value));
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
-function objectValue(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
 }
 
 function randomSeed() {

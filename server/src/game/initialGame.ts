@@ -26,6 +26,7 @@ interface Nation {
   controllerType: ControllerType;
   sessionId: string | null;
   bot: boolean;
+  isBot: boolean;
   active: boolean;
   actionsRemaining: number;
   actionsUsedThisTurn: number;
@@ -78,8 +79,13 @@ interface Tile {
 }
 
 export interface ServerGameState {
+  gameId: string;
+  roomId: string;
+  status: "playing";
   settings: InitialGameSettings;
   turn: number;
+  turnNumber: number;
+  currentTurnIndex: number;
   era: number;
   phase: "player";
   nations: Record<string, Nation>;
@@ -105,6 +111,9 @@ export interface ServerGameState {
   selectedTileId: null;
   lastSummary: null;
   startedAt: number;
+  turnStartedAt: number;
+  isProcessingTurn: boolean;
+  playerId: string;
   seats: SeatAssignment[];
 }
 
@@ -114,6 +123,7 @@ export interface SeatAssignment {
   playerName: string;
   controllerType: ControllerType;
   bot: boolean;
+  isBot: boolean;
   host: boolean;
 }
 
@@ -235,7 +245,12 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
   const startedAt = Date.now();
   return {
     settings,
+    gameId: "",
+    roomId: "",
+    status: "playing",
     turn: 1,
+    turnNumber: 1,
+    currentTurnIndex: 0,
     era: 1,
     phase: "player",
     nations,
@@ -278,6 +293,9 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     selectedTileId: null,
     lastSummary: null,
     startedAt,
+    turnStartedAt: startedAt,
+    isProcessingTurn: false,
+    playerId: seats.find((seat) => seat.controllerType === "human")?.nationId || seats[0]?.nationId || "nation-1",
     seats,
   };
 }
@@ -295,6 +313,7 @@ export function serializeGameSnapshot(game: ServerGameState | Record<string, any
       controllerType: nation.controllerType,
       sessionId: nation.sessionId,
       bot: nation.bot,
+      isBot: Boolean(nation.isBot ?? nation.bot),
       territory: nation.territory.length,
       capitalTileId: nation.capitalTileId,
     })),
@@ -303,12 +322,17 @@ export function serializeGameSnapshot(game: ServerGameState | Record<string, any
 
 function serializableGameState(game: ServerGameState | Record<string, any>) {
   return deepClone({
+    gameId: game.gameId,
+    roomId: game.roomId,
+    status: game.status,
     settings: game.settings,
     turn: game.turn,
+    turnNumber: game.turnNumber,
+    currentTurnIndex: game.currentTurnIndex,
     era: game.era,
     phase: game.phase,
     nations: game.nations,
-    playerId: (game as any).playerId,
+    playerId: game.playerId,
     botIds: game.botIds,
     map: game.map,
     diplomacy: game.diplomacy,
@@ -325,6 +349,8 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
     selectedTileId: null,
     lastSummary: game.lastSummary,
     startedAt: game.startedAt,
+    turnStartedAt: game.turnStartedAt,
+    isProcessingTurn: game.isProcessingTurn,
     seats: game.seats || [],
   });
 }
@@ -342,6 +368,7 @@ function createSeatAssignments(nationCount: number, players: SeatPlayer[]): Seat
         playerName: player.name,
         controllerType: "human",
         bot: false,
+        isBot: false,
         host: player.host,
       });
       continue;
@@ -354,6 +381,7 @@ function createSeatAssignments(nationCount: number, players: SeatPlayer[]): Seat
       playerName: BOT_NAMES[botIndex] || `Nation ${index + 1}`,
       controllerType: "bot",
       bot: true,
+      isBot: true,
       host: false,
     });
   }
@@ -393,6 +421,7 @@ function createNation({
     controllerType,
     sessionId,
     bot,
+    isBot: bot,
     active: true,
     actionsRemaining: MAX_ACTIONS_PER_TURN,
     actionsUsedThisTurn: 0,
