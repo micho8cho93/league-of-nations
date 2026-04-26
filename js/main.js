@@ -182,6 +182,9 @@ function bindActiveRoom(room) {
       multiplayer.initialSnapshot = snapshot;
       handleAuthoritativeSnapshot(snapshot);
     },
+    onActionAccepted: (payload) => {
+      ui?.handleAcceptedPlayerAction(payload);
+    },
     onActionRejected: (message) => {
       ui?.showNotice("Action rejected", message);
       showMultiplayerError(message);

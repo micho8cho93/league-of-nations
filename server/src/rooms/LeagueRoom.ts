@@ -90,7 +90,6 @@ export class LeagueRoom extends Room {
   maxClients = 10;
   state = new LeagueRoomState();
   private gameState: ServerGameState | null = null;
-  private endedNationIds = new Set<string>();
   private resolvingTurn = false;
 
   messages = {
@@ -139,7 +138,6 @@ export class LeagueRoom extends Room {
       this.lock();
       this.state.status = "playing";
       this.gameState = this.createRuntimeGame();
-      this.endedNationIds.clear();
       this.setMetadata({
         roomCode: this.state.roomCode,
         status: this.state.status,
@@ -326,8 +324,8 @@ export class LeagueRoom extends Room {
     let result: { ok?: boolean; reason?: string; [key: string]: unknown } = { ok: false, reason: "Unknown action." };
 
     try {
-      // The Railway-safe server snapshot supports lobby startup and coordinated
-      // end-turn messages without importing the browser rules engine.
+      // The Railway-safe server snapshot supports lobby startup and active-player
+      // handoff without importing the browser rules engine.
       if (type === "endTurn") {
         result = await this.acceptEndTurn(nationId);
       } else {
@@ -342,6 +340,12 @@ export class LeagueRoom extends Room {
       return;
     }
 
+    this.broadcast("actionAccepted", {
+      type,
+      nationId,
+      payload,
+      result,
+    });
     this.finishIfGameOver();
     this.broadcastGameSnapshot();
   }
@@ -372,8 +376,7 @@ export class LeagueRoom extends Room {
     if (nation.sessionId !== client.sessionId) return { ok: false, reason: "You do not control that nation." };
     if (nation.bot || nation.controllerType === "bot") return { ok: false, reason: "Bot nations are controlled by the server." };
     if (!nation.active) return { ok: false, reason: "That nation is no longer active." };
-    if (this.endedNationIds.has(nationId)) return { ok: false, reason: "That nation has already ended this turn." };
-    if (type !== "endTurn" && this.activeTurnNationId() !== nationId) {
+    if (this.activeTurnNationId() !== nationId) {
       return { ok: false, reason: "It is not your turn." };
     }
 
@@ -388,41 +391,57 @@ export class LeagueRoom extends Room {
   private async acceptEndTurn(nationId: string) {
     if (!this.gameState) return { ok: false, reason: "Game state is unavailable." };
 
-    this.endedNationIds.add(nationId);
-    const activeHumanIds = (Object.values(this.gameState.nations) as Array<Record<string, any>>)
-      .filter((nation) => nation.active && !nation.bot && nation.controllerType !== "bot")
-      .map((nation) => String(nation.id));
-
-    if (activeHumanIds.some((id) => !this.endedNationIds.has(id))) {
-      return { ok: true, waitingForHumans: true };
-    }
-
     this.resolvingTurn = true;
     this.gameState.isProcessingTurn = true;
     try {
-      this.advanceTurn();
-      this.endedNationIds.clear();
+      this.advanceTurn(nationId);
       this.finishIfGameOver();
     } finally {
       this.gameState.isProcessingTurn = false;
       this.resolvingTurn = false;
     }
 
-    return { ok: true, advancedTurn: true };
+    return { ok: true, advancedTurn: true, activeNationId: this.activeTurnNationId() };
   }
 
-  private advanceTurn() {
+  private advanceTurn(endingNationId = "") {
     if (!this.gameState) return;
-    this.gameState.turn += 1;
-    this.gameState.turnNumber = this.gameState.turn;
-    this.gameState.currentTurnIndex = (this.gameState.currentTurnIndex + 1) % Math.max(1, this.gameState.seats.length);
+    const seats = this.gameState.seats || [];
+    if (seats.length === 0) return;
+
+    const previousIndex = Math.max(0, Math.min(seats.length - 1, this.gameState.currentTurnIndex || 0));
+    const nextIndex = this.nextPlayableSeatIndex(previousIndex);
+    const wrapped = nextIndex <= previousIndex;
+    this.gameState.currentTurnIndex = nextIndex;
     this.gameState.turnStartedAt = Date.now();
 
-    for (const nation of Object.values(this.gameState.nations)) {
-      if (!nation.active) continue;
+    if (wrapped) {
+      this.gameState.turn += 1;
+      this.gameState.turnNumber = this.gameState.turn;
+    }
+
+    const nextNationId = seats[nextIndex]?.nationId || "";
+    for (const nationId of new Set([endingNationId, nextNationId])) {
+      const nation = this.gameState.nations[nationId];
+      if (!nation?.active) continue;
       nation.actionsRemaining = 10;
       nation.actionsUsedThisTurn = 0;
     }
+  }
+
+  private nextPlayableSeatIndex(fromIndex: number) {
+    if (!this.gameState) return 0;
+    const seats = this.gameState.seats || [];
+    if (seats.length === 0) return 0;
+
+    for (let offset = 1; offset <= seats.length; offset += 1) {
+      const index = (fromIndex + offset) % seats.length;
+      const seat = seats[index];
+      const nation = this.gameState.nations[seat?.nationId || ""];
+      if (nation?.active && !nation.bot && nation.controllerType !== "bot") return index;
+    }
+
+    return fromIndex;
   }
 
   private broadcastGameSnapshot() {

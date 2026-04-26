@@ -310,6 +310,39 @@ test("player cannot assign workers outside their turn", async () => {
   );
 });
 
+test("end turn hands control to the next active human player", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  const second = join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const startingTurn = gameState.turn;
+
+  await room.messages.playerAction(creator.client, {
+    type: "endTurn",
+    nationId: "nation-1",
+  });
+
+  assert.equal(gameState.currentTurnIndex, 1);
+  assert.equal(gameState.turn, startingTurn);
+  assert.equal(latestRejection(creator), "");
+
+  await room.messages.playerAction(creator.client, {
+    type: "endTurn",
+    nationId: "nation-1",
+  });
+
+  assert.match(latestRejection(creator), /not your turn/);
+
+  await room.messages.playerAction(second.client, {
+    type: "endTurn",
+    nationId: "nation-2",
+  });
+
+  assert.equal(gameState.currentTurnIndex, 0);
+  assert.equal(gameState.turn, startingTurn + 1);
+  assert.equal(latestRejection(second), "");
+});
+
 test("invalid worker counts are rejected", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");

@@ -145,11 +145,14 @@ export class GameState {
   constructor(data) {
     this.settings = data.settings;
     this.turn = data.turn || 1;
+    this.turnNumber = data.turnNumber || this.turn;
+    this.currentTurnIndex = Number(data.currentTurnIndex) || 0;
     this.era = data.era || 1;
     this.phase = data.phase || "player";
     this.nations = data.nations || {};
     this.playerId = data.playerId || "player";
     this.botIds = data.botIds || [];
+    this.seats = data.seats || [];
     this.map = data.map;
     this.tiles = this.map.tiles;
     this.tileIndex = buildTileIndex(this.tiles);
@@ -167,12 +170,12 @@ export class GameState {
     this.gameOver = data.gameOver || null;
     this.selectedTileId = data.selectedTileId || null;
     this.lastSummary = data.lastSummary || null;
-    this.isProcessingTurn = false;
+    this.isProcessingTurn = Boolean(data.isProcessingTurn);
     this.listeners = new Set();
     this.rng = mulberry32((this.settings.seed || 1) + this.turn * 7919 + this.events.length * 131);
     this.eraStartSnapshot = data.eraStartSnapshot || this.createSnapshot();
     this.startedAt = data.startedAt || Date.now();
-    this.turnStartedAt = Date.now();
+    this.turnStartedAt = data.turnStartedAt || Date.now();
     this.normalizeActionStates();
     this.recomputeTerritories();
     scheduleEraEvent(this, this.era);

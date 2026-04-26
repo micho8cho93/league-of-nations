@@ -80,6 +80,9 @@ export function bindRoomEvents(room, handlers = {}) {
     handlers.onGameSnapshot?.(snapshot);
     handlers.onPlaying?.(readLobbyState(room), snapshot);
   });
+  room.onMessage("actionAccepted", (payload) => {
+    handlers.onActionAccepted?.(payload);
+  });
   room.onMessage("actionRejected", (payload) => {
     handlers.onActionRejected?.(payload?.message || "That action was rejected by the server.");
   });

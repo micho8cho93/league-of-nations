@@ -531,7 +531,7 @@ function moveOrAttackUnit(game: ServerGameState, fromTileId: string, toTileId: s
     if (wasUnowned) incrementStat(nation, "tilesCaptured", 1);
     recomputeTerritories(game);
     addEvent(game, `${nation.name} moved troops to a new tile.`, { nationId, type: "war", tileId: to.id });
-    return { ok: true, action: "move", unitType: selectedAction.unitType };
+    return { ok: true, action: "move", unitType: selectedAction.unitType, cost: movementCost, fromTileId: from.id, targetTileId: to.id, path: selectedAction.path };
   }
 
   const defenderId = String(to.ownerId || "");
@@ -573,7 +573,7 @@ function moveOrAttackUnit(game: ServerGameState, fromTileId: string, toTileId: s
       type: "war",
       tileId: to.id,
     });
-    return { ok: true, action: "battle", report: strikeReport };
+    return { ok: true, action: "battle", cost: movementCost, report: strikeReport };
   }
 
   const outcome = resolveCombat(game, nationId, defenderId, from.unit.strength, defenderStrength(to), to, unitType);
@@ -612,7 +612,7 @@ function moveOrAttackUnit(game: ServerGameState, fromTileId: string, toTileId: s
     tileId: to.id,
   });
 
-  return { ok: true, action: "battle", report };
+  return { ok: true, action: "battle", cost: movementCost, report };
 }
 
 function declareWarAction(game: ServerGameState, targetId: string, nationId: string, reason: string): ActionResult {

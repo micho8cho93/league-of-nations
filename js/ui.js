@@ -464,14 +464,19 @@ class GameUI {
       this.showNotice("Action blocked", "You do not control that nation.");
       return;
     }
+    if (this.isServerAuthoritative() && !this.isPlayersTurn()) {
+      this.showNotice("Waiting", "It is not your turn yet.");
+      return;
+    }
     this.multiplayerClient.sendPlayerAction({ ...payload, nationId });
   }
 
   renderStatus() {
     const player = this.game.player;
+    const waitingForTurn = this.isServerAuthoritative() && !this.isPlayersTurn();
     this.phaseLabel.textContent = phaseLabel(this.game.phase, this.game.isProcessingTurn);
-    this.endTurnBtn.disabled = this.game.isProcessingTurn || Boolean(this.game.gameOver);
-    this.endTurnBtn.textContent = "End Turn";
+    this.endTurnBtn.disabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn;
+    this.endTurnBtn.textContent = waitingForTurn ? "Waiting" : "End Turn";
     this.renderActionCounter();
     const turnLimit = this.game.settings.unlimitedMode ? "Unlimited" : `${this.game.turn}/${this.game.settings.maxTurns}`;
     this.statusStrip.innerHTML = [
@@ -482,6 +487,16 @@ class GameUI {
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
       pill(this.timeText()),
     ].join("");
+  }
+
+  activeTurnNationId() {
+    const seats = this.game.seats || [];
+    const index = Math.max(0, Math.min(seats.length - 1, Number(this.game.currentTurnIndex) || 0));
+    return seats[index]?.nationId || this.game.playerId;
+  }
+
+  isPlayersTurn() {
+    return !this.isServerAuthoritative() || this.activeTurnNationId() === this.game.playerId;
   }
 
   renderActionCounter() {
@@ -1017,12 +1032,46 @@ class GameUI {
     this.render();
   }
 
-  showActionDeltas(action, tileId, button, result) {
+  handleAcceptedPlayerAction(message = {}) {
+    const isOwnAction = !message.nationId || message.nationId === this.game.playerId;
+    if (!isOwnAction && message.type !== "moveOrAttackUnit") return;
+    const payload = message.payload || {};
+    const result = message.result || {};
+    if (!result.ok) return;
+
+    if (message.type === "buildTile") {
+      this.showActionDeltas("build", payload.tileId, null, result, { buildingType: payload.buildingType });
+    } else if (message.type === "assignWorkers") {
+      this.showActionDeltas("workers", payload.tileId, null, result);
+    } else if (message.type === "destroyTile") {
+      this.showActionDeltas("destroy", payload.tileId, null, result);
+    } else if (message.type === "trainUnit") {
+      this.showActionDeltas("train", payload.tileId, null, result, { amount: payload.strength ?? payload.amount });
+    } else if (message.type === "moveOrAttackUnit") {
+      const targetTileId = result.targetTileId || payload.toTileId;
+      if (isOwnAction && result.cost) this.showResourceDeltas(targetTileId, [{ resource: "money", delta: -result.cost }]);
+      if (result.action === "battle" && result.report) {
+        this.renderer.playBattle(result.report);
+        this.renderer.showBattleDelta(result.report);
+      } else {
+        this.renderer.playMilitaryAction({
+          action: "move",
+          nationId: message.nationId,
+          unitType: result.unitType,
+          fromTileId: result.fromTileId || payload.fromTileId,
+          targetTileId,
+          path: result.path,
+        });
+      }
+    }
+  }
+
+  showActionDeltas(action, tileId, button, result, context = {}) {
     const tile = this.game.tileById(tileId);
     const deltas = [];
     if (action === "build") {
       deltas.push({ resource: "money", delta: -result.cost });
-      deltas.push(...this.buildingProductionDeltas(tile));
+      deltas.push(...this.buildingProductionDeltas(tile, context.buildingType));
     } else if (action === "workers") {
       if (result.cost) deltas.push({ resource: "money", delta: -result.cost });
       deltas.push({ resource: "population", delta: -Math.abs(result.changed) });
@@ -1032,16 +1081,17 @@ class GameUI {
       deltas.push({ resource: "money", delta: -result.cost.money });
       if (result.cost.materials) deltas.push({ resource: "materials", delta: -result.cost.materials });
       if (result.cost.people) deltas.push({ resource: "population", delta: -result.cost.people });
-      deltas.push({ resource: "military", delta: Number(button.dataset.amount) });
+      deltas.push({ resource: "military", delta: Number(context.amount ?? button?.dataset.amount ?? 0) });
     }
     this.showResourceDeltas(tileId, deltas);
   }
 
-  buildingProductionDeltas(tile) {
+  buildingProductionDeltas(tile, typeOverride = "") {
     if (!tile) return [];
     const player = this.game.player;
-    const minWorkers = WORKER_MIN[tile.type] || 1;
-    const mockTile = { ...tile, workers: minWorkers };
+    const tileType = typeOverride || tile.type;
+    const minWorkers = WORKER_MIN[tileType] || 1;
+    const mockTile = { ...tile, type: tileType, workers: minWorkers };
     const production = productionForTile(player, mockTile, this.game.era);
     if (!production) return [];
     const deltas = [];
