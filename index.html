@@ -57,6 +57,7 @@
         <div id="phase-label" class="phase-label">Player Turn</div>
       </div>
       <div id="status-strip" class="status-strip"></div>
+      <div id="action-counter" class="action-counter" aria-live="polite">Actions left: 10</div>
       <div class="top-actions">
         <button id="save-btn" class="secondary-btn">Save</button>
         <button id="new-game-btn" class="secondary-btn">New</button>
@@ -79,26 +80,38 @@
       <aside id="side-panel" class="side-panel">
         <button id="side-collapse-btn" class="icon-btn panel-toggle side-toggle" type="button" aria-controls="side-panel" aria-expanded="true" aria-label="Collapse side panel">→</button>
         <div class="side-panel-content">
-          <section class="panel">
-            <h2>Resources</h2>
+          <details class="panel side-section" data-side-section="resources" open>
+            <summary>Resources</summary>
             <div id="resource-panel"></div>
-          </section>
-          <section class="panel">
-            <h2>Nations</h2>
+          </details>
+          <details class="panel side-section" data-side-section="actions" open>
+            <summary>Actions Remaining</summary>
+            <div id="action-summary-panel"></div>
+          </details>
+          <details class="panel side-section" data-side-section="selection" open>
+            <summary>Selected Tile</summary>
+            <div id="selection-panel"></div>
+          </details>
+          <details class="panel side-section" data-side-section="nations">
+            <summary>Other Nations</summary>
             <div id="nation-panel"></div>
-          </section>
-          <section class="panel">
-            <h2>Diplomacy</h2>
+          </details>
+          <details class="panel side-section" data-side-section="diplomacy">
+            <summary>Detailed Diplomacy</summary>
             <div id="diplomacy-panel"></div>
-          </section>
-          <section class="panel">
-            <h2>Technology</h2>
+          </details>
+          <details class="panel side-section" data-side-section="trade">
+            <summary>Detailed Trade</summary>
+            <div id="trade-panel"></div>
+          </details>
+          <details class="panel side-section" data-side-section="tech">
+            <summary>Technology</summary>
             <div id="tech-panel"></div>
-          </section>
-          <section class="panel">
-            <h2>Last Turn</h2>
+          </details>
+          <details class="panel side-section" data-side-section="summary">
+            <summary>Last Turn</summary>
             <div id="summary-panel"></div>
-          </section>
+          </details>
         </div>
       </aside>
     </main>

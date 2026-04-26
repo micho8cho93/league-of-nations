@@ -1,5 +1,6 @@
 export const SAVE_KEY = "league-of-nations-fresh-v1";
 export const SAVE_VERSION = 1;
+export const MAX_ACTIONS_PER_TURN = 10;
 
 export const MAP_SIZES = {
   Small: { label: "Small", radius: 7 },
@@ -15,6 +16,7 @@ export const TILE_TYPES = {
   FACTORY: "factory",
   MILITARY: "military",
   WATER: "water",
+  MOUNTAIN: "mountain",
 };
 
 export const BUILDING_TYPES = [
@@ -33,6 +35,7 @@ export const TILE_LABELS = {
   [TILE_TYPES.FACTORY]: "Factory",
   [TILE_TYPES.MILITARY]: "Military Base",
   [TILE_TYPES.WATER]: "Water",
+  [TILE_TYPES.MOUNTAIN]: "Mountain",
 };
 
 export const WORKER_ROLES = {
@@ -67,20 +70,29 @@ export const TILE_COLORS = {
   [TILE_TYPES.FACTORY]: 0x4b525f,
   [TILE_TYPES.MILITARY]: 0xa44646,
   [TILE_TYPES.WATER]: 0x2e6f95,
+  [TILE_TYPES.MOUNTAIN]: 0x7a7060,
 };
 
-export const OWNER_COLORS = [
-  "#55c6a5",
-  "#d95f59",
-  "#6c8ff0",
-  "#d7b84f",
-  "#a875d6",
-  "#e58a42",
-  "#3fb7c4",
-  "#d66aa2",
-  "#7cc46b",
-  "#c9a5ff",
+export const NATION_COLOR_PALETTE = [
+  "#2dd4bf",
+  "#fb7185",
+  "#60a5fa",
+  "#fbbf24",
+  "#a78bfa",
+  "#34d399",
+  "#f472b6",
+  "#f97316",
+  "#22d3ee",
+  "#bef264",
 ];
+
+export const OWNER_COLORS = NATION_COLOR_PALETTE;
+
+export function nationColor(index = 0) {
+  if (index < NATION_COLOR_PALETTE.length) return NATION_COLOR_PALETTE[index];
+  const hue = (index * 137.508) % 360;
+  return `hsl(${Math.round(hue)} 82% 66%)`;
+}
 
 export const HEX_DIRECTIONS = [
   { q: 1, r: 0 },
@@ -202,7 +214,7 @@ export function titleCase(value) {
 }
 
 export function isLand(tile) {
-  return tile && tile.terrain === "land" && tile.type !== TILE_TYPES.WATER;
+  return tile && tile.terrain === "land" && tile.type !== TILE_TYPES.WATER && tile.type !== TILE_TYPES.MOUNTAIN;
 }
 
 export function isTileActive(tile) {

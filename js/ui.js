@@ -29,11 +29,22 @@ import { warUpkeep } from "./war.js";
 import { BALANCE } from "./balance.js";
 
 const PANEL_STATE_KEY = "league-of-nations-panel-state";
+const SIDE_SECTION_STATE_KEY = "league-of-nations-side-sections";
 export const TUTORIAL_COMPLETED_KEY = "leagueOfNationsTutorialCompleted";
 const DEFAULT_PANEL_STATE = {
   top: false,
   side: false,
   bottom: false,
+};
+const DEFAULT_SIDE_SECTION_STATE = {
+  resources: true,
+  actions: true,
+  selection: true,
+  nations: false,
+  diplomacy: false,
+  trade: false,
+  tech: false,
+  summary: false,
 };
 
 const TUTORIAL_STEPS = [
@@ -98,9 +109,10 @@ class GameUI {
   constructor(game, renderer) {
     this.game = game;
     this.renderer = renderer;
-    this.reportDialogId = null;
     this.victoryShown = false;
+    this.militarySelection = null;
     this.panelState = loadPanelState();
+    this.sideSectionState = loadSideSectionState();
     this.tutorial = null;
     this.savedPanelStateForTutorial = null;
     this.cacheDom();
@@ -122,13 +134,17 @@ class GameUI {
     this.bottomCollapseBtn = document.getElementById("bottom-collapse-btn");
     this.statusStrip = document.getElementById("status-strip");
     this.phaseLabel = document.getElementById("phase-label");
+    this.actionCounter = document.getElementById("action-counter");
     this.endTurnBtn = document.getElementById("end-turn-btn");
     this.saveBtn = document.getElementById("save-btn");
     this.newGameBtn = document.getElementById("new-game-btn");
     this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
     this.resourcePanel = document.getElementById("resource-panel");
+    this.actionSummaryPanel = document.getElementById("action-summary-panel");
+    this.selectionPanel = document.getElementById("selection-panel");
     this.nationPanel = document.getElementById("nation-panel");
     this.diplomacyPanel = document.getElementById("diplomacy-panel");
+    this.tradePanel = document.getElementById("trade-panel");
     this.techPanel = document.getElementById("tech-panel");
     this.summaryPanel = document.getElementById("summary-panel");
     this.feed = document.getElementById("event-feed-content");
@@ -143,13 +159,16 @@ class GameUI {
   }
 
   bindEvents() {
-    this.renderer.onSelect = (tileId) => {
-      this.game.selectTile(tileId);
-      if (tileId) this.renderer.focusTile(tileId);
-    };
+    this.renderer.onSelect = (tileId) => this.handleMapSelect(tileId);
     this.renderer.onHover = (tileId, event) => this.renderTooltip(tileId, event);
-    this.tileCloseBtn.addEventListener("click", () => this.game.selectTile(null));
-    this.endTurnBtn.addEventListener("click", () => this.game.endTurn());
+    this.tileCloseBtn.addEventListener("click", () => {
+      this.clearMilitarySelection();
+      this.game.selectTile(null);
+    });
+    this.endTurnBtn.addEventListener("click", () => {
+      this.clearMilitarySelection();
+      this.game.endTurn();
+    });
     this.saveBtn.addEventListener("click", () => {
       const result = this.game.save();
       this.showNotice("Save", result.ok ? "Game saved." : result.reason);
@@ -162,6 +181,14 @@ class GameUI {
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
     this.diplomacyPanel.addEventListener("click", (event) => this.handleDiplomacyClick(event));
     this.techPanel.addEventListener("click", (event) => this.handleTechClick(event));
+    this.sidePanel.querySelectorAll("[data-side-section]").forEach((section) => {
+      const key = section.dataset.sideSection;
+      if (Object.prototype.hasOwnProperty.call(this.sideSectionState, key)) section.open = Boolean(this.sideSectionState[key]);
+      section.addEventListener("toggle", () => {
+        this.sideSectionState = { ...this.sideSectionState, [key]: section.open };
+        saveSideSectionState(this.sideSectionState);
+      });
+    });
     this.topCollapseBtn.addEventListener("click", () => this.togglePanel("top"));
     this.sideCollapseBtn.addEventListener("click", () => this.togglePanel("side"));
     this.bottomCollapseBtn.addEventListener("click", () => this.togglePanel("bottom"));
@@ -199,15 +226,18 @@ class GameUI {
     for (const delay of [0, 120, 260]) {
       window.setTimeout(() => {
         window.dispatchEvent(new Event("resize"));
-        this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId);
+        this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights());
       }, delay);
     }
   }
 
   handleGameEvent(event) {
+    if (event.type === "state_changed" && event.source !== "selection") this.refreshMilitarySelection();
+    if (event.type === "action_spent" && event.nationId === this.game.playerId) this.flashActionCounter();
+    if (event.type === "unit_animation") this.renderer.playMilitaryAction(event);
     if (event.type === "battle_report") {
       this.renderer.playBattle(event.report);
-      this.showBattleReport(event.report);
+      this.renderer.showBattleDelta(event.report);
     }
     if (event.type === "game_over") this.showVictory();
     this.render();
@@ -329,21 +359,84 @@ class GameUI {
   render() {
     this.renderStatus();
     this.renderResources();
+    this.renderActionSummary();
+    this.renderSelectionPanel();
     this.renderNations();
     this.renderDiplomacy();
+    this.renderTrade();
     this.renderTech();
     this.renderSummary();
     this.renderEvents();
     this.renderTilePopup();
-    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId);
-    this.maybeShowEraReport();
+    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights());
     if (this.game.gameOver) this.showVictory();
+  }
+
+  handleMapSelect(tileId) {
+    if (this.game.isProcessingTurn || this.game.gameOver) return;
+
+    const currentAction = tileId ? this.militarySelection?.targetActions.get(tileId) : null;
+    if (currentAction) {
+      const sourceTileId = this.militarySelection.sourceTileId;
+      this.clearMilitarySelection();
+      const stillValid = this.game
+        .getValidMilitaryActionsFromTile(sourceTileId, this.game.playerId)
+        .actions.some((action) => action.toTileId === tileId && action.action === currentAction.action);
+      if (!stillValid) {
+        this.render();
+        return;
+      }
+      const result = this.game.moveOrAttackUnit(sourceTileId, tileId, this.game.playerId);
+      if (result.ok) {
+        this.game.selectTile(tileId);
+        this.renderer.focusTile(tileId);
+      } else {
+        this.showNotice("Action blocked", result.reason);
+      }
+      this.render();
+      return;
+    }
+
+    const nextMilitarySelection = this.createMilitarySelection(tileId);
+    this.militarySelection = nextMilitarySelection;
+    this.game.selectTile(tileId);
+    if (tileId) this.renderer.focusTile(tileId);
+  }
+
+  createMilitarySelection(tileId) {
+    if (!tileId) return null;
+    const actions = this.game.getValidMilitaryActionsFromTile(tileId, this.game.playerId);
+    if (!actions.actions.length) return null;
+    return {
+      sourceTileId: tileId,
+      actions,
+      targetActions: new Map(actions.actions.map((action) => [action.toTileId, action])),
+    };
+  }
+
+  refreshMilitarySelection() {
+    if (!this.militarySelection) return;
+    this.militarySelection = this.createMilitarySelection(this.militarySelection.sourceTileId);
+  }
+
+  clearMilitarySelection() {
+    this.militarySelection = null;
+  }
+
+  currentMilitaryHighlights() {
+    if (!this.militarySelection) return null;
+    return {
+      sourceTileId: this.militarySelection.sourceTileId,
+      moveTargets: this.militarySelection.actions.moveTargets,
+      attackTargets: this.militarySelection.actions.attackTargets,
+    };
   }
 
   renderStatus() {
     const player = this.game.player;
     this.phaseLabel.textContent = phaseLabel(this.game.phase, this.game.isProcessingTurn);
-    this.endTurnBtn.disabled = this.game.isProcessingTurn || Boolean(this.game.pendingEraReport) || Boolean(this.game.gameOver);
+    this.endTurnBtn.disabled = this.game.isProcessingTurn || Boolean(this.game.gameOver);
+    this.renderActionCounter();
     const turnLimit = this.game.settings.unlimitedMode ? "Unlimited" : `${this.game.turn}/${this.game.settings.maxTurns}`;
     this.statusStrip.innerHTML = [
       pill(player.name),
@@ -353,6 +446,46 @@ class GameUI {
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
       pill(this.timeText()),
     ].join("");
+  }
+
+  renderActionCounter() {
+    if (!this.actionCounter) return;
+    const player = this.game.player;
+    const remaining = Math.max(0, Number(player.actionsRemaining) || 0);
+    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
+    this.actionCounter.textContent = `Actions left: ${remaining}`;
+    this.actionCounter.title = `${used} used this turn`;
+    this.actionCounter.classList.toggle("no-actions", remaining <= 0);
+  }
+
+  renderActionSummary() {
+    const player = this.game.player;
+    const remaining = Math.max(0, Number(player.actionsRemaining) || 0);
+    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
+    const nextAction = this.militarySelection
+      ? `Choose a highlighted tile to move or attack from ${this.militarySelection.sourceTileId}.`
+      : this.game.selectedTileId
+        ? "Use tile controls, choose a military target, or inspect another tile."
+        : "Select a tile or end the turn when ready.";
+    this.actionSummaryPanel.innerHTML = `
+      <div class="metric-grid">
+        ${metric("Available", remaining)}
+        ${metric("Used", used)}
+      </div>
+      <p class="${remaining <= 0 ? "bad" : "muted"}">${escapeHtml(nextAction)}</p>
+    `;
+  }
+
+  flashActionCounter() {
+    if (!this.actionCounter) return;
+    this.renderActionCounter();
+    this.actionCounter.classList.remove("action-counter-pulse");
+    void this.actionCounter.offsetWidth;
+    this.actionCounter.classList.add("action-counter-pulse");
+    window.clearTimeout(this.actionCounterTimer);
+    this.actionCounterTimer = window.setTimeout(() => {
+      this.actionCounter.classList.remove("action-counter-pulse");
+    }, 520);
   }
 
   renderResources() {
@@ -503,6 +636,39 @@ class GameUI {
     }).join("");
   }
 
+  renderSelectionPanel() {
+    const tile = this.game.selectedTileId ? this.game.tileById(this.game.selectedTileId) : null;
+    if (!tile) {
+      this.selectionPanel.innerHTML = `<p class="muted">No tile selected.</p>`;
+      return;
+    }
+    const owner = tile.ownerId ? this.game.nations[tile.ownerId] : null;
+    const active = isTileActive(tile);
+    const isPlayerTile = tile.ownerId === this.game.playerId;
+    const validActions = this.game.getValidMilitaryActionsFromTile(tile.id, this.game.playerId);
+    const actionContext = this.militarySelection?.sourceTileId === tile.id
+      ? `${validActions.moveTargets.length} move targets · ${validActions.attackTargets.length} attack targets`
+      : isPlayerTile
+        ? "Player tile"
+        : owner
+          ? "Foreign territory"
+          : "Unowned tile";
+    this.selectionPanel.innerHTML = `
+      <div class="row-head">
+        <strong>${escapeHtml(TILE_LABELS[tile.type] || tile.type)}${tile.isCapital ? " Capital" : ""}</strong>
+        <span class="mini-pill">${escapeHtml(tile.q)}, ${escapeHtml(tile.r)}</span>
+      </div>
+      <div class="metric-grid">
+        ${metric("Owner", owner ? owner.name : "Unowned")}
+        ${metric("Status", tile.type === TILE_TYPES.WATER ? "Water" : active ? "Active" : "Inactive")}
+        ${metric("Region", tile.regionId || "Sea")}
+        ${metric("Context", actionContext)}
+      </div>
+      ${tile.unit?.strength ? `<div class="metric"><span>Troops</span><strong>${formatNumber(tile.unit.strength)} strength</strong></div>` : ""}
+      <p class="muted">Detailed build, worker, and training controls remain on the selected tile popup.</p>
+    `;
+  }
+
   renderDiplomacy() {
     if (this.game.era < 2) {
       this.diplomacyPanel.innerHTML = `<p class="muted">Diplomacy, trade, and alliances unlock in Era 2.</p>`;
@@ -542,6 +708,39 @@ class GameUI {
         </div>
       `).join("");
     this.diplomacyPanel.innerHTML = rows + (allianceRows ? `<hr />${allianceRows}` : "");
+  }
+
+  renderTrade() {
+    if (this.game.era < 2) {
+      this.tradePanel.innerHTML = `<p class="muted">Trade unlocks in Era 2.</p>`;
+      return;
+    }
+    const yieldInfo = projectTradeRouteYield(this.game, this.game.playerId);
+    const yieldParts = ["money", "food", "materials", "education", "industry"]
+      .filter((resource) => yieldInfo[resource])
+      .map((resource) => `${signed(yieldInfo[resource])} ${resource}`)
+      .join(" · ");
+    const routeRows = this.game.tradeRoutes
+      .filter((route) => route.status !== "removed" && route.members?.includes(this.game.playerId))
+      .map((route) => {
+        const partnerId = route.members.find((id) => id !== this.game.playerId);
+        const partner = this.game.nations[partnerId];
+        return `
+          <div class="trade-row">
+            <div class="row-head">
+              <strong>${escapeHtml(partner?.name || "Unknown partner")}</strong>
+              <span class="mini-pill">${escapeHtml(route.status)}</span>
+            </div>
+            <div class="muted">${route.status === "disrupted" ? `Disrupted until turn ${route.disruptedUntil}.` : "Route is available this turn."}</div>
+          </div>
+        `;
+      }).join("");
+    this.tradePanel.innerHTML = `
+      <div class="trade-row">
+        <div class="row-head"><strong>Projected Yield</strong><span class="mini-pill">${escapeHtml(yieldParts || "No active yield")}</span></div>
+      </div>
+      ${routeRows || `<p class="muted">No player trade routes yet. Use Detailed Diplomacy to propose trades.</p>`}
+    `;
   }
 
   renderTech() {
@@ -617,9 +816,21 @@ class GameUI {
     const tile = this.game.selectedTileId ? this.game.tileById(this.game.selectedTileId) : null;
     if (!tile) {
       this.tilePopup.hidden = true;
+      this.tilePopup.classList.remove("military-targeting");
       return;
     }
     this.tilePopup.hidden = false;
+    const isMilitaryTargeting = this.militarySelection?.sourceTileId === tile.id;
+    this.tilePopup.classList.toggle("military-targeting", isMilitaryTargeting);
+    if (isMilitaryTargeting) {
+      this.tilePopup.style.top = "auto";
+      this.tilePopup.style.bottom = "12px";
+      this.tilePopup.style.maxHeight = "220px";
+    } else {
+      this.tilePopup.style.removeProperty("top");
+      this.tilePopup.style.removeProperty("bottom");
+      this.tilePopup.style.removeProperty("max-height");
+    }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId] : null;
     const active = isTileActive(tile);
     const workerRole = WORKER_ROLE_BY_TILE[tile.type];
@@ -689,15 +900,21 @@ class GameUI {
           return `<button class="secondary-btn" data-tile-action="train" data-amount="${option.strength}" data-branch="${option.branch}" title="${escapeHtml(option.description)}">${escapeHtml(option.label)} (${cost})</button>`;
         }).join("")
       : "";
-    const moves = this.game.militaryActions(tile.id).map((action) => {
-      const target = this.game.tileById(action.toTileId);
-      const label = `${action.label} ${target.q},${target.r}`;
-      return `<button class="${action.action === "attack" ? "danger-btn" : "secondary-btn"}" data-tile-action="move" data-target="${action.toTileId}">${label}</button>`;
-    }).join("");
+    const actions = this.game.getValidMilitaryActionsFromTile(tile.id, this.game.playerId);
+    const moveCount = actions.moveTargets.length;
+    const attackCount = actions.attackTargets.length;
+    const targetSummary = tile.unit?.strength
+      ? `<div class="row-actions">
+          <span class="mini-pill">${escapeHtml(actions.unitTypeLabel)} ${actions.moveRange}/${actions.attackRange}</span>
+          <span class="mini-pill">${moveCount} move ${moveCount === 1 ? "target" : "targets"}</span>
+          <span class="mini-pill ${attackCount ? "bad" : ""}">${attackCount} attack ${attackCount === 1 ? "target" : "targets"}</span>
+        </div>`
+      : "";
     return `
       <div class="stack">
         <strong>Military</strong>
-        <div class="row-actions">${train || ""}${moves || ""}</div>
+        ${targetSummary}
+        <div class="row-actions">${train || ""}</div>
         ${this.game.era < 3 ? `<p class="muted">War declarations unlock in Era 3. Troops can still be trained for defense.</p>` : ""}
       </div>
     `;
@@ -730,9 +947,60 @@ class GameUI {
     if (action === "workers") result = this.game.assignWorkers(tileId, Number(button.dataset.amount));
     if (action === "destroy") result = this.game.destroyTile(tileId);
     if (action === "train") result = this.game.trainUnit(tileId, Number(button.dataset.amount), this.game.playerId, { branch: button.dataset.branch || "infantry" });
-    if (action === "move") result = this.game.moveOrAttackUnit(tileId, button.dataset.target);
+    if (action === "move" && this.militarySelection?.targetActions.has(button.dataset.target)) {
+      result = this.game.moveOrAttackUnit(tileId, button.dataset.target);
+      this.clearMilitarySelection();
+    }
+    if (result?.ok) this.showActionDeltas(action, tileId, button, result);
     if (result && !result.ok) this.showNotice("Action blocked", result.reason);
     this.render();
+  }
+
+  showActionDeltas(action, tileId, button, result) {
+    const tile = this.game.tileById(tileId);
+    const deltas = [];
+    if (action === "build") {
+      deltas.push({ resource: "money", delta: -result.cost });
+      deltas.push(...this.buildingProductionDeltas(tile));
+    } else if (action === "workers") {
+      if (result.cost) deltas.push({ resource: "money", delta: -result.cost });
+      deltas.push({ resource: "population", delta: -Math.abs(result.changed) });
+    } else if (action === "destroy") {
+      deltas.push({ resource: "money", delta: -result.cost });
+    } else if (action === "train") {
+      deltas.push({ resource: "money", delta: -result.cost.money });
+      if (result.cost.materials) deltas.push({ resource: "materials", delta: -result.cost.materials });
+      if (result.cost.people) deltas.push({ resource: "population", delta: -result.cost.people });
+      deltas.push({ resource: "military", delta: Number(button.dataset.amount) });
+    }
+    this.showResourceDeltas(tileId, deltas);
+  }
+
+  buildingProductionDeltas(tile) {
+    if (!tile) return [];
+    const player = this.game.player;
+    const minWorkers = WORKER_MIN[tile.type] || 1;
+    const mockTile = { ...tile, workers: minWorkers };
+    const production = productionForTile(player, mockTile, this.game.era);
+    if (!production) return [];
+    const deltas = [];
+    for (const resource of ["food", "materials", "education", "industry"]) {
+      if (production[resource]) deltas.push({ resource, delta: production[resource], suffix: "/turn" });
+    }
+    if (production.money) deltas.push({ resource: "money", delta: production.money, suffix: "/turn" });
+    if (production.people) deltas.push({ resource: "population", delta: production.people, suffix: "/turn" });
+    return deltas;
+  }
+
+  showResourceDeltas(tileId, deltas) {
+    if (!tileId) return;
+    const items = deltas
+      .filter((d) => d.delta !== 0)
+      .map(({ resource, delta, suffix = "" }) => ({
+        text: `${delta > 0 ? "+" : "-"}${resource === "money" ? "$" : ""}${formatNumber(Math.abs(delta))}${suffix}`,
+        color: delta > 0 ? "#59c99b" : "#df6c67",
+      }));
+    this.renderer.showTileResourceDeltas(tileId, items);
   }
 
   handleDiplomacyClick(event) {
@@ -838,61 +1106,11 @@ class GameUI {
         ${metric("Attacker Losses", report.losses.attacker)}
         ${metric("Defender Losses", report.losses.defender)}
         ${metric("Winner", report.attackerWins ? report.attackerName : report.defenderName)}
-        ${metric("Territory", report.attackerWins ? "Changed owner" : "Held")}
+        ${metric("Unit Type", report.unitTypeLabel || "Infantry")}
+        ${metric("Territory", report.territoryChanged ? "Changed owner" : report.captureAttempt ? "Held" : "Strike only")}
       </div>
       ${report.capitalCaptured ? `<p class="good">Capital captured. The defending nation was conquered.</p>` : ""}
     `);
-  }
-
-  maybeShowEraReport() {
-    const report = this.game.pendingEraReport;
-    if (!report || this.reportDialogId === report.id) return;
-    this.reportDialogId = report.id;
-    this.dialogCloseBtn.hidden = true;
-    const rows = report.comparison.map((entry, index) => `
-      <tr>
-        <td>${index + 1}</td>
-        <td>${escapeHtml(entry.name)}</td>
-        <td>${formatNumber(entry.score)}</td>
-        <td>${formatNumber(entry.population)}</td>
-        <td>${formatNumber(entry.territory)}</td>
-        <td>${formatNumber(entry.military)}</td>
-      </tr>
-    `).join("");
-    const playerDelta = report.sinceEra.nations[this.game.playerId];
-    this.openDialog(`Era ${report.fromEra} Report`, `
-      <p>Era ${report.nextEra} is ready to begin. Submit a reflection to continue.</p>
-      <div class="metric-grid">
-        ${metric("Score Change", signed(playerDelta.score))}
-        ${metric("Population Change", signed(playerDelta.population))}
-        ${metric("Territory Change", signed(playerDelta.territory))}
-        ${metric("Money Change", `$${signed(playerDelta.money)}`)}
-      </div>
-      <table class="report-table">
-        <thead><tr><th>Rank</th><th>Nation</th><th>Score</th><th>Pop</th><th>Tiles</th><th>Power</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <label class="field">
-        <span>Reflection summary</span>
-        <textarea id="era-reflection" placeholder="What choices helped or hurt your nation this era?"></textarea>
-      </label>
-      <div id="reflection-error" class="bad" style="min-height:22px;margin-top:8px"></div>
-      <div class="row-actions" style="margin-top:12px">
-        <button id="submit-reflection" class="primary-btn">Begin Era ${report.nextEra}</button>
-      </div>
-    `, () => {
-      this.dialogCloseBtn.hidden = true;
-      this.dialogBody.querySelector("#submit-reflection").addEventListener("click", () => {
-        const text = this.dialogBody.querySelector("#era-reflection").value;
-        const result = this.game.submitEraReflection(text);
-        if (!result.ok) {
-          this.dialogBody.querySelector("#reflection-error").textContent = result.reason;
-          return;
-        }
-        this.reportDialogId = null;
-        this.closeDialog();
-      });
-    });
   }
 
   showVictory() {
@@ -943,12 +1161,12 @@ class GameUI {
     this.dialogTitle.textContent = title;
     this.dialogBody.innerHTML = html;
     this.dialogBackdrop.hidden = false;
-    if (!this.game.pendingEraReport && !this.game.gameOver) this.dialogCloseBtn.hidden = false;
+    if (!this.game.gameOver) this.dialogCloseBtn.hidden = false;
     if (onMount) onMount();
   }
 
   closeDialog() {
-    if (this.game.pendingEraReport || this.game.gameOver) return;
+    if (this.game.gameOver) return;
     this.dialogBackdrop.hidden = true;
     this.dialogBody.innerHTML = "";
     this.dialogCloseBtn.hidden = false;
@@ -997,6 +1215,24 @@ function savePanelState(state) {
     side: Boolean(state.side),
     bottom: Boolean(state.bottom),
   }));
+}
+
+function loadSideSectionState() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(SIDE_SECTION_STATE_KEY) || "null");
+    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SIDE_SECTION_STATE };
+    return Object.fromEntries(
+      Object.entries(DEFAULT_SIDE_SECTION_STATE).map(([key, defaultValue]) => [key, parsed[key] ?? defaultValue])
+    );
+  } catch {
+    return { ...DEFAULT_SIDE_SECTION_STATE };
+  }
+}
+
+function saveSideSectionState(state) {
+  sessionStorage.setItem(SIDE_SECTION_STATE_KEY, JSON.stringify(Object.fromEntries(
+    Object.keys(DEFAULT_SIDE_SECTION_STATE).map((key) => [key, Boolean(state[key])])
+  )));
 }
 
 function resourceRow({

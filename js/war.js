@@ -11,6 +11,37 @@ import { applyWarDiplomacyPenalty, areAllied, disruptTradeRoutes, getDiplomacy }
 import { militaryPower } from "./nation.js";
 import { BALANCE } from "./balance.js";
 
+const UNIT_TYPE_PRIORITY = ["air", "tanks", "naval", "infantry"];
+
+export function normalizeUnitType(type) {
+  const value = String(type || "infantry").toLowerCase();
+  if (value === "tank") return "tanks";
+  if (value === "navy" || value === "fleet") return "naval";
+  if (value === "aircraft" || value === "planes" || value === "plane") return "air";
+  return BALANCE.unitTypes[value] ? value : "infantry";
+}
+
+export function unitTypeConfig(type) {
+  const id = normalizeUnitType(type);
+  return BALANCE.unitTypes[id] || BALANCE.unitTypes.infantry;
+}
+
+export function primaryUnitType(unit) {
+  if (!unit?.strength) return "infantry";
+  const branches = unit.branches || {};
+  if (!Object.keys(branches).length) return normalizeUnitType(unit.branch);
+  let best = normalizeUnitType(unit.branch);
+  let bestStrength = -1;
+  for (const branch of UNIT_TYPE_PRIORITY) {
+    const strength = Math.max(0, Number(branches[branch] || 0));
+    if (strength > bestStrength || (strength === bestStrength && UNIT_TYPE_PRIORITY.indexOf(branch) < UNIT_TYPE_PRIORITY.indexOf(best))) {
+      best = branch;
+      bestStrength = strength;
+    }
+  }
+  return bestStrength > 0 ? normalizeUnitType(best) : normalizeUnitType(unit.branch);
+}
+
 export function warRecordKey(a, b) {
   return pairKey(a, b);
 }
@@ -167,27 +198,111 @@ export function warUpkeep(game, nationId) {
   return Math.ceil(base * mobilizationConfig(nation).upkeepMultiplier);
 }
 
-export function getAdjacentMilitaryActions(game, fromTileId, nationId) {
+export function getValidMilitaryActionsFromTile(game, fromTileId, nationId) {
   const from = game.tileById(fromTileId);
-  if (!from || from.ownerId !== nationId || !from.unit?.strength) return [];
-  const actions = [];
-  for (const coord of axialNeighbors(from.q, from.r)) {
-    const target = game.tileAt(coord.q, coord.r);
-    if (!target) continue;
-    const pass = canEnterTile(game, nationId, target);
-    if (!pass.ok) continue;
-    let action = "move";
-    if (target.ownerId && target.ownerId !== nationId) action = areAtWar(game, nationId, target.ownerId) ? "attack" : "blocked";
-    if (action === "blocked") continue;
-    actions.push({ action, fromTileId, toTileId: target.id, label: target.ownerId ? "Attack" : "Move" });
+  if (!from || from.ownerId !== nationId || !from.unit?.strength) {
+    return { fromTileId, nationId, moveTargets: [], attackTargets: [], actions: [] };
   }
-  return actions;
+  const unitType = primaryUnitType(from.unit);
+  const config = unitTypeConfig(unitType);
+  const base = {
+    fromTileId,
+    nationId,
+    unitType,
+    unitTypeLabel: config.label,
+    moveRange: config.moveRange,
+    attackRange: config.attackRange,
+    moveTargets: [],
+    attackTargets: [],
+    actions: [],
+  };
+  if ((game.nations[nationId]?.actionsRemaining || 0) <= 0) return base;
+  if (from.unit.movedTurn === game.turn) return base;
+
+  const actions = [];
+  const moveTargets = reachableMoveTargets(game, from, nationId, unitType);
+  const attackTargets = reachableAttackTargets(game, from, nationId, unitType);
+
+  for (const target of moveTargets) {
+    const movementCost = target.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
+    if ((game.nations[nationId]?.money || 0) < movementCost) continue;
+    const entry = {
+      action: "move",
+      fromTileId,
+      toTileId: target.id,
+      label: "Move",
+      cost: movementCost,
+      unitType,
+      unitTypeLabel: config.label,
+      range: hexDistance(from, target),
+      path: target.path || [from.id, target.id],
+      captureOnWin: false,
+    };
+    actions.push(entry);
+    base.moveTargets.push(entry);
+  }
+
+  for (const target of attackTargets) {
+    const movementCost = target.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
+    if ((game.nations[nationId]?.money || 0) < movementCost) continue;
+    const distance = hexDistance(from, target);
+    const entry = {
+      action: "attack",
+      fromTileId,
+      toTileId: target.id,
+      label: "Attack",
+      cost: movementCost,
+      unitType,
+      unitTypeLabel: config.label,
+      range: distance,
+      path: target.path || [from.id, target.id],
+      captureOnWin: Boolean(config.capturesTerritory && distance <= 1),
+    };
+    actions.push(entry);
+    base.attackTargets.push(entry);
+  }
+
+  base.actions = actions;
+  return base;
+}
+
+export function getValidMoveTargets(game, fromTileId, nationId) {
+  return getValidMilitaryActionsFromTile(game, fromTileId, nationId).moveTargets;
+}
+
+export function getValidAttackTargets(game, fromTileId, nationId) {
+  return getValidMilitaryActionsFromTile(game, fromTileId, nationId).attackTargets;
+}
+
+export function getAdjacentMilitaryActions(game, fromTileId, nationId) {
+  return getValidMilitaryActionsFromTile(game, fromTileId, nationId).actions;
 }
 
 export function canEnterTile(game, nationId, tile) {
   if (!tile) return { ok: false, reason: "No tile." };
   if (tile.type === TILE_TYPES.WATER && !hasNavalAccess(game.nations[nationId])) {
     return { ok: false, reason: "Water crossing requires naval specialization." };
+  }
+  if (!tile.ownerId || tile.ownerId === nationId || areAllied(game, nationId, tile.ownerId) || areAtWar(game, nationId, tile.ownerId)) {
+    return { ok: true };
+  }
+  return { ok: false, reason: "Foreign territory requires war or alliance." };
+}
+
+export function canUnitEnterTile(game, nationId, tile, unitType = "infantry") {
+  const config = unitTypeConfig(unitType);
+  if (!tile) return { ok: false, reason: "No tile." };
+  if (tile.type === TILE_TYPES.MOUNTAIN) {
+    return { ok: false, reason: "Mountains cannot be traversed. Only aircraft can fly over them." };
+  }
+  if (tile.type === TILE_TYPES.WATER && !config.canEnterWater) {
+    return { ok: false, reason: `${config.label} cannot enter water.` };
+  }
+  if (tile.type === TILE_TYPES.WATER && !hasNavalAccess(game.nations[nationId])) {
+    return { ok: false, reason: "Water crossing requires naval specialization." };
+  }
+  if (config.coastalOnly && tile.type !== TILE_TYPES.WATER && !isCoastalTile(game, tile)) {
+    return { ok: false, reason: `${config.label} can only operate on water or coastal tiles.` };
   }
   if (!tile.ownerId || tile.ownerId === nationId || areAllied(game, nationId, tile.ownerId) || areAtWar(game, nationId, tile.ownerId)) {
     return { ok: true };
@@ -239,10 +354,11 @@ export function nearestEnemyTile(game, nationId) {
   return best;
 }
 
-export function resolveCombat(game, attackerId, defenderId, attackingStrength, defendingStrength, targetTile, fromTile = null) {
+export function resolveCombat(game, attackerId, defenderId, attackingStrength, defendingStrength, targetTile, fromTile = null, unitType = "infantry") {
   const attacker = game.nations[attackerId];
   const defender = game.nations[defenderId];
   const combat = BALANCE.war.combat;
+  const unitConfig = unitTypeConfig(unitType);
   const attackerBranch =
     attacker.tech.branches.tanks * combat.attackerTankPower +
     attacker.tech.branches.air * combat.attackerAirPower +
@@ -253,7 +369,7 @@ export function resolveCombat(game, attackerId, defenderId, attackingStrength, d
     defender.tech.military * combat.militaryTechPower;
   const supply = attackSupplyModifier(game, attackerId, targetTile, fromTile);
   const tileDefense = tileDefenseModifier(targetTile);
-  const baseAttack = (attackingStrength + attackerBranch) * combatEffectivenessMultiplier(attacker);
+  const baseAttack = (attackingStrength + attackerBranch) * combatEffectivenessMultiplier(attacker) * unitConfig.attackMultiplier;
   const baseDefense = (defendingStrength + defenderBranch) * combatEffectivenessMultiplier(defender);
   const attack = baseAttack * supply.multiplier;
   const defense = baseDefense * tileDefense.multiplier + tileDefense.flatBonus;
@@ -274,6 +390,11 @@ export function resolveCombat(game, attackerId, defenderId, attackingStrength, d
       tileDefense,
       baseAttack,
       baseDefense,
+      unitType: {
+        id: normalizeUnitType(unitType),
+        label: unitConfig.label,
+        attackMultiplier: unitConfig.attackMultiplier,
+      },
     },
     survivingAttackStrength: attackerWins ? Math.max(1, attackingStrength - losses.attacker) : 0,
     survivingDefenseStrength: attackerWins ? 0 : Math.max(1, defendingStrength - losses.defender),
@@ -448,4 +569,72 @@ export function adjacentOwnedMilitaryBases(game, tile, nationId) {
   return axialNeighbors(tile.q, tile.r)
     .map((coord) => game.tileAt(coord.q, coord.r))
     .filter((neighbor) => neighbor?.ownerId === nationId && neighbor.type === TILE_TYPES.MILITARY);
+}
+
+function reachableMoveTargets(game, from, nationId, unitType) {
+  const config = unitTypeConfig(unitType);
+  if (config.ignoresTerrainForMovement) {
+    return game.tiles
+      .filter((tile) => tile.id !== from.id && hexDistance(from, tile) <= config.moveRange)
+      .filter((tile) => canMoveDestination(game, from, tile, nationId, unitType))
+      .map((tile) => ({ ...tile, path: [from.id, tile.id] }));
+  }
+
+  const queue = [{ tile: from, path: [from.id], distance: 0 }];
+  const seen = new Map([[from.id, 0]]);
+  const targets = [];
+  while (queue.length) {
+    const current = queue.shift();
+    if (current.distance >= config.moveRange) continue;
+    for (const coord of axialNeighbors(current.tile.q, current.tile.r)) {
+      const next = game.tileAt(coord.q, coord.r);
+      if (!next) continue;
+      const nextDistance = current.distance + 1;
+      if ((seen.get(next.id) ?? Infinity) <= nextDistance) continue;
+      if (!canUnitEnterTile(game, nationId, next, unitType).ok) continue;
+      if (next.ownerId && next.ownerId !== nationId && !areAllied(game, nationId, next.ownerId)) continue;
+      const path = [...current.path, next.id];
+      seen.set(next.id, nextDistance);
+      if (!next.ownerId || next.ownerId === nationId) targets.push({ ...next, path });
+      if (next.ownerId === nationId || areAllied(game, nationId, next.ownerId) || (config.canEnterWater && next.type === TILE_TYPES.WATER)) {
+        queue.push({ tile: next, path, distance: nextDistance });
+      }
+    }
+  }
+  return targets;
+}
+
+function reachableAttackTargets(game, from, nationId, unitType) {
+  const config = unitTypeConfig(unitType);
+  return game.tiles
+    .filter((tile) => tile.id !== from.id && hexDistance(from, tile) <= config.attackRange)
+    .filter((tile) => tile.ownerId && tile.ownerId !== nationId && areAtWar(game, nationId, tile.ownerId))
+    .filter((tile) => canUnitAttackTile(game, nationId, tile, unitType))
+    .map((tile) => ({ ...tile, path: [from.id, tile.id] }));
+}
+
+function canMoveDestination(game, from, tile, nationId, unitType) {
+  if (!tile || tile.id === from.id) return false;
+  if (!canUnitEnterTile(game, nationId, tile, unitType).ok) return false;
+  if (tile.ownerId && tile.ownerId !== nationId) return false;
+  if (!tile.ownerId && tile.type !== TILE_TYPES.WATER && !bordersNation(game, tile, nationId)) return false;
+  return tile.type !== TILE_TYPES.WATER || unitTypeConfig(unitType).canEnterWater;
+}
+
+function canUnitAttackTile(game, nationId, tile, unitType) {
+  const config = unitTypeConfig(unitType);
+  if (tile.type === TILE_TYPES.WATER && !config.canEnterWater && unitType !== "air") return false;
+  if (config.coastalOnly && tile.type !== TILE_TYPES.WATER && !isCoastalTile(game, tile)) return false;
+  if (unitType === "tanks" && tile.type === TILE_TYPES.WATER) return false;
+  if (unitType === "infantry" && tile.type === TILE_TYPES.WATER) return false;
+  return true;
+}
+
+function isCoastalTile(game, tile) {
+  if (!tile || tile.type === TILE_TYPES.WATER) return true;
+  return axialNeighbors(tile.q, tile.r).some((coord) => game.tileAt(coord.q, coord.r)?.type === TILE_TYPES.WATER);
+}
+
+function bordersNation(game, tile, nationId) {
+  return axialNeighbors(tile.q, tile.r).some((coord) => game.tileAt(coord.q, coord.r)?.ownerId === nationId);
 }

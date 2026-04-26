@@ -239,6 +239,53 @@ export const BALANCE = {
     militaryTech: 6,
   },
 
+  unitTypes: {
+    infantry: {
+      label: "Infantry",
+      moveRange: 1,
+      attackRange: 1,
+      attackMultiplier: 1,
+      canEnterWater: false,
+      coastalOnly: false,
+      ignoresTerrainForMovement: false,
+      capturesTerritory: true,
+      animation: "infantry",
+    },
+    tanks: {
+      label: "Tanks",
+      moveRange: 2,
+      attackRange: 1,
+      attackMultiplier: 1.35,
+      canEnterWater: false,
+      coastalOnly: false,
+      ignoresTerrainForMovement: false,
+      capturesTerritory: true,
+      animation: "tank",
+    },
+    naval: {
+      label: "Naval Fleet",
+      moveRange: 3,
+      attackRange: 2,
+      attackMultiplier: 1.2,
+      canEnterWater: true,
+      coastalOnly: true,
+      ignoresTerrainForMovement: false,
+      capturesTerritory: true,
+      animation: "navy",
+    },
+    air: {
+      label: "Aircraft",
+      moveRange: 4,
+      attackRange: 4,
+      attackMultiplier: 1.5,
+      canEnterWater: false,
+      coastalOnly: false,
+      ignoresTerrainForMovement: true,
+      capturesTerritory: false,
+      animation: "aircraft",
+    },
+  },
+
   trade: {
     alliances: {
       trade: {

@@ -1,5 +1,6 @@
 import {
   BUILDING_TYPES,
+  MAX_ACTIONS_PER_TURN,
   TILE_TYPES,
   WORKER_ROLES,
   isTileActive,
@@ -54,6 +55,8 @@ export function createNation({
     profile,
     personality,
     active: true,
+    actionsRemaining: MAX_ACTIONS_PER_TURN,
+    actionsUsedThisTurn: 0,
     capitalTileId: null,
     territory: [],
     warExhaustion: BALANCE.war.exhaustion.min,
@@ -240,9 +243,16 @@ export function restoreNation(data) {
   const nation = JSON.parse(JSON.stringify(data));
   return {
     ...nation,
+    actionsRemaining: normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN),
+    actionsUsedThisTurn: normalizeActionCount(nation.actionsUsedThisTurn, 0),
     warExhaustion: normalizeWarExhaustion(nation.warExhaustion),
     mobilizationLevel: normalizeMobilizationLevel(nation.mobilizationLevel),
   };
+}
+
+function normalizeActionCount(value, fallback) {
+  const numeric = Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(0, Math.min(MAX_ACTIONS_PER_TURN, numeric));
 }
 
 function normalizeWarExhaustion(value) {

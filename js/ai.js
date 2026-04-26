@@ -1,8 +1,8 @@
 import { TILE_TYPES, WORKER_MIN, pickWeighted, randInt } from "./utils.js";
 import { activeTiles, militaryPower } from "./nation.js";
 import { canResearch, canResearchBranch } from "./tech.js";
-import { applyTrade, getDiplomacy, proposeAlliance } from "./trade.js";
-import { canStrategicallyDeclare, declareWar, nearestEnemyTile } from "./war.js";
+import { getDiplomacy } from "./trade.js";
+import { canStrategicallyDeclare, nearestEnemyTile } from "./war.js";
 
 // First type in each list is built first each turn (overridden temporarily by food pressure)
 const PERSONALITY_BUILD_ORDER = {
@@ -67,6 +67,7 @@ function staffCriticalTiles(game, bot) {
       return aNeed - bNeed;
     });
   for (const tile of priority) {
+    if (!game.canSpendAction(bot.id).ok) break;
     const need = WORKER_MIN[tile.type] - tile.workers;
     if (need <= 0 || bot.population.available <= 0) continue;
     game.assignWorkers(tile.id, Math.min(need, bot.population.available), bot.id, { silent: true });
@@ -121,18 +122,16 @@ function tryDiplomacy(game, bot) {
   if (relation > 62 && game.rng() < 0.35) {
     // Aggressive seeks military pacts; others prefer trade or research agreements
     const allianceType = bot.personality === "aggressive" ? "military" : "trade";
-    const result = proposeAlliance(game, bot.id, partner.id, allianceType);
+    const result = game.proposeAlliance(partner.id, allianceType, bot.id);
     if (result.ok && result.accepted) {
-      game.addEvent(`${bot.name} formed an alliance with ${partner.name}.`, { nationId: bot.id, type: "diplomacy" });
       return true;
     }
   }
 
   const offer = chooseTradeOffer(bot, game);
   const request = chooseTradeRequest(bot, partner);
-  const result = applyTrade(game, bot.id, partner.id, offer, request);
+  const result = game.trade(partner.id, offer, request, bot.id);
   if (result.ok && result.accepted) {
-    game.addEvent(`${bot.name} completed a trade with ${partner.name}.`, { nationId: bot.id, type: "trade" });
     return true;
   }
   return false;
@@ -241,9 +240,8 @@ function tryDeclareWar(game, bot) {
   if (!targets.length) return false;
   // Always target the weakest available opponent
   const target = targets.sort((a, b) => militaryPower(a, game.tiles) - militaryPower(b, game.tiles))[0];
-  const result = declareWar(game, bot.id, target.id, "AI strategic opportunity");
+  const result = game.declareWar(target.id, bot.id, "AI strategic opportunity");
   if (result.ok) {
-    game.addEvent(`${bot.name} declared war on ${target.name}.`, { nationId: bot.id, type: "war" });
     return true;
   }
   return false;

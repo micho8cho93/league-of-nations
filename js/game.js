@@ -1,5 +1,6 @@
 import {
   BUILDING_TYPES,
+  MAX_ACTIONS_PER_TURN,
   SAVE_KEY,
   SAVE_VERSION,
   TILE_TYPES,
@@ -12,6 +13,7 @@ import {
   isLand,
   isTileActive,
   mulberry32,
+  nationColor,
   pairKey,
   randomSeed,
   tileId,
@@ -65,19 +67,83 @@ import {
   applyWarExhaustionIncome,
   applyWarExhaustionProduction,
   areAtWar,
-  canEnterTile,
   declareWar as declareWarHelper,
   defenderStrength,
   endWar,
   findPath,
   getAdjacentMilitaryActions,
+  getValidAttackTargets,
+  getValidMilitaryActionsFromTile,
+  getValidMoveTargets,
+  primaryUnitType,
   resolveCombat,
   siegeRequirementForTile,
+  unitTypeConfig,
   updateWarReadinessForTurn,
   warUpkeep,
 } from "./war.js";
 import { maybeRunGlobalEvent, scheduleEraEvent, tickTileEffects } from "./events.js";
 import { processBotTurn } from "./ai.js";
+
+function unitBranches(unit) {
+  if (!unit) return {};
+  const branches = {};
+  for (const [branch, strength] of Object.entries(unit.branches || {})) {
+    const amount = Math.max(0, Math.floor(Number(strength) || 0));
+    if (amount > 0) branches[branch] = amount;
+  }
+  const total = Object.values(branches).reduce((sum, amount) => sum + amount, 0);
+  const strength = Math.max(0, Math.floor(Number(unit.strength) || 0));
+  if (strength > 0 && total <= 0) branches[unit.branch || "infantry"] = strength;
+  return branches;
+}
+
+function trimUnitBranches(unit) {
+  if (!unit?.strength) return unit;
+  const strength = Math.max(0, Math.floor(Number(unit.strength) || 0));
+  const branches = unitBranches(unit);
+  const ordered = [...new Set([unit.branch || "infantry", "infantry", "tanks", "air", "naval", ...Object.keys(branches)])];
+  let remaining = strength;
+  const trimmed = {};
+  for (const branch of ordered) {
+    if (remaining <= 0) break;
+    const keep = Math.min(branches[branch] || 0, remaining);
+    if (keep > 0) {
+      trimmed[branch] = keep;
+      remaining -= keep;
+    }
+  }
+  if (remaining > 0) trimmed[unit.branch || "infantry"] = (trimmed[unit.branch || "infantry"] || 0) + remaining;
+  unit.strength = strength;
+  unit.branches = trimmed;
+  if (!unit.branch || !trimmed[unit.branch]) {
+    unit.branch = Object.keys(trimmed).find((branch) => branch !== "infantry") || "infantry";
+  }
+  return unit;
+}
+
+function mergeUnitInto(target, moving, nationId, turn) {
+  const unit = target || { nationId, strength: 0, branch: moving.branch || "infantry", movedTurn: turn, branches: {} };
+  const branches = unitBranches(unit);
+  for (const [branch, strength] of Object.entries(unitBranches(moving))) {
+    branches[branch] = (branches[branch] || 0) + strength;
+  }
+  unit.nationId = nationId;
+  unit.strength = (unit.strength || 0) + (moving.strength || 0);
+  unit.branches = branches;
+  unit.movedTurn = turn;
+  if (moving.branch !== "infantry" || !unit.branch) unit.branch = moving.branch || unit.branch || "infantry";
+  return trimUnitBranches(unit);
+}
+
+function addUnitBranch(unit, branch, amount) {
+  const branches = unitBranches(unit);
+  branches[branch] = (branches[branch] || 0) + amount;
+  unit.branches = branches;
+  unit.strength = (unit.strength || 0) + amount;
+  if (branch !== "infantry" || !unit.branch) unit.branch = branch;
+  return trimUnitBranches(unit);
+}
 
 export class GameState {
   constructor(data) {
@@ -91,6 +157,7 @@ export class GameState {
     this.map = data.map;
     this.tiles = this.map.tiles;
     this.tileIndex = buildTileIndex(this.tiles);
+    this.assignNationVisualColors();
     this.diplomacy = data.diplomacy || {};
     this.wars = data.wars || {};
     this.sieges = data.sieges || {};
@@ -110,6 +177,7 @@ export class GameState {
     this.eraStartSnapshot = data.eraStartSnapshot || this.createSnapshot();
     this.startedAt = data.startedAt || Date.now();
     this.turnStartedAt = Date.now();
+    this.normalizeActionStates();
     this.recomputeTerritories();
     scheduleEraEvent(this, this.era);
   }
@@ -121,23 +189,10 @@ export class GameState {
     const profiles = profileSequence(settings.nationCount);
     const nations = {};
     const botIds = [];
-    const colors = [
-      "#55c6a5",
-      "#d95f59",
-      "#6c8ff0",
-      "#d7b84f",
-      "#a875d6",
-      "#e58a42",
-      "#3fb7c4",
-      "#d66aa2",
-      "#7cc46b",
-      "#c9a5ff",
-    ];
-
     const player = createNation({
       id: "player",
       name: settings.playerName,
-      color: colors[0],
+      color: nationColor(0),
       isPlayer: true,
       profile: profiles[0],
       personality: "balanced",
@@ -149,7 +204,7 @@ export class GameState {
       const bot = createNation({
         id: `bot-${i}`,
         name: BOT_NAMES[i - 1] || `Nation ${i + 1}`,
-        color: colors[i % colors.length],
+        color: nationColor(i),
         isPlayer: false,
         profile: profiles[i],
         personality: personalities[i - 1],
@@ -174,12 +229,23 @@ export class GameState {
     return game;
   }
 
+  assignNationVisualColors() {
+    const orderedIds = [
+      this.playerId,
+      ...this.botIds,
+      ...Object.keys(this.nations).filter((id) => id !== this.playerId && !this.botIds.includes(id)),
+    ];
+    orderedIds.forEach((id, index) => {
+      if (this.nations[id]) this.nations[id].color = nationColor(index);
+    });
+  }
+
   static fromSave(saveData) {
     if (!saveData || saveData.version !== SAVE_VERSION) throw new Error("Unsupported save data.");
     const nations = {};
     for (const [id, nation] of Object.entries(saveData.nations || {})) nations[id] = restoreNation(nation);
     const map = deepClone(saveData.map);
-    return new GameState({
+    const game = new GameState({
       settings: saveData.settings,
       turn: saveData.turn,
       era: saveData.era,
@@ -196,13 +262,15 @@ export class GameState {
       alliances: saveData.alliances || [],
       events: saveData.events || [],
       eraReports: saveData.eraReports || [],
-      pendingEraReport: saveData.pendingEraReport || null,
+      pendingEraReport: null,
       globalEvents: saveData.globalEvents || {},
       gameOver: saveData.gameOver || null,
       lastSummary: saveData.lastSummary || null,
       eraStartSnapshot: saveData.eraStartSnapshot || null,
       startedAt: saveData.startedAt || Date.now(),
     });
+    if (saveData.phase && saveData.phase !== "player") game.resetTurnActions(saveData.playerId);
+    return game;
   }
 
   get player() {
@@ -258,6 +326,59 @@ export class GameState {
     this.emit({ type: "selection_changed", tileId: id });
   }
 
+  normalizeActionStates() {
+    for (const nation of Object.values(this.nations)) {
+      nation.actionsRemaining = normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN);
+      nation.actionsUsedThisTurn = normalizeActionCount(nation.actionsUsedThisTurn, 0);
+    }
+  }
+
+  canSpendAction(nationId = this.playerId, amount = 1) {
+    const nation = this.nations[nationId];
+    if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    const cost = Math.max(1, Math.floor(Number(amount) || 1));
+    nation.actionsRemaining = normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN);
+    nation.actionsUsedThisTurn = normalizeActionCount(nation.actionsUsedThisTurn, 0);
+    if (nation.actionsRemaining < cost) return { ok: false, reason: "No actions remaining this turn." };
+    return { ok: true, cost, actionsRemaining: nation.actionsRemaining };
+  }
+
+  spendAction(reason = "action", nationId = this.playerId, { amount = 1, free = false } = {}) {
+    if (free) return { ok: true, free: true, reason };
+    const check = this.canSpendAction(nationId, amount);
+    if (!check.ok) return check;
+    const nation = this.nations[nationId];
+    nation.actionsRemaining -= check.cost;
+    nation.actionsUsedThisTurn += check.cost;
+    this.emit({
+      type: "action_spent",
+      nationId,
+      reason,
+      actionsRemaining: nation.actionsRemaining,
+      actionsUsedThisTurn: nation.actionsUsedThisTurn,
+    });
+    return {
+      ok: true,
+      reason,
+      actionsRemaining: nation.actionsRemaining,
+      actionsUsedThisTurn: nation.actionsUsedThisTurn,
+    };
+  }
+
+  resetTurnActions(nationId = this.playerId) {
+    const nation = this.nations[nationId];
+    if (!nation) return { ok: false, reason: "Nation unavailable." };
+    nation.actionsRemaining = MAX_ACTIONS_PER_TURN;
+    nation.actionsUsedThisTurn = 0;
+    this.emit({
+      type: "actions_reset",
+      nationId,
+      actionsRemaining: nation.actionsRemaining,
+      actionsUsedThisTurn: nation.actionsUsedThisTurn,
+    });
+    return { ok: true, actionsRemaining: nation.actionsRemaining, actionsUsedThisTurn: nation.actionsUsedThisTurn };
+  }
+
   claimableTiles(nationId) {
     const owned = this.tiles.filter((tile) => tile.ownerId === nationId);
     const ids = new Set();
@@ -295,6 +416,8 @@ export class GameState {
   buildTile(tileIdValue, type, nationId = this.playerId, { silent = false } = {}) {
     const check = this.canBuild(tileIdValue, type, nationId);
     if (!check.ok) return check;
+    const action = this.spendAction("build", nationId);
+    if (!action.ok) return action;
     const nation = this.nations[nationId];
     const tile = this.tileById(tileIdValue);
     if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
@@ -316,7 +439,10 @@ export class GameState {
     if (tile.isCapital) return { ok: false, reason: "Capital tiles cannot be voluntarily destroyed." };
     if (tile.type === TILE_TYPES.EMPTY) return { ok: false, reason: "Tile is already empty." };
     const cost = destroyCost(tile.type);
-    if (!spendMoney(nation, cost)) return { ok: false, reason: `Requires $${cost}.` };
+    if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+    const action = this.spendAction("destroy", nationId);
+    if (!action.ok) return action;
+    spendMoney(nation, cost);
     this.releaseTileWorkers(tile);
     tile.type = TILE_TYPES.EMPTY;
     tile.unit = null;
@@ -352,6 +478,8 @@ export class GameState {
       if (available <= 0) return { ok: false, reason: "No available population." };
       const cost = workerAdminCost(available);
       if (nation.money < cost) return { ok: false, reason: `Requires $${cost} to organize workers.` };
+      const action = this.spendAction("workers", nationId);
+      if (!action.ok) return action;
       nation.money -= cost;
       nation.stats.moneySpent += cost;
       nation.population.available -= available;
@@ -363,6 +491,8 @@ export class GameState {
     }
     const removed = Math.min(tile.workers, Math.abs(delta));
     if (removed <= 0) return { ok: false, reason: "No assigned workers to remove." };
+    const action = this.spendAction("workers", nationId);
+    if (!action.ok) return action;
     tile.workers -= removed;
     nation.workers[role] = Math.max(0, (nation.workers[role] || 0) - removed);
     nation.population.available += removed;
@@ -388,6 +518,8 @@ export class GameState {
     if (nation.resources.materials < cost.materials) return { ok: false, reason: `Requires ${cost.materials} materials.` };
     if (cost.education && nation.resources.education < cost.education) return { ok: false, reason: `Requires ${cost.education} education.` };
     if (cost.industry && nation.resources.industry < cost.industry) return { ok: false, reason: `Requires ${cost.industry} industry.` };
+    const action = this.spendAction("train", nationId);
+    if (!action.ok) return action;
     nation.money -= cost.money;
     nation.population.available -= cost.people;
     nation.resources.materials -= cost.materials;
@@ -396,10 +528,9 @@ export class GameState {
     nation.workers.soldiers += cost.people;
     nation.stats.moneySpent += cost.money;
     nation.military.unitsTrained += amount;
-    tile.unit = tile.unit || { nationId, strength: 0, branch: unitBranch, movedTurn: 0 };
+    tile.unit = tile.unit || { nationId, strength: 0, branch: unitBranch, movedTurn: 0, branches: {} };
     tile.unit.nationId = nationId;
-    if (unitBranch !== "infantry" || !tile.unit.branch) tile.unit.branch = unitBranch;
-    tile.unit.strength += amount;
+    addUnitBranch(tile.unit, unitBranch, amount);
     if (!silent) this.addEvent(`${nation.name} ${unitBranch === "infantry" ? "trained" : "deployed"} ${amount} ${unitBranch} strength.`, { nationId, type: "military", tileId: tile.id });
     this.changed("train");
     return { ok: true, cost };
@@ -418,35 +549,87 @@ export class GameState {
     const nation = this.nations[nationId];
     if (!from || !to || !nation?.active) return { ok: false, reason: "Invalid movement." };
     if (from.ownerId !== nationId || !from.unit?.strength) return { ok: false, reason: "Select a tile with your troops." };
-    if (!this.neighbors(from.id).some((tile) => tile.id === to.id)) return { ok: false, reason: "Units move one adjacent tile at a time." };
-    const gate = canEnterTile(this, nationId, to);
-    if (!gate.ok) return gate;
+    if (from.unit.movedTurn === this.turn) return { ok: false, reason: "This unit has already acted this turn." };
+    const validActions = this.getValidMilitaryActionsFromTile(from.id, nationId).actions;
+    const selectedAction = validActions.find((action) => action.toTileId === to.id);
+    if (!selectedAction) return { ok: false, reason: "That target is out of range for this unit type." };
+    const unitType = selectedAction.unitType || primaryUnitType(from.unit);
+    const unitConfig = unitTypeConfig(unitType);
+    const actionPath = path || selectedAction.path || [from.id, to.id];
 
-    const movementCost = to.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
-    if (!spendMoney(nation, movementCost)) return { ok: false, reason: `Requires $${movementCost} to move troops.` };
+    const movementCost = selectedAction.cost ?? (to.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land);
+    if (nation.money < movementCost) return { ok: false, reason: `Requires $${movementCost} to move troops.` };
+    const action = this.spendAction(selectedAction.action === "attack" ? "attack" : "move", nationId);
+    if (!action.ok) return action;
+    spendMoney(nation, movementCost);
 
-    if (!to.ownerId || to.ownerId === nationId) {
+    if (selectedAction.action === "move") {
       const wasUnowned = !to.ownerId;
       const moving = from.unit;
       this.clearSiegesFromTile(from.id, nationId);
       from.unit = null;
       to.ownerId = nationId;
-      to.unit = to.unit || { nationId, strength: 0, branch: moving.branch, movedTurn: this.turn };
-      to.unit.strength += moving.strength;
-      to.unit.nationId = nationId;
+      to.unit = mergeUnitInto(to.unit, moving, nationId, this.turn);
       if (wasUnowned) nation.stats.tilesCaptured += 1;
       this.recomputeTerritories();
       if (!silent) this.addEvent(`${nation.name} moved troops to a new tile.`, { nationId, type: "war", tileId: to.id });
+      this.emit({
+        type: "unit_animation",
+        action: "move",
+        unitType,
+        unitTypeLabel: unitConfig.label,
+        fromTileId: from.id,
+        targetTileId: to.id,
+        path: actionPath,
+        nationId,
+      });
       this.changed("move");
-      return { ok: true, action: "move" };
+      return { ok: true, action: "move", unitType };
     }
 
     const defenderId = to.ownerId;
     if (!areAtWar(this, nationId, defenderId)) return { ok: false, reason: "Declare war before attacking." };
     const defender = this.nations[defenderId];
+
+    // Advanced war tech (tanks, air, naval) causes no damage and cannot capture territory.
+    // Units are infinite-use: strength is never depleted from attacks.
+    if (unitType !== "infantry") {
+      from.unit.movedTurn = this.turn;
+      const strikeReport = {
+        id: `battle-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        turn: this.turn,
+        attackerId: nationId,
+        defenderId,
+        attackerName: nation.name,
+        defenderName: defender.name,
+        fromTileId: from.id,
+        targetTileId: to.id,
+        path: actionPath,
+        unitType,
+        unitTypeLabel: unitConfig.label,
+        captureAttempt: false,
+        attackerWins: false,
+        attack: 0,
+        defense: 0,
+        modifiers: {},
+        losses: { attacker: 0, defender: 0 },
+        capitalCaptured: false,
+        territoryChanged: false,
+        siege: null,
+        advancedStrike: true,
+      };
+      this.addEvent(
+        `${nation.name} launched a ${unitConfig.label.toLowerCase()} strike on ${defender.name}.`,
+        { nationId, type: "war", tileId: to.id }
+      );
+      this.emit({ type: "battle_report", report: strikeReport });
+      this.changed("battle");
+      return { ok: true, action: "battle", report: strikeReport };
+    }
+
     const attackingStrength = from.unit.strength;
     const defense = defenderStrength(to);
-    const outcome = resolveCombat(this, nationId, defenderId, attackingStrength, defense, to, from);
+    const outcome = resolveCombat(this, nationId, defenderId, attackingStrength, defense, to, from, unitType);
     const report = {
       id: `battle-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       turn: this.turn,
@@ -454,9 +637,13 @@ export class GameState {
       defenderId,
       attackerName: nation.name,
       defenderName: defender.name,
+      fromTileId: from.id,
       targetTileId: to.id,
-      path: path || [from.id, to.id],
+      path: actionPath,
       targetType: to.type,
+      unitType,
+      unitTypeLabel: unitConfig.label,
+      captureAttempt: Boolean(selectedAction.captureOnWin),
       attackerWins: outcome.attackerWins,
       attack: outcome.attack,
       defense: outcome.defense,
@@ -466,15 +653,55 @@ export class GameState {
       territoryChanged: false,
       siege: null,
     };
-    this.applyCombatOutcome(from, to, outcome, nationId, defenderId, report);
+    if (report.captureAttempt) {
+      this.applyCombatOutcome(from, to, outcome, nationId, defenderId, report);
+    } else {
+      this.applyStrikeOutcome(from, to, outcome, nationId, defenderId, report);
+    }
     this.addEvent(
-      `${report.attackerName} ${report.attackerWins ? "won" : "lost"} a battle against ${report.defenderName}.`,
+      `${report.attackerName} ${report.attackerWins ? "won" : "lost"} a ${unitConfig.label.toLowerCase()} attack against ${report.defenderName}.`,
       { nationId, type: "war", tileId: to.id }
     );
     this.emit({ type: "battle_report", report });
     this.checkVictory();
     this.changed("battle");
     return { ok: true, action: "battle", report };
+  }
+
+  applyStrikeOutcome(from, to, outcome, attackerId, defenderId, report) {
+    const attacker = this.nations[attackerId];
+    const defender = this.nations[defenderId];
+    removePopulation(attacker, Math.min(attacker.population.total, outcome.losses.attacker));
+    removePopulation(defender, Math.min(defender.population.total, outcome.losses.defender));
+    this.normalizeTileWorkers(attackerId);
+    this.normalizeTileWorkers(defenderId);
+    applyBattleWarExhaustion(this, attackerId, defenderId, outcome.losses, outcome.attackerWins);
+    attacker.military.unitsLost += outcome.losses.attacker;
+    defender.military.unitsLost += outcome.losses.defender;
+    const war = this.wars[pairKey(attackerId, defenderId)];
+    if (war) war.battles += 1;
+    from.unit.strength = outcome.attackerWins ? outcome.survivingAttackStrength : 0;
+    trimUnitBranches(from.unit);
+    from.unit.movedTurn = this.turn;
+    if (from.unit.strength <= 0) from.unit = null;
+    if (to.unit) {
+      to.unit.strength = outcome.attackerWins
+        ? Math.max(0, to.unit.strength - outcome.losses.defender)
+        : Math.max(1, outcome.survivingDefenseStrength);
+      trimUnitBranches(to.unit);
+      if (to.unit.strength <= 0) to.unit = null;
+    }
+    if (outcome.attackerWins) {
+      attacker.military.battlesWon += 1;
+      defender.military.battlesLost += 1;
+      this.clearSiegesForTile(to.id, attackerId);
+    } else {
+      attacker.military.battlesLost += 1;
+      defender.military.battlesWon += 1;
+    }
+    this.clearSiegesFromTile(from.id, attackerId);
+    report.territoryChanged = false;
+    this.recomputeTerritories();
   }
 
   applyCombatOutcome(from, to, outcome, attackerId, defenderId, report) {
@@ -495,9 +722,11 @@ export class GameState {
       const siege = this.progressSiegeIfNeeded(from, to, outcome, attackerId, defenderId, report);
       if (siege && !siege.completed) {
         from.unit.strength = outcome.survivingAttackStrength;
+        trimUnitBranches(from.unit);
         from.unit.movedTurn = this.turn;
         if (to.unit) {
           to.unit.strength = Math.max(0, to.unit.strength - outcome.losses.defender);
+          trimUnitBranches(to.unit);
           if (to.unit.strength <= 0) to.unit = null;
         }
         this.recomputeTerritories();
@@ -508,7 +737,9 @@ export class GameState {
       this.clearSiegesFromTile(from.id, attackerId);
       to.ownerId = attackerId;
       to.workers = 0;
-      to.unit = { nationId: attackerId, strength: outcome.survivingAttackStrength, branch: from.unit.branch, movedTurn: this.turn };
+      from.unit.strength = outcome.survivingAttackStrength;
+      trimUnitBranches(from.unit);
+      to.unit = { ...from.unit, nationId: attackerId, movedTurn: this.turn };
       from.unit = null;
       attacker.stats.tilesCaptured += 1;
       report.territoryChanged = true;
@@ -530,7 +761,10 @@ export class GameState {
       this.clearSiegesForTile(to.id, attackerId);
       this.clearSiegesFromTile(from.id, attackerId);
       from.unit = null;
-      if (to.unit) to.unit.strength = Math.max(1, outcome.survivingDefenseStrength);
+      if (to.unit) {
+        to.unit.strength = Math.max(1, outcome.survivingDefenseStrength);
+        trimUnitBranches(to.unit);
+      }
     }
     this.recomputeTerritories();
   }
@@ -632,8 +866,11 @@ export class GameState {
   }
 
   declareWar(targetId, nationId = this.playerId, reason = "Player declaration") {
+    const action = this.canSpendAction(nationId);
+    if (!action.ok) return action;
     const result = declareWarHelper(this, nationId, targetId, reason);
     if (result.ok) {
+      this.spendAction("declare-war", nationId);
       this.addEvent(`${this.nations[nationId].name} declared war on ${this.nations[targetId].name}.`, { nationId, type: "war" });
       this.changed("war");
     }
@@ -641,12 +878,16 @@ export class GameState {
   }
 
   trade(partnerId, offer, request, nationId = this.playerId) {
+    const action = this.canSpendAction(nationId);
+    if (!action.ok) return action;
     const result = applyTrade(this, nationId, partnerId, offer, request);
     if (result.ok && result.accepted) {
+      this.spendAction("trade", nationId);
       this.addEvent(`${this.nations[nationId].name} traded with ${this.nations[partnerId].name}.`, { nationId, type: "trade" });
       this.changed("trade");
     }
     if (result.ok && !result.accepted) {
+      this.spendAction("trade", nationId);
       this.addEvent(`${this.nations[partnerId].name} rejected a trade proposal.`, { nationId: partnerId, type: "trade" });
       this.changed("trade");
     }
@@ -654,7 +895,10 @@ export class GameState {
   }
 
   proposeAlliance(partnerId, allianceType = "trade", nationId = this.playerId) {
+    const action = this.canSpendAction(nationId);
+    if (!action.ok) return action;
     const result = proposeAlliance(this, nationId, partnerId, allianceType);
+    if (result.ok) this.spendAction("alliance", nationId);
     if (result.ok && result.accepted) {
       this.addEvent(`${this.nations[nationId].name} formed an alliance with ${this.nations[partnerId].name}.`, { nationId, type: "diplomacy" });
     } else if (result.ok) {
@@ -665,8 +909,11 @@ export class GameState {
   }
 
   breakAlliance(allianceId, nationId = this.playerId) {
+    const action = this.canSpendAction(nationId);
+    if (!action.ok) return action;
     const result = breakAlliance(this, allianceId, nationId);
     if (result.ok) {
+      this.spendAction("break-alliance", nationId);
       this.addEvent(`${this.nations[nationId].name} broke an alliance.`, { nationId, type: "diplomacy" });
       this.changed("alliance");
     }
@@ -674,8 +921,11 @@ export class GameState {
   }
 
   embargo(targetId, nationId = this.playerId) {
+    const action = this.canSpendAction(nationId);
+    if (!action.ok) return action;
     const result = embargoNation(this, nationId, targetId);
     if (result.ok) {
+      this.spendAction("embargo", nationId);
       this.addEvent(`${this.nations[nationId].name} embargoed ${this.nations[targetId].name}.`, { nationId, type: "diplomacy" });
       this.changed("embargo");
     }
@@ -686,6 +936,8 @@ export class GameState {
     const nation = this.nations[nationId];
     const check = canResearch(this, nation, category);
     if (!check.ok) return check;
+    const action = this.spendAction("research", nationId);
+    if (!action.ok) return action;
     if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
     nation.resources[check.requirement.resource] -= check.requirement.resourceCost;
     nation.tech[category] = check.nextTier;
@@ -699,6 +951,8 @@ export class GameState {
     const nation = this.nations[nationId];
     const check = canResearchBranch(this, nation, branch);
     if (!check.ok) return check;
+    const action = this.spendAction("branch-research", nationId);
+    if (!action.ok) return action;
     if (!spendMoney(nation, check.cost.money)) return { ok: false, reason: "Not enough money." };
     for (const resource of ["materials", "education", "industry"]) {
       nation.resources[resource] -= check.cost[resource];
@@ -732,17 +986,13 @@ export class GameState {
 
   async endTurn() {
     if (this.isProcessingTurn || this.gameOver) return;
-    if (this.pendingEraReport) {
-      this.addEvent("Complete the era reflection before continuing.", { type: "system" });
-      this.changed("blocked");
-      return;
-    }
     this.isProcessingTurn = true;
     this.phase = "ai";
     this.changed("phase");
     for (const botId of this.botIds) {
       if (this.gameOver) break;
       if (!this.nations[botId]?.active) continue; // skip eliminated nations
+      this.resetTurnActions(botId);
       await processBotTurn(this, botId);
       this.changed("ai");
       await delay(130);
@@ -750,11 +1000,12 @@ export class GameState {
     this.phase = "round";
     this.changed("phase");
     this.processRound();
-    if (!this.gameOver && !this.pendingEraReport) {
+    if (!this.gameOver) {
       this.turn += 1;
       this.turnStartedAt = Date.now();
       this.phase = "player";
       this.rng = mulberry32((this.settings.seed || 1) + this.turn * 7919 + this.events.length * 131);
+      this.resetTurnActions(this.playerId);
     }
     this.isProcessingTurn = false;
     this.save();
@@ -833,7 +1084,10 @@ export class GameState {
         this.addEvent(`${eraEvent.label}: ${eraEvent.description}`, { type: "global_event" });
         summary.notes.push(`${eraEvent.label}: ${eraEvent.results.slice(0, 3).join("; ")}`);
       }
-      this.pendingEraReport = this.createEraReport(nextEra);
+      this.era = nextEra;
+      this.eraStartSnapshot = this.createSnapshot();
+      scheduleEraEvent(this, this.era);
+      this.addEvent(`Era ${this.era} has begun.`, { nationId: this.playerId, type: "era" });
     }
   }
 
@@ -964,6 +1218,7 @@ export class GameState {
       if (remaining <= 0) break;
       const lost = Math.min(tile.unit.strength, remaining);
       tile.unit.strength -= lost;
+      trimUnitBranches(tile.unit);
       remaining -= lost;
       if (tile.unit.strength <= 0) tile.unit = null;
     }
@@ -1024,6 +1279,7 @@ export class GameState {
     this.turn += 1;
     this.phase = "player";
     this.isProcessingTurn = false;
+    this.resetTurnActions(this.playerId);
     this.save();
     this.changed("era");
     return { ok: true };
@@ -1146,6 +1402,18 @@ export class GameState {
   militaryActions(tileIdValue, nationId = this.playerId) {
     return getAdjacentMilitaryActions(this, tileIdValue, nationId);
   }
+
+  getValidMilitaryActionsFromTile(tileIdValue, nationId = this.playerId) {
+    return getValidMilitaryActionsFromTile(this, tileIdValue, nationId);
+  }
+
+  getValidMoveTargets(tileIdValue, nationId = this.playerId) {
+    return getValidMoveTargets(this, tileIdValue, nationId);
+  }
+
+  getValidAttackTargets(tileIdValue, nationId = this.playerId) {
+    return getValidAttackTargets(this, tileIdValue, nationId);
+  }
 }
 
 export function readSavedGame() {
@@ -1198,6 +1466,11 @@ function applyStockpileDiminishingReturns(nation, resource, amount) {
   const pressure = softCap / current;
   const multiplier = Math.max(BALANCE.stockpiles.minimumMultiplier, pressure);
   return Math.max(1, Math.ceil(amount * multiplier));
+}
+
+function normalizeActionCount(value, fallback) {
+  const numeric = Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(0, Math.min(MAX_ACTIONS_PER_TURN, numeric));
 }
 
 function diffSnapshots(before, after) {
