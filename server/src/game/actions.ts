@@ -43,6 +43,15 @@ export const SERVER_PLAYER_ACTION_TYPES = [
 ] as const;
 
 const MAX_ACTIONS_PER_TURN = 10;
+const DEFAULT_HAPPINESS = 65;
+
+const HAPPINESS_BANDS = [
+  { min: 80, label: "Thriving", workRate: 1.08, stoppageChance: 0, militaryRefusalChance: 0 },
+  { min: 65, label: "Content", workRate: 1, stoppageChance: 0, militaryRefusalChance: 0 },
+  { min: 45, label: "Uneasy", workRate: 0.9, stoppageChance: 0, militaryRefusalChance: 0 },
+  { min: 25, label: "Unhappy", workRate: 0.75, stoppageChance: 0.2, militaryRefusalChance: 0.15 },
+  { min: 0, label: "Unrest", workRate: 0.55, stoppageChance: 0.4, militaryRefusalChance: 0.35 },
+];
 
 const TILE_TYPES = {
   EMPTY: "empty",
@@ -574,6 +583,8 @@ function moveOrAttackUnit(game: ServerGameState, fromTileId: string, toTileId: s
 
   const movementCost = selectedAction.cost;
   if (nation.money < movementCost) return { ok: false, reason: `Requires $${movementCost} to move troops.` };
+  const refusal = checkMilitaryRefusal(game, nation, from.id, to.id);
+  if (!refusal.ok) return refusal;
   const action = spendAction(game, nationId, 1);
   if (!action.ok) return action;
   spendMoney(nation, movementCost);
@@ -852,6 +863,36 @@ function spendAction(game: ServerGameState, nationId: string, amount: number): A
   nation.actionsRemaining -= cost;
   nation.actionsUsedThisTurn += cost;
   return { ok: true };
+}
+
+function normalizeHappiness(value: unknown) {
+  const numeric = Number.isFinite(Number(value)) ? Math.round(Number(value)) : DEFAULT_HAPPINESS;
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function happinessBand(nation: Nation) {
+  const happiness = normalizeHappiness(nation.population?.happiness);
+  return HAPPINESS_BANDS.find((band) => happiness >= band.min) || HAPPINESS_BANDS[HAPPINESS_BANDS.length - 1];
+}
+
+function checkMilitaryRefusal(game: ServerGameState, nation: Nation, fromTileId: string, toTileId: string): ActionResult {
+  nation.population.happiness = normalizeHappiness(nation.population.happiness);
+  const band = happinessBand(nation);
+  if (!band.militaryRefusalChance) return { ok: true };
+  const roll = deterministicChance(`${game.gameId || game.roomId}|${game.turn}|${nation.id}|${fromTileId}|${toTileId}|military-refusal`);
+  if (roll >= band.militaryRefusalChance) return { ok: true };
+  const reason = `${nation.name}'s military refused orders amid ${band.label.toLowerCase()} at home.`;
+  addEvent(game, reason, { nationId: nation.id, type: "happiness" });
+  return { ok: false, reason };
+}
+
+function deterministicChance(input: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967296;
 }
 
 function canBuildFactory(game: ServerGameState, nationId: string): ActionResult {

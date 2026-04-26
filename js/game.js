@@ -180,6 +180,7 @@ export class GameState {
     this.startedAt = data.startedAt || Date.now();
     this.turnStartedAt = data.turnStartedAt || Date.now();
     this.normalizeActionStates();
+    this.normalizePopulationStates();
     this.recomputeTerritories();
     scheduleEraEvent(this, this.era);
   }
@@ -298,6 +299,15 @@ export class GameState {
     for (const nation of Object.values(this.nations)) {
       nation.actionsRemaining = normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN);
       nation.actionsUsedThisTurn = normalizeActionCount(nation.actionsUsedThisTurn, 0);
+    }
+  }
+
+  normalizePopulationStates() {
+    for (const nation of Object.values(this.nations)) {
+      nation.population = nation.population || {};
+      nation.population.total = Math.max(0, Math.floor(Number(nation.population.total) || 0));
+      nation.population.available = Math.max(0, Math.floor(Number(nation.population.available) || 0));
+      nation.population.happiness = normalizeHappiness(nation.population.happiness);
     }
   }
 
@@ -537,6 +547,8 @@ export class GameState {
 
     const movementCost = selectedAction.cost ?? (isWaterLike(to) ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land);
     if (nation.money < movementCost) return { ok: false, reason: `Requires $${movementCost} to move troops.` };
+    const refusal = this.checkMilitaryRefusal(nationId);
+    if (!refusal.ok) return refusal;
     const action = this.spendAction(selectedAction.action === "attack" ? "attack" : "move", nationId);
     if (!action.ok) return action;
     spendMoney(nation, movementCost);
@@ -644,6 +656,15 @@ export class GameState {
     this.checkVictory();
     this.changed("battle");
     return { ok: true, action: "battle", report };
+  }
+
+  checkMilitaryRefusal(nationId) {
+    const nation = this.nations[nationId];
+    const band = happinessBand(nation);
+    if (!band.militaryRefusalChance || this.rng() >= band.militaryRefusalChance) return { ok: true };
+    const reason = `${nation.name}'s military refused orders amid ${band.label.toLowerCase()} at home.`;
+    this.addEvent(reason, { nationId, type: "happiness" });
+    return { ok: false, reason };
   }
 
   applyStrikeOutcome(from, to, outcome, attackerId, defenderId, report) {
@@ -1018,13 +1039,16 @@ export class GameState {
       education: 0,
       industry: 0,
       population: 0,
+      happiness: 0,
       deaths: 0,
       upkeep: 0,
       notes: [],
     };
 
     const foodProducedByNation = {};
+    const happinessContexts = {};
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
+      happinessContexts[nation.id] = { unpaidUpkeep: 0 };
       const warReadiness = updateWarReadinessForTurn(this, nation.id);
       const upkeep = warUpkeep(this, nation.id);
       if (upkeep > 0) {
@@ -1036,6 +1060,7 @@ export class GameState {
         if (paid < upkeep) {
           const deserters = Math.ceil((upkeep - paid) / BALANCE.war.deserterShortfallDivisor);
           this.reduceNationUnits(nation.id, deserters);
+          happinessContexts[nation.id].unpaidUpkeep += upkeep - paid;
           summary.notes.push(`${nation.name} could not fully fund the war effort.`);
         }
       }
@@ -1045,6 +1070,7 @@ export class GameState {
         nation.money -= paid;
         nation.stats.moneySpent += paid;
         summary.upkeep += paid;
+        if (paid < populationUpkeep) happinessContexts[nation.id].unpaidUpkeep += populationUpkeep - paid;
       }
       const foodProduced = this.produceForNation(nation, summary);
       foodProducedByNation[nation.id] = foodProduced;
@@ -1054,7 +1080,7 @@ export class GameState {
 
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
       const routeFood = tradeResult.foodProduced[nation.id] || 0;
-      this.consumeFood(nation, summary, (foodProducedByNation[nation.id] || 0) + routeFood);
+      this.consumeFood(nation, summary, (foodProducedByNation[nation.id] || 0) + routeFood, happinessContexts[nation.id] || {});
     }
 
     for (const alliance of expireAlliances(this)) {
@@ -1092,9 +1118,14 @@ export class GameState {
     for (const tile of this.tiles.filter((item) => item.ownerId === nation.id)) {
       const production = productionForTile(nation, tile, this.era);
       if (!production) continue;
+      const band = happinessBand(nation);
+      if (band.stoppageChance && this.rng() < band.stoppageChance) {
+        if (nation.isPlayer) summary.notes.push(`${nation.name}: unhappy workers stopped work on a ${typeLabel(tile.type)}.`);
+        continue;
+      }
       if (tile.type === TILE_TYPES.FACTORY) {
         if (nation.resources.materials < production.materialsCost || nation.resources.education < production.educationCost) {
-          const fallbackIncome = applyWarExhaustionIncome(nation, BALANCE.costs.factoryFallbackMoney);
+          const fallbackIncome = applyHappinessProduction(nation, applyWarExhaustionIncome(nation, BALANCE.costs.factoryFallbackMoney));
           earnMoney(nation, fallbackIncome);
           summary.money += fallbackIncome;
           continue;
@@ -1105,7 +1136,8 @@ export class GameState {
       for (const resource of ["food", "materials", "education", "industry"]) {
         if (production[resource]) {
           const exhaustedProduction = applyWarExhaustionProduction(nation, production[resource]);
-          const produced = applyStockpileDiminishingReturns(nation, resource, exhaustedProduction);
+          const happyProduction = applyHappinessProduction(nation, exhaustedProduction);
+          const produced = applyStockpileDiminishingReturns(nation, resource, happyProduction);
           nation.resources[resource] += produced;
           nation.stats.resourcesProduced += produced;
           summary[resource] += produced;
@@ -1114,7 +1146,7 @@ export class GameState {
         }
       }
       if (production.money) {
-        const income = applyWarExhaustionIncome(nation, production.money);
+        const income = applyHappinessProduction(nation, applyWarExhaustionIncome(nation, production.money));
         earnMoney(nation, income);
         summary.money += income;
       }
@@ -1132,7 +1164,7 @@ export class GameState {
     return foodProduced;
   }
 
-  consumeFood(nation, summary, foodProduced) {
+  consumeFood(nation, summary, foodProduced, happinessContext = {}) {
     // Each person consumes food every turn; rate rises slightly each era (urbanization costs more).
     const consumption = foodConsumptionFor(nation, this.era);
     summary.foodConsumed += consumption;
@@ -1151,6 +1183,14 @@ export class GameState {
       if (removed > 0) {
         this.addEvent(`${nation.name} lost ${removed} people to famine.`, { nationId: nation.id, type: "resource" });
       }
+      this.updatePopulationHappiness(nation, summary, {
+        ...happinessContext,
+        foodProduced,
+        consumption,
+        surplus: foodProduced - consumption,
+        deaths: removed,
+        famine: true,
+      });
       // Famine blocks growth — return early
       return;
     }
@@ -1158,6 +1198,14 @@ export class GameState {
     // Per-turn surplus: how much more food was produced than consumed this turn.
     // Growth is driven by surplus flow, not stockpile size.
     const surplus = foodProduced - consumption;
+    this.updatePopulationHappiness(nation, summary, {
+      ...happinessContext,
+      foodProduced,
+      consumption,
+      surplus,
+      deaths: 0,
+      famine: false,
+    });
 
     if (surplus < BALANCE.population.growth.minimumFoodSurplus) {
       // Production cannot keep up with consumption; stockpile is absorbing the gap.
@@ -1204,6 +1252,18 @@ export class GameState {
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
+    }
+  }
+
+  updatePopulationHappiness(nation, summary, context) {
+    const before = normalizeHappiness(nation.population.happiness);
+    const delta = populationHappinessDelta(this, nation, context);
+    const after = normalizeHappiness(before + delta);
+    nation.population.happiness = after;
+    const changed = after - before;
+    summary.happiness += changed;
+    if (changed <= -6 && nation.isPlayer) {
+      this.addEvent(`${nation.name}'s population happiness fell to ${after}.`, { nationId: nation.id, type: "happiness" });
     }
   }
 
@@ -1413,6 +1473,53 @@ function applyStockpileDiminishingReturns(nation, resource, amount) {
   const pressure = softCap / current;
   const multiplier = Math.max(BALANCE.stockpiles.minimumMultiplier, pressure);
   return Math.max(1, Math.ceil(amount * multiplier));
+}
+
+function normalizeHappiness(value) {
+  const fallback = BALANCE.population.happiness.default;
+  const numeric = Number.isFinite(Number(value)) ? Math.round(Number(value)) : fallback;
+  return clamp(numeric, 0, 100);
+}
+
+function happinessBand(nation) {
+  const happiness = normalizeHappiness(nation?.population?.happiness);
+  return BALANCE.population.happiness.bands.find((band) => happiness >= band.min) || BALANCE.population.happiness.bands.at(-1);
+}
+
+function applyHappinessProduction(nation, amount) {
+  if (amount <= 0) return amount;
+  return Math.max(0, Math.ceil(amount * happinessBand(nation).workRate));
+}
+
+function populationHappinessDelta(game, nation, context = {}) {
+  const config = BALANCE.population.happiness.changes;
+  const consumption = Math.max(1, Number(context.consumption) || 1);
+  const surplus = Number(context.surplus) || 0;
+  const surplusRatio = surplus / consumption;
+  const activeWarCount = activeWarsFor(game, nation.id).length;
+  const activeTradeRoutes = game.tradeRoutes.filter((route) => route.status === "active" && route.members?.includes(nation.id)).length;
+  const disruptedRoutes = game.tradeRoutes.filter((route) => route.status === "disrupted" && route.members?.includes(nation.id)).length;
+  const activeAlliances = game.alliances.filter((alliance) => alliance.active && alliance.members?.includes(nation.id)).length;
+  let delta = 0;
+
+  if (context.famine) delta -= config.severeFoodDeficitPenalty;
+  else if (surplusRatio <= -0.3) delta -= config.severeFoodDeficitPenalty;
+  else if (surplus < BALANCE.population.growth.minimumFoodSurplus) delta -= config.mildFoodDeficitPenalty;
+  else if (surplusRatio >= 0.35) delta += config.prosperousRecovery;
+
+  delta -= Math.min(12, (Number(context.deaths) || 0) * config.famineDeathPenalty);
+  if ((Number(context.unpaidUpkeep) || 0) > 0) delta -= config.unpaidUpkeepPenalty;
+  delta -= Math.floor((Number(nation.warExhaustion) || 0) / config.warExhaustionDivisor);
+  delta -= activeWarCount * config.activeWarPenalty;
+  delta -= disruptedRoutes * config.disruptedTradePenalty;
+  delta += Math.min(3, activeTradeRoutes * config.activeTradeBonus + activeAlliances * config.allianceBonus);
+
+  if (activeWarCount === 0 && surplus >= BALANCE.population.growth.minimumFoodSurplus && (Number(context.unpaidUpkeep) || 0) <= 0) {
+    delta += config.peacefulRecovery;
+  }
+
+  if (delta === 0 && normalizeHappiness(nation.population.happiness) < BALANCE.population.happiness.default) return 1;
+  return clamp(delta, -15, 8);
 }
 
 function normalizeActionCount(value, fallback) {

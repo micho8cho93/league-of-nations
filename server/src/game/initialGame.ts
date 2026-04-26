@@ -39,6 +39,7 @@ interface Nation {
   population: {
     total: number;
     available: number;
+    happiness: number;
   };
   money: number;
   resources: Record<string, number>;
@@ -466,6 +467,7 @@ function createNation({
     population: {
       total: population,
       available: Math.max(0, population - 8),
+      happiness: 65,
     },
     money: start.money,
     resources: { ...start.resources },

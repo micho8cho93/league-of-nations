@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LeagueRoom } from "./LeagueRoom.js";
 import { SERVER_PLAYER_ACTION_TYPES } from "../game/actions.js";
-import { createInitialServerGame } from "../game/initialGame.js";
+import { createInitialServerGame, serializeGameSnapshot } from "../game/initialGame.js";
 
 type SentMessage = { type: string; payload: any };
 
@@ -161,6 +161,34 @@ test("creator gets the first nation", async () => {
 
   assert.equal(room.state.players.get("creator")?.nationId, "nation-1");
   assert.equal(creator.sent.find((message) => message.type === "joinedLobby")?.payload.nationId, "nation-1");
+});
+
+test("new server nations include default population happiness", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [
+      { sessionId: "creator", playerName: "Creator", nationId: "nation-1", controllerType: "human", bot: false },
+      { sessionId: "second", playerName: "Second", nationId: "nation-2", controllerType: "human", bot: false },
+    ],
+  );
+
+  assert.equal(gameState.nations["nation-1"].population.happiness, 65);
+  assert.equal(gameState.nations["nation-2"].population.happiness, 65);
+});
+
+test("server snapshots preserve population happiness", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [
+      { sessionId: "creator", playerName: "Creator", nationId: "nation-1", controllerType: "human", bot: false },
+      { sessionId: "second", playerName: "Second", nationId: "nation-2", controllerType: "human", bot: false },
+    ],
+  );
+  gameState.nations["nation-1"].population.happiness = 12;
+
+  const snapshot = serializeGameSnapshot(gameState);
+
+  assert.equal(snapshot.gameState.nations["nation-1"].population.happiness, 12);
 });
 
 test("second player gets a different available nation", async () => {
@@ -731,6 +759,39 @@ test("moveOrAttackUnit movement works online", async () => {
   assert.equal(to.unit?.strength, 4);
   assert.equal(gameState.nations["nation-1"].actionsRemaining, 9);
   assert.equal(latestRejection(creator), "");
+});
+
+test("low happiness can make military refuse movement online without spending resources", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.gameId = "";
+  gameState.roomId = "";
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 4, branch: "infantry", movedTurn: 0, branches: { infantry: 4 } },
+  });
+  prepareTile(to, { ownerId: null, type: "empty" });
+  const nation = gameState.nations["nation-1"];
+  nation.money = 1000;
+  nation.population.happiness = 0;
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: from.id,
+    toTileId: to.id,
+  });
+
+  assert.equal(from.unit?.strength, 4);
+  assert.equal(to.ownerId, null);
+  assert.equal(nation.money, 1000);
+  assert.equal(nation.actionsRemaining, 10);
+  assert.match(latestRejection(creator), /refused orders/);
 });
 
 test("declareWar and moveOrAttackUnit attack work online", async () => {

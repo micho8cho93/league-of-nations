@@ -130,6 +130,11 @@
           </div>
         </header>
         <canvas id="map-canvas"></canvas>
+        <div id="board-actions" class="board-actions" aria-label="Board tools">
+          <button id="leaderboard-btn" class="secondary-btn" type="button">Leaderboard</button>
+          <button id="board-diplomacy-btn" class="secondary-btn" type="button">Diplomacy</button>
+          <button id="board-trade-btn" class="secondary-btn" type="button">Trade</button>
+        </div>
         <div id="tooltip" class="tooltip" hidden></div>
         <section id="tile-popup" class="tile-popup" hidden>
           <button id="tile-close-btn" class="icon-btn close-btn" aria-label="Close tile popup">×</button>
@@ -144,18 +149,6 @@
             <summary>Resources</summary>
             <div id="resource-panel"></div>
           </details>
-          <details class="panel side-section" data-side-section="nations">
-            <summary>Other Nations</summary>
-            <div id="nation-panel"></div>
-          </details>
-          <details class="panel side-section" data-side-section="diplomacy">
-            <summary>Detailed Diplomacy</summary>
-            <div id="diplomacy-panel"></div>
-          </details>
-          <details class="panel side-section" data-side-section="trade">
-            <summary>Detailed Trade</summary>
-            <div id="trade-panel"></div>
-          </details>
           <details class="panel side-section" data-side-section="summary">
             <summary>Last Turn</summary>
             <div id="summary-panel"></div>
@@ -163,12 +156,6 @@
         </div>
       </aside>
     </main>
-
-    <footer id="bottom-panel" class="event-feed">
-      <button id="bottom-collapse-btn" class="icon-btn panel-toggle bottom-toggle" type="button" aria-controls="bottom-panel" aria-expanded="true" aria-label="Collapse event feed">↓</button>
-      <div class="feed-title">Event Feed</div>
-      <div id="event-feed-content" class="feed-content"></div>
-    </footer>
   </div>
 
   <div id="dialog-backdrop" class="dialog-backdrop" hidden>

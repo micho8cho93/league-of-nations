@@ -64,6 +64,7 @@ export function createNation({
     population: {
       total: population,
       available: Math.max(0, population - 8),
+      happiness: BALANCE.population.happiness.default,
     },
     money: start.money,
     resources: { ...start.resources },
