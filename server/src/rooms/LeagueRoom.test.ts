@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LeagueRoom } from "./LeagueRoom.js";
 import { SERVER_PLAYER_ACTION_TYPES } from "../game/actions.js";
+import { createInitialServerGame } from "../game/initialGame.js";
 
 type SentMessage = { type: string; payload: any };
 
@@ -35,7 +36,7 @@ async function createRoom(nationCount = 3) {
     mapSize: "Small",
     nationCount,
     maxTurns: 30,
-    timeLimitMinutes: 0,
+    turnTimerMinutes: 0,
     unlimitedMode: false,
     seed: 12345,
   });
@@ -141,6 +142,14 @@ function makeAdjacentPair(gameState: any) {
   assert.fail("expected an adjacent land tile pair");
 }
 
+function makeOwnedAnchorWithNeighbor(gameState: any, neighborValues: Record<string, unknown>, nationId = "nation-1") {
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, { ownerId: nationId, type: "empty" });
+  prepareTile(to, neighborValues);
+  if (!gameState.nations[nationId].territory.includes(from.id)) gameState.nations[nationId].territory.push(from.id);
+  return { anchor: from, target: to };
+}
+
 function clientGameplayActionTypes() {
   const uiSource = readFileSync(new URL("../../../js/ui.js", import.meta.url), "utf8");
   return Array.from(uiSource.matchAll(/sendPlayerAction\(\s*\{[\s\S]*?type:\s*"([^"]+)"/g), (match) => match[1]).sort();
@@ -183,6 +192,17 @@ test("room rejects duplicate or unavailable nation assignments", async () => {
     () => room.onAuth(third.client, { playerName: "Third" }),
     /full; no nations are available/,
   );
+});
+
+test("room settings use turnTimerMinutes and accept legacy timeLimitMinutes", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+
+  room.messages.updateSettings(creator.client, { turnTimerMinutes: 4 });
+  assert.equal(room.state.settings.turnTimerMinutes, 4);
+
+  room.messages.updateSettings(creator.client, { timeLimitMinutes: 7 });
+  assert.equal(room.state.settings.turnTimerMinutes, 7);
 });
 
 test("gameplay build action is accepted for the active player", async () => {
@@ -239,6 +259,165 @@ test("gameplay build action is rejected for the wrong player or wrong turn", asy
     second.sent.find((message) => message.type === "actionRejected")?.payload.message,
     /not your turn/,
   );
+});
+
+test("fishery builds on adjacent water and land buildings fail there", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 2000;
+  nation.tech.farming = 1;
+  const { target: water } = makeOwnedAnchorWithNeighbor(gameState, {
+    terrain: "water",
+    landform: "sea",
+    type: "water",
+    ownerId: null,
+  });
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: water.id,
+    buildingType: "fishery",
+  });
+
+  assert.equal(water.type, "fishery");
+  assert.equal(water.ownerId, "nation-1");
+  assert.equal(latestRejection(creator), "");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: water.id,
+    buildingType: "farm",
+  });
+
+  assert.match(latestRejection(creator), /Buildings require land|already developed/);
+});
+
+test("mountain mines require Mining tier 2 and mountain terrain", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 2000;
+  const { target: mountain } = makeOwnedAnchorWithNeighbor(gameState, {
+    terrain: "land",
+    landform: "continent",
+    type: "mountain",
+    ownerId: null,
+  });
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: mountain.id,
+    buildingType: "mountainMine",
+  });
+  assert.match(latestRejection(creator), /Mining tier 2/);
+
+  nation.tech.mining = 2;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: mountain.id,
+    buildingType: "mountainMine",
+  });
+
+  assert.equal(mountain.type, "mountainMine");
+  assert.equal(latestRejection(creator), "");
+});
+
+test("universities require Education tier 3", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 2000;
+  const tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "university",
+  });
+  assert.match(latestRejection(creator), /Education tier 3/);
+
+  nation.tech.education = 3;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "university",
+  });
+
+  assert.equal(tile.type, "university");
+  assert.equal(latestRejection(creator), "");
+});
+
+test("transport buildings respect infrastructure tier and era gates", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+
+  let tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "road" });
+  assert.match(latestRejection(creator), /Infrastructure tier 1/);
+
+  nation.tech.infrastructure = 1;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "road" });
+  assert.equal(tile.type, "road");
+  assert.equal(latestRejection(creator), "");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  nation.tech.infrastructure = 2;
+  tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "railroad" });
+  assert.match(latestRejection(creator), /Era 2/);
+
+  gameState.era = 2;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "railroad" });
+  assert.equal(tile.type, "railroad");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  nation.tech.infrastructure = 3;
+  tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "highway" });
+  assert.match(latestRejection(creator), /Era 3/);
+
+  gameState.era = 3;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "highway" });
+  assert.equal(tile.type, "highway");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  nation.tech.infrastructure = 4;
+  tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "airport" });
+  assert.match(latestRejection(creator), /Era 4/);
+
+  gameState.era = 4;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "airport" });
+  assert.equal(tile.type, "airport");
+  assert.equal(latestRejection(creator), "");
 });
 
 test("active player can assign workers for their own nation", async () => {
@@ -341,6 +520,72 @@ test("end turn hands control to the next active human player", async () => {
   assert.equal(gameState.currentTurnIndex, 0);
   assert.equal(gameState.turn, startingTurn + 1);
   assert.equal(latestRejection(second), "");
+});
+
+test("turn timer skips expired online turns before accepting stale actions", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  room.messages.updateSettings(creator.client, { turnTimerMinutes: 1 });
+  const gameState = startGame(room, creator);
+  const tileId = buildableTileId(gameState, "nation-1");
+
+  gameState.turnStartedAt = Date.now() - 61_000;
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId,
+    buildingType: "farm",
+  });
+
+  assert.equal(gameState.currentTurnIndex, 1);
+  assert.match(latestRejection(creator), /not your turn/);
+  assert.equal(gameState.map.tiles.find((tile: any) => tile.id === tileId).type, "empty");
+  assert.ok(gameState.events.some((event: any) => /missed their turn/i.test(event.message)));
+  assert.equal((room as any).broadcasts.some((message: any) => message.type === "gameSnapshot"), true);
+});
+
+test("generated maps respect water bounds and keep enough viable starting land", () => {
+  for (const [seed, mapSize, nationCount] of [
+    [101, "Small", 5],
+    [202, "Medium", 8],
+    [303, "Large", 10],
+  ] as const) {
+    const game = createInitialServerGame({
+      mapSize,
+      nationCount,
+      maxTurns: 30,
+      turnTimerMinutes: 0,
+      unlimitedMode: false,
+      seed,
+    }, []);
+    const tiles = game.map.tiles;
+    const waterRatio = tiles.filter((tile: any) => tile.terrain === "water").length / tiles.length;
+    const buildableLand = tiles.filter((tile: any) => tile.terrain === "land" && tile.type !== "mountain" && tile.type !== "water").length;
+    const regions = new Set(tiles.filter((tile: any) => tile.terrain === "land" && tile.regionId).map((tile: any) => tile.regionId));
+    const index = new Map(tiles.map((tile: any) => [tile.id, tile]));
+    const lakeLikeWaters = tiles.filter((tile: any) => {
+      if (tile.terrain !== "water") return false;
+      const neighbors = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, -1],
+        [-1, 1],
+      ].map(([q, r]) => index.get(`${tile.q + q}:${tile.r + r}`)).filter(Boolean);
+      return neighbors.filter((neighbor: any) => neighbor.terrain === "land").length >= 4;
+    });
+
+    assert.ok(waterRatio >= 0.19 && waterRatio <= 0.61, `${mapSize} seed ${seed} water ratio ${waterRatio}`);
+    assert.ok(buildableLand >= nationCount * 5, `${mapSize} seed ${seed} has enough buildable land`);
+    assert.ok(regions.size >= 2 || mapSize === "Small", `${mapSize} seed ${seed} should avoid one giant pangea`);
+    assert.ok(lakeLikeWaters.length > 0, `${mapSize} seed ${seed} should include lake-like inland water`);
+    for (const nation of Object.values(game.nations) as any[]) {
+      assert.ok(nation.capitalTileId, `${nation.id} should receive a capital`);
+      assert.ok(nation.territory.length > 0, `${nation.id} should receive territory`);
+    }
+  }
 });
 
 test("invalid worker counts are rejected", async () => {
@@ -557,6 +802,56 @@ test("research and researchBranch work online", async () => {
   });
 
   assert.equal(nation.tech.branches.tanks, 1);
+  assert.equal(latestRejection(creator), "");
+});
+
+test("infrastructure research requires starter and previous transport improvements", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 8000;
+  setResources(nation, { materials: 500, education: 300, food: 100, industry: 100 });
+
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.match(latestRejection(creator), /active mine/);
+
+  const mine = makeOwnedTile(gameState, "nation-1", "mine", 3);
+  const school = gameState.map.tiles.find((tile: any) => tile.id !== mine.id && tile.terrain === "land" && !tile.isCapital);
+  assert.ok(school, "expected a separate school tile");
+  prepareTile(school, { ownerId: "nation-1", type: "school", workers: 3 });
+  if (!nation.territory.includes(school.id)) nation.territory.push(school.id);
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.equal(nation.tech.infrastructure, 1);
+  assert.equal(latestRejection(creator), "");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.match(latestRejection(creator), /active road/);
+
+  makeOwnedTile(gameState, "nation-1", "road", 2);
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.equal(nation.tech.infrastructure, 2);
   assert.equal(latestRejection(creator), "");
 });
 

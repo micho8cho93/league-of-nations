@@ -9,18 +9,32 @@ export const MAP_SIZES = {
 export const TILE_TYPES = {
   EMPTY: "empty",
   FARM: "farm",
+  FISHERY: "fishery",
   MINE: "mine",
+  MOUNTAIN_MINE: "mountainMine",
   SCHOOL: "school",
+  UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  ROAD: "road",
+  RAILROAD: "railroad",
+  HIGHWAY: "highway",
+  AIRPORT: "airport",
   WATER: "water",
   MOUNTAIN: "mountain",
 };
 
 export const BUILDING_TYPES = [
   TILE_TYPES.FARM,
+  TILE_TYPES.FISHERY,
   TILE_TYPES.MINE,
+  TILE_TYPES.MOUNTAIN_MINE,
   TILE_TYPES.SCHOOL,
+  TILE_TYPES.UNIVERSITY,
+  TILE_TYPES.ROAD,
+  TILE_TYPES.RAILROAD,
+  TILE_TYPES.HIGHWAY,
+  TILE_TYPES.AIRPORT,
   TILE_TYPES.FACTORY,
   TILE_TYPES.MILITARY,
 ];
@@ -28,16 +42,24 @@ export const BUILDING_TYPES = [
 export const TILE_LABELS = {
   [TILE_TYPES.EMPTY]: "Empty",
   [TILE_TYPES.FARM]: "Farm",
+  [TILE_TYPES.FISHERY]: "Fishery",
   [TILE_TYPES.MINE]: "Mine",
+  [TILE_TYPES.MOUNTAIN_MINE]: "Mountain Mine",
   [TILE_TYPES.SCHOOL]: "School",
+  [TILE_TYPES.UNIVERSITY]: "University",
   [TILE_TYPES.FACTORY]: "Factory",
   [TILE_TYPES.MILITARY]: "Military Base",
+  [TILE_TYPES.ROAD]: "Road",
+  [TILE_TYPES.RAILROAD]: "Railroad",
+  [TILE_TYPES.HIGHWAY]: "Highway",
+  [TILE_TYPES.AIRPORT]: "Airport",
   [TILE_TYPES.WATER]: "Water",
   [TILE_TYPES.MOUNTAIN]: "Mountain",
 };
 
 export const WORKER_ROLES = {
   FARMERS: "farmers",
+  FISHERS: "fishers",
   MINERS: "miners",
   SCHOLARS: "scholars",
   ENGINEERS: "engineers",
@@ -46,27 +68,48 @@ export const WORKER_ROLES = {
 
 export const WORKER_ROLE_BY_TILE = {
   [TILE_TYPES.FARM]: WORKER_ROLES.FARMERS,
+  [TILE_TYPES.FISHERY]: WORKER_ROLES.FISHERS,
   [TILE_TYPES.MINE]: WORKER_ROLES.MINERS,
+  [TILE_TYPES.MOUNTAIN_MINE]: WORKER_ROLES.MINERS,
   [TILE_TYPES.SCHOOL]: WORKER_ROLES.SCHOLARS,
+  [TILE_TYPES.UNIVERSITY]: WORKER_ROLES.SCHOLARS,
   [TILE_TYPES.FACTORY]: WORKER_ROLES.ENGINEERS,
   [TILE_TYPES.MILITARY]: WORKER_ROLES.SOLDIERS,
+  [TILE_TYPES.ROAD]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.RAILROAD]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.HIGHWAY]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.AIRPORT]: WORKER_ROLES.ENGINEERS,
 };
 
 export const WORKER_MIN = {
   [TILE_TYPES.FARM]: 2,
+  [TILE_TYPES.FISHERY]: 2,
   [TILE_TYPES.MINE]: 3,
+  [TILE_TYPES.MOUNTAIN_MINE]: 4,
   [TILE_TYPES.SCHOOL]: 3,
+  [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.ROAD]: 2,
+  [TILE_TYPES.RAILROAD]: 3,
+  [TILE_TYPES.HIGHWAY]: 4,
+  [TILE_TYPES.AIRPORT]: 6,
 };
 
 export const TILE_COLORS = {
   [TILE_TYPES.EMPTY]: 0x8d7251,
   [TILE_TYPES.FARM]: 0x4f9a58,
+  [TILE_TYPES.FISHERY]: 0x2f8fb1,
   [TILE_TYPES.MINE]: 0xb46e3d,
+  [TILE_TYPES.MOUNTAIN_MINE]: 0x8a6448,
   [TILE_TYPES.SCHOOL]: 0x4e84c4,
+  [TILE_TYPES.UNIVERSITY]: 0x5868c8,
   [TILE_TYPES.FACTORY]: 0x4b525f,
   [TILE_TYPES.MILITARY]: 0xa44646,
+  [TILE_TYPES.ROAD]: 0x6b5a4c,
+  [TILE_TYPES.RAILROAD]: 0x6e6258,
+  [TILE_TYPES.HIGHWAY]: 0x384653,
+  [TILE_TYPES.AIRPORT]: 0x72859d,
   [TILE_TYPES.WATER]: 0x2e6f95,
   [TILE_TYPES.MOUNTAIN]: 0x7a7060,
 };
@@ -211,8 +254,12 @@ export function titleCase(value) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+export function isWaterLike(tile) {
+  return tile && (tile.type === TILE_TYPES.WATER || tile.type === TILE_TYPES.FISHERY);
+}
+
 export function isLand(tile) {
-  return tile && tile.terrain === "land" && tile.type !== TILE_TYPES.WATER && tile.type !== TILE_TYPES.MOUNTAIN;
+  return tile && tile.terrain === "land" && !isWaterLike(tile) && tile.type !== TILE_TYPES.MOUNTAIN;
 }
 
 export function isTileActive(tile) {

@@ -4,6 +4,7 @@ import {
   axialNeighbors,
   hexDistance,
   isLand,
+  isWaterLike,
   pairKey,
   tileId,
 } from "./utils.js";
@@ -224,7 +225,7 @@ export function getValidMilitaryActionsFromTile(game, fromTileId, nationId) {
   const attackTargets = reachableAttackTargets(game, from, nationId, unitType);
 
   for (const target of moveTargets) {
-    const movementCost = target.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
+    const movementCost = isWaterLike(target) ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
     if ((game.nations[nationId]?.money || 0) < movementCost) continue;
     const entry = {
       action: "move",
@@ -243,7 +244,7 @@ export function getValidMilitaryActionsFromTile(game, fromTileId, nationId) {
   }
 
   for (const target of attackTargets) {
-    const movementCost = target.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
+    const movementCost = isWaterLike(target) ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land;
     if ((game.nations[nationId]?.money || 0) < movementCost) continue;
     const distance = hexDistance(from, target);
     const entry = {
@@ -280,7 +281,7 @@ export function getAdjacentMilitaryActions(game, fromTileId, nationId) {
 
 export function canEnterTile(game, nationId, tile) {
   if (!tile) return { ok: false, reason: "No tile." };
-  if (tile.type === TILE_TYPES.WATER && !hasNavalAccess(game.nations[nationId])) {
+  if (isWaterLike(tile) && !hasNavalAccess(game.nations[nationId])) {
     return { ok: false, reason: "Water crossing requires naval specialization." };
   }
   if (!tile.ownerId || tile.ownerId === nationId || areAllied(game, nationId, tile.ownerId) || areAtWar(game, nationId, tile.ownerId)) {
@@ -295,13 +296,13 @@ export function canUnitEnterTile(game, nationId, tile, unitType = "infantry") {
   if (tile.type === TILE_TYPES.MOUNTAIN) {
     return { ok: false, reason: "Mountains cannot be traversed. Only aircraft can fly over them." };
   }
-  if (tile.type === TILE_TYPES.WATER && !config.canEnterWater) {
+  if (isWaterLike(tile) && !config.canEnterWater) {
     return { ok: false, reason: `${config.label} cannot enter water.` };
   }
-  if (tile.type === TILE_TYPES.WATER && !hasNavalAccess(game.nations[nationId])) {
+  if (isWaterLike(tile) && !hasNavalAccess(game.nations[nationId])) {
     return { ok: false, reason: "Water crossing requires naval specialization." };
   }
-  if (config.coastalOnly && tile.type !== TILE_TYPES.WATER && !isCoastalTile(game, tile)) {
+  if (config.coastalOnly && !isWaterLike(tile) && !isCoastalTile(game, tile)) {
     return { ok: false, reason: `${config.label} can only operate on water or coastal tiles.` };
   }
   if (!tile.ownerId || tile.ownerId === nationId || areAllied(game, nationId, tile.ownerId) || areAtWar(game, nationId, tile.ownerId)) {
@@ -596,7 +597,7 @@ function reachableMoveTargets(game, from, nationId, unitType) {
       const path = [...current.path, next.id];
       seen.set(next.id, nextDistance);
       if (!next.ownerId || next.ownerId === nationId) targets.push({ ...next, path });
-      if (next.ownerId === nationId || areAllied(game, nationId, next.ownerId) || (config.canEnterWater && next.type === TILE_TYPES.WATER)) {
+      if (next.ownerId === nationId || areAllied(game, nationId, next.ownerId) || (config.canEnterWater && isWaterLike(next))) {
         queue.push({ tile: next, path, distance: nextDistance });
       }
     }
@@ -617,22 +618,22 @@ function canMoveDestination(game, from, tile, nationId, unitType) {
   if (!tile || tile.id === from.id) return false;
   if (!canUnitEnterTile(game, nationId, tile, unitType).ok) return false;
   if (tile.ownerId && tile.ownerId !== nationId) return false;
-  if (!tile.ownerId && tile.type !== TILE_TYPES.WATER && !bordersNation(game, tile, nationId)) return false;
-  return tile.type !== TILE_TYPES.WATER || unitTypeConfig(unitType).canEnterWater;
+  if (!tile.ownerId && !isWaterLike(tile) && !bordersNation(game, tile, nationId)) return false;
+  return !isWaterLike(tile) || unitTypeConfig(unitType).canEnterWater;
 }
 
 function canUnitAttackTile(game, nationId, tile, unitType) {
   const config = unitTypeConfig(unitType);
-  if (tile.type === TILE_TYPES.WATER && !config.canEnterWater && unitType !== "air") return false;
-  if (config.coastalOnly && tile.type !== TILE_TYPES.WATER && !isCoastalTile(game, tile)) return false;
-  if (unitType === "tanks" && tile.type === TILE_TYPES.WATER) return false;
-  if (unitType === "infantry" && tile.type === TILE_TYPES.WATER) return false;
+  if (isWaterLike(tile) && !config.canEnterWater && unitType !== "air") return false;
+  if (config.coastalOnly && !isWaterLike(tile) && !isCoastalTile(game, tile)) return false;
+  if (unitType === "tanks" && isWaterLike(tile)) return false;
+  if (unitType === "infantry" && isWaterLike(tile)) return false;
   return true;
 }
 
 function isCoastalTile(game, tile) {
-  if (!tile || tile.type === TILE_TYPES.WATER) return true;
-  return axialNeighbors(tile.q, tile.r).some((coord) => game.tileAt(coord.q, coord.r)?.type === TILE_TYPES.WATER);
+  if (!tile || isWaterLike(tile)) return true;
+  return axialNeighbors(tile.q, tile.r).some((coord) => isWaterLike(game.tileAt(coord.q, coord.r)));
 }
 
 function bordersNation(game, tile, nationId) {

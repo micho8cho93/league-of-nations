@@ -4,7 +4,8 @@ export interface InitialGameSettings {
   mapSize: "Small" | "Medium" | "Large";
   nationCount: number;
   maxTurns: number;
-  timeLimitMinutes: number;
+  turnTimerMinutes: number;
+  timeLimitMinutes?: number;
   unlimitedMode: boolean;
   seed: number;
 }
@@ -48,6 +49,7 @@ interface Nation {
     farming: number;
     mining: number;
     education: number;
+    infrastructure: number;
     military: number;
     branches: Record<string, number>;
   };
@@ -139,16 +141,24 @@ const MAP_SIZES = {
 const TILE_TYPES = {
   EMPTY: "empty",
   FARM: "farm",
+  FISHERY: "fishery",
   MINE: "mine",
+  MOUNTAIN_MINE: "mountainMine",
   SCHOOL: "school",
+  UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  ROAD: "road",
+  RAILROAD: "railroad",
+  HIGHWAY: "highway",
+  AIRPORT: "airport",
   WATER: "water",
   MOUNTAIN: "mountain",
 } as const;
 
 const WORKER_ROLES = {
   FARMERS: "farmers",
+  FISHERS: "fishers",
   MINERS: "miners",
   SCHOLARS: "scholars",
   ENGINEERS: "engineers",
@@ -157,10 +167,17 @@ const WORKER_ROLES = {
 
 const WORKER_MIN = {
   [TILE_TYPES.FARM]: 2,
+  [TILE_TYPES.FISHERY]: 2,
   [TILE_TYPES.MINE]: 3,
+  [TILE_TYPES.MOUNTAIN_MINE]: 4,
   [TILE_TYPES.SCHOOL]: 3,
+  [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.ROAD]: 2,
+  [TILE_TYPES.RAILROAD]: 3,
+  [TILE_TYPES.HIGHWAY]: 4,
+  [TILE_TYPES.AIRPORT]: 6,
 };
 
 const NATION_COLOR_PALETTE = [
@@ -454,6 +471,7 @@ function createNation({
     resources: { ...start.resources },
     workers: {
       [WORKER_ROLES.FARMERS]: 2,
+      [WORKER_ROLES.FISHERS]: 0,
       [WORKER_ROLES.MINERS]: 0,
       [WORKER_ROLES.SCHOLARS]: 0,
       [WORKER_ROLES.ENGINEERS]: 0,
@@ -472,6 +490,7 @@ function createNation({
       farming: 0,
       mining: 0,
       education: 0,
+      infrastructure: 0,
       military: 0,
       branches: {
         tanks: 0,
@@ -505,9 +524,15 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
   const seed = Number(settings.seed || 1);
   const coords = hexMapCoords(radius);
   const rng = mulberry32(seed);
-  const targetLandRatio = 0.71 + rng() * 0.08;
-  const continentCount = settings.nationCount <= 4 ? 2 : settings.nationCount <= 7 ? 3 : 4;
-  const islandCount = Math.max(4, Math.floor(radius / 2));
+  const nationCount = Math.max(2, Math.floor(Number(settings.nationCount) || 5));
+  const waterRatio = targetWaterRatio(coords.length, nationCount, rng);
+  const initialWaterRatio = Math.max(0.16, waterRatio - 0.045);
+  const targetLandRatio = 1 - waterRatio;
+  const initialLandRatio = 1 - initialWaterRatio;
+  const continentCount = nationCount <= 4 ? randInt(rng, 1, 2) : nationCount <= 7 ? randInt(rng, 2, 3) : randInt(rng, 3, 4);
+  const islandCount = Math.max(6, Math.floor(radius * 0.9) + randInt(rng, 0, 3));
+  const archipelagoCount = Math.max(2, Math.floor(radius / 4));
+  const channelCount = 2 + Math.floor(rng() * 3);
   const centers: Array<{
     q: number;
     r: number;
@@ -518,29 +543,52 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
 
   for (let index = 0; index < continentCount; index += 1) {
     centers.push({
-      q: randInt(rng, -Math.floor(radius * 0.55), Math.floor(radius * 0.55)),
-      r: randInt(rng, -Math.floor(radius * 0.55), Math.floor(radius * 0.55)),
-      radius: radius * (0.48 + rng() * 0.22),
-      weight: 1.8 + rng() * 0.5,
+      q: randInt(rng, -Math.floor(radius * 0.62), Math.floor(radius * 0.62)),
+      r: randInt(rng, -Math.floor(radius * 0.62), Math.floor(radius * 0.62)),
+      radius: radius * (0.31 + rng() * 0.18),
+      weight: 1.35 + rng() * 0.55,
       kind: "continent" as const,
     });
   }
 
   for (let index = 0; index < islandCount; index += 1) {
     const angle = rng() * Math.PI * 2;
-    const distance = radius * (0.35 + rng() * 0.52);
+    const distance = radius * (0.22 + rng() * 0.7);
     centers.push({
       q: Math.round(Math.cos(angle) * distance),
       r: Math.round(Math.sin(angle) * distance * 0.6),
-      radius: 1.5 + rng() * 2.5,
-      weight: 0.75 + rng() * 0.5,
+      radius: 1.1 + rng() * 2.7,
+      weight: 0.72 + rng() * 0.62,
       kind: "island" as const,
     });
   }
 
+  for (let index = 0; index < archipelagoCount; index += 1) {
+    const angle = rng() * Math.PI * 2;
+    const distance = radius * (0.18 + rng() * 0.62);
+    const baseQ = Math.round(Math.cos(angle) * distance);
+    const baseR = Math.round(Math.sin(angle) * distance * 0.72);
+    for (let child = 0; child < 3 + Math.floor(rng() * 3); child += 1) {
+      centers.push({
+        q: baseQ + randInt(rng, -2, 2),
+        r: baseR + randInt(rng, -2, 2),
+        radius: 0.9 + rng() * 1.6,
+        weight: 0.58 + rng() * 0.48,
+        kind: "island" as const,
+      });
+    }
+  }
+
+  const channels = Array.from({ length: channelCount }, () => ({
+    angle: rng() * Math.PI * 2,
+    offset: (rng() - 0.5) * radius * 1.35,
+    width: 0.6 + rng() * 1.25,
+    strength: 0.8 + rng() * 0.75,
+  }));
+
   const scored = coords.map((coord) => {
     const edge = Math.max(Math.abs(coord.q), Math.abs(coord.r), Math.abs(coord.q + coord.r)) / radius;
-    let score = 0.3 - edge * 0.22 + hash2d(coord.q, coord.r, seed) * 0.55;
+    let score = 0.18 - edge * 0.14 + hash2d(coord.q, coord.r, seed) * 0.5;
     let nearestKind: "continent" | "island" = "continent";
     let bestInfluence = 0;
 
@@ -554,15 +602,23 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
       score += influence;
     }
 
-    score += hash2d(coord.q * 3 + 17, coord.r * 5 - 11, seed + 91) * 0.2;
+    for (const channel of channels) {
+      const x = coord.q + coord.r * 0.5;
+      const y = coord.r * 0.866;
+      const dist = Math.abs(x * Math.cos(channel.angle) + y * Math.sin(channel.angle) - channel.offset);
+      score -= Math.max(0, 1 - dist / channel.width) * channel.strength;
+    }
+
+    score += hash2d(coord.q * 3 + 17, coord.r * 5 - 11, seed + 91) * 0.26;
+    score += hash2d(Math.floor(coord.q / 2) + 31, Math.floor(coord.r / 2) - 19, seed + 313) * 0.18;
     return { ...coord, score, nearestKind };
   });
 
-  const landCount = Math.round(scored.length * targetLandRatio);
+  const initialLandCount = Math.round(scored.length * initialLandRatio);
   const landIds = new Set(
     [...scored]
       .sort((a, b) => b.score - a.score)
-      .slice(0, landCount)
+      .slice(0, initialLandCount)
       .map((coord) => tileId(coord.q, coord.r))
   );
 
@@ -588,24 +644,79 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
     };
   });
 
-  for (const tile of tiles) {
-    if (tile.terrain !== "land") continue;
-    const edge = Math.max(Math.abs(tile.q), Math.abs(tile.r), Math.abs(tile.q + tile.r)) / radius;
-    if (edge > 0.78) continue;
-    const n1 = hash2d(tile.q * 3 + 11, tile.r * 4 - 7, seed + 7777);
-    const n2 = hash2d(tile.q + 2, tile.r * 2 + 3, seed + 8831);
-    if (n1 * 0.62 + n2 * 0.38 < 0.083) tile.type = TILE_TYPES.MOUNTAIN;
-  }
+  carveWaterFeatures(tiles, radius, seed, Math.round(scored.length * targetLandRatio));
+  addMountainRanges(tiles, radius, seed, nationCount);
 
   const map = {
     size: settings.mapSize,
     radius,
     seed,
-    landRatio: landCount / scored.length,
+    landRatio: tiles.filter((tile) => tile.terrain === "land").length / scored.length,
     tiles,
   };
   assignRegions(map);
   return map;
+}
+
+function targetWaterRatio(tileCount: number, nationCount: number, rng: () => number) {
+  const requested = 0.2 + rng() * 0.4;
+  const requiredBuildable = nationCount * 10 + 12;
+  const maxByLandNeed = 1 - requiredBuildable / tileCount;
+  return clampNumber(requested, 0.2, Math.max(0.2, Math.min(0.6, maxByLandNeed)));
+}
+
+function carveWaterFeatures(tiles: Tile[], radius: number, seed: number, targetLandCount: number) {
+  let budget = Math.max(0, tiles.filter((tile) => tile.terrain === "land").length - targetLandCount);
+  if (budget <= 0) return;
+  const index = buildTileIndex(tiles);
+  const candidates = tiles
+    .filter((tile) => tile.terrain === "land")
+    .map((tile) => {
+      const neighbors = axialNeighbors(tile.q, tile.r).map((coord) => index.get(tileId(coord.q, coord.r))).filter(Boolean) as Tile[];
+      const waterNeighbors = neighbors.filter((neighbor) => neighbor.terrain === "water").length;
+      const landNeighbors = neighbors.filter((neighbor) => neighbor.terrain === "land").length;
+      const edge = Math.max(Math.abs(tile.q), Math.abs(tile.r), Math.abs(tile.q + tile.r)) / radius;
+      const lakeNoise = 1 - hash2d(tile.q * 5 - 4, tile.r * 7 + 9, seed + 4242);
+      const inletNoise = 1 - hash2d(tile.q * 13 + 2, tile.r * 11 - 5, seed + 9090);
+      const lakeScore = landNeighbors >= 5 && edge < 0.82 ? lakeNoise * 1.35 : 0;
+      const inletScore = waterNeighbors > 0 ? inletNoise * (0.7 + waterNeighbors * 0.22) : 0;
+      return { tile, score: Math.max(lakeScore, inletScore) };
+    })
+    .filter((entry) => entry.score > 0.52)
+    .sort((a, b) => b.score - a.score);
+
+  for (const { tile } of candidates) {
+    if (budget <= 0) break;
+    const neighbors = axialNeighbors(tile.q, tile.r).map((coord) => index.get(tileId(coord.q, coord.r))).filter(Boolean) as Tile[];
+    if (neighbors.filter((neighbor) => neighbor.terrain === "land").length < 3) continue;
+    tile.terrain = "water";
+    tile.landform = "sea";
+    tile.type = TILE_TYPES.WATER;
+    budget -= 1;
+  }
+}
+
+function addMountainRanges(tiles: Tile[], radius: number, seed: number, nationCount: number) {
+  const landTiles = tiles.filter((tile) => tile.terrain === "land");
+  const requiredBuildable = nationCount * 9 + 8;
+  const maxMountains = Math.max(0, landTiles.length - requiredBuildable);
+  const targetMountains = Math.min(maxMountains, Math.round(landTiles.length * 0.13));
+  if (targetMountains <= 0) return;
+
+  const scored = landTiles
+    .map((tile) => {
+      const edge = Math.max(Math.abs(tile.q), Math.abs(tile.r), Math.abs(tile.q + tile.r)) / radius;
+      const ridgeA = 1 - Math.abs(hash2d(Math.floor(tile.q / 2) + 11, tile.r * 3 - 7, seed + 7777) - 0.52) * 2;
+      const ridgeB = 1 - Math.abs(hash2d(tile.q * 2 + 2, Math.floor(tile.r / 2) + 3, seed + 8831) - 0.48) * 2;
+      const peakNoise = hash2d(tile.q * 17 - 3, tile.r * 19 + 5, seed + 1234);
+      return { tile, score: ridgeA * 0.48 + ridgeB * 0.34 + peakNoise * 0.28 - edge * 0.18 };
+    })
+    .filter((entry) => entry.score > 0.48)
+    .sort((a, b) => b.score - a.score);
+
+  for (const { tile } of scored.slice(0, targetMountains)) {
+    tile.type = TILE_TYPES.MOUNTAIN;
+  }
 }
 
 function assignRegions(map: ServerGameState["map"]) {
@@ -755,7 +866,11 @@ function buildTileIndex(tiles: Tile[]) {
 }
 
 function isLand(tile?: Tile | null) {
-  return tile && tile.terrain === "land" && tile.type !== TILE_TYPES.WATER && tile.type !== TILE_TYPES.MOUNTAIN;
+  return tile && tile.terrain === "land" && !isWaterLike(tile) && tile.type !== TILE_TYPES.MOUNTAIN;
+}
+
+function isWaterLike(tile?: Tile | null) {
+  return tile && (tile.type === TILE_TYPES.WATER || tile.type === TILE_TYPES.FISHERY);
 }
 
 function tileId(q: number, r: number) {
@@ -803,6 +918,10 @@ function hash2d(q: number, r: number, seed = 1) {
 
 function randInt(rng: () => number, min: number, max: number) {
   return Math.floor(rng() * (max - min + 1)) + min;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function shuffle<T>(items: T[], rng: () => number) {

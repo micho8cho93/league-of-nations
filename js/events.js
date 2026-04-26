@@ -1,4 +1,4 @@
-import { TILE_TYPES, isLand, randInt } from "./utils.js";
+import { TILE_TYPES, isLand, isWaterLike, randInt } from "./utils.js";
 import { addPopulation, removePopulation } from "./nation.js";
 
 export const GLOBAL_EVENTS = [
@@ -50,7 +50,7 @@ export const GLOBAL_EVENTS = [
           results.push(`${nation.name} had a ${tile.type} disabled for 2 turns`);
         } else {
           game.releaseTileWorkers(tile);
-          tile.type = TILE_TYPES.EMPTY;
+          tile.type = tile.type === TILE_TYPES.FISHERY ? TILE_TYPES.WATER : tile.type === TILE_TYPES.MOUNTAIN_MINE ? TILE_TYPES.MOUNTAIN : TILE_TYPES.EMPTY;
           tile.workers = 0;
           tile.unit = null;
           results.push(`${nation.name} lost a developed tile`);
@@ -84,7 +84,7 @@ export const GLOBAL_EVENTS = [
       for (const nation of Object.values(game.nations).filter((item) => item.active)) {
         const candidates = game.tiles.filter((tile) => {
           if (tile.ownerId !== nation.id || !isLand(tile)) return false;
-          return game.neighbors(tile.id).some((neighbor) => neighbor.type === TILE_TYPES.WATER);
+          return game.neighbors(tile.id).some((neighbor) => isWaterLike(neighbor));
         });
         if (!candidates.length) continue;
         const tile = candidates[randInt(rng, 0, candidates.length - 1)];

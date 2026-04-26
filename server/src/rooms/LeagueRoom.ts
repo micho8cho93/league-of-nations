@@ -36,6 +36,7 @@ interface SettingsPayload {
   mapSize?: unknown;
   nationCount?: unknown;
   maxTurns?: unknown;
+  turnTimerMinutes?: unknown;
   timeLimitMinutes?: unknown;
   unlimitedMode?: unknown;
   seed?: unknown;
@@ -73,7 +74,7 @@ class GameSettings extends Schema {
   @type("string") mapSize = "Medium";
   @type("uint8") nationCount = 5;
   @type("uint16") maxTurns = 30;
-  @type("uint16") timeLimitMinutes = 0;
+  @type("uint16") turnTimerMinutes = 0;
   @type("boolean") unlimitedMode = false;
   @type("uint32") seed = randomSeed();
 }
@@ -91,6 +92,7 @@ export class LeagueRoom extends Room {
   state = new LeagueRoomState();
   private gameState: ServerGameState | null = null;
   private resolvingTurn = false;
+  private turnTimerTask: { clear?: () => void } | null = null;
 
   messages = {
     updateSettings: (client: Client, payload: SettingsPayload = {}) => {
@@ -138,6 +140,7 @@ export class LeagueRoom extends Room {
       this.lock();
       this.state.status = "playing";
       this.gameState = this.createRuntimeGame();
+      this.startTurnTimerChecks();
       this.setMetadata({
         roomCode: this.state.roomCode,
         status: this.state.status,
@@ -213,6 +216,8 @@ export class LeagueRoom extends Room {
   }
 
   async onDispose() {
+    this.turnTimerTask?.clear?.();
+    this.turnTimerTask = null;
     await this.presence.srem(ROOM_CODE_CHANNEL, this.roomId);
   }
 
@@ -253,8 +258,9 @@ export class LeagueRoom extends Room {
         : clampInteger(payload.maxTurns, 10, 120, this.state.settings.maxTurns);
     }
 
-    if (payload.timeLimitMinutes !== undefined) {
-      this.state.settings.timeLimitMinutes = clampInteger(payload.timeLimitMinutes, 0, 240, this.state.settings.timeLimitMinutes);
+    if (payload.turnTimerMinutes !== undefined || payload.timeLimitMinutes !== undefined) {
+      const value = payload.turnTimerMinutes ?? payload.timeLimitMinutes;
+      this.state.settings.turnTimerMinutes = clampInteger(value, 0, 240, this.state.settings.turnTimerMinutes);
     }
 
     if (payload.seed !== undefined) {
@@ -273,7 +279,7 @@ export class LeagueRoom extends Room {
       mapSize: this.state.settings.mapSize as InitialGameSettings["mapSize"],
       nationCount: this.state.settings.nationCount,
       maxTurns: this.state.settings.maxTurns,
-      timeLimitMinutes: this.state.settings.timeLimitMinutes,
+      turnTimerMinutes: this.state.settings.turnTimerMinutes,
       unlimitedMode: this.state.settings.unlimitedMode,
       seed: this.state.settings.seed,
     };
@@ -313,6 +319,11 @@ export class LeagueRoom extends Room {
   }
 
   private async handlePlayerAction(client: Client, payload: PlayerActionPayload) {
+    if (this.expireActiveTurnIfNeeded()) {
+      this.finishIfGameOver();
+      this.broadcastGameSnapshot();
+    }
+
     const validation = this.validateActionEnvelope(client, payload);
     if (!validation.ok) {
       client.send("actionRejected", { message: validation.reason });
@@ -404,6 +415,34 @@ export class LeagueRoom extends Room {
     return { ok: true, advancedTurn: true, activeNationId: this.activeTurnNationId() };
   }
 
+  private startTurnTimerChecks() {
+    this.turnTimerTask?.clear?.();
+    this.turnTimerTask = this.clock.setInterval(() => {
+      if (!this.expireActiveTurnIfNeeded()) return;
+      this.finishIfGameOver();
+      this.broadcastGameSnapshot();
+    }, 1000) as { clear?: () => void };
+  }
+
+  private expireActiveTurnIfNeeded() {
+    if (!this.gameState || this.state.status !== "playing") return false;
+    if (this.resolvingTurn || this.gameState.isProcessingTurn || this.gameState.phase !== "player" || this.gameState.gameOver) return false;
+
+    const limit = Number(this.gameState.settings.turnTimerMinutes ?? this.gameState.settings.timeLimitMinutes ?? 0);
+    if (limit <= 0) return false;
+
+    const elapsedMs = Date.now() - Number(this.gameState.turnStartedAt || Date.now());
+    if (elapsedMs < limit * 60_000) return false;
+
+    const nationId = this.activeTurnNationId();
+    const nation = this.gameState.nations[nationId];
+    if (!nation?.active || nation.bot || nation.controllerType === "bot") return false;
+
+    this.addRuntimeEvent(`${nation.name} missed their turn. Turn timer expired.`, { nationId, type: "system" });
+    this.advanceTurn(nationId);
+    return true;
+  }
+
   private advanceTurn(endingNationId = "") {
     if (!this.gameState) return;
     const seats = this.gameState.seats || [];
@@ -427,6 +466,22 @@ export class LeagueRoom extends Room {
       nation.actionsRemaining = 10;
       nation.actionsUsedThisTurn = 0;
     }
+  }
+
+  private addRuntimeEvent(message: string, { nationId = null, type = "info", tileId = null }: { nationId?: string | null; type?: string; tileId?: string | null } = {}) {
+    if (!this.gameState) return;
+    this.gameState.events.push({
+      id: `event-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      turn: this.gameState.turn,
+      era: this.gameState.era,
+      phase: this.gameState.phase,
+      nationId,
+      type,
+      tileId,
+      message,
+      timestamp: Date.now(),
+    });
+    if (this.gameState.events.length > 140) this.gameState.events.shift();
   }
 
   private nextPlayableSeatIndex(fromIndex: number) {

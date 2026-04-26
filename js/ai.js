@@ -6,10 +6,10 @@ import { canStrategicallyDeclare, nearestEnemyTile } from "./war.js";
 
 // First type in each list is built first each turn (overridden temporarily by food pressure)
 const PERSONALITY_BUILD_ORDER = {
-  aggressive:  [TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.FARM, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL],
-  economic:    [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL, TILE_TYPES.MILITARY],
-  scientific:  [TILE_TYPES.SCHOOL, TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
-  balanced:    [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+  aggressive:  [TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE, TILE_TYPES.FARM, TILE_TYPES.ROAD, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL],
+  economic:    [TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE, TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL, TILE_TYPES.MILITARY],
+  scientific:  [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY, TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.ROAD, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+  balanced:    [TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.ROAD, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
 };
 
 export async function processBotTurn(game, botId) {
@@ -77,10 +77,10 @@ function staffCriticalTiles(game, bot) {
 function tryResearch(game, bot) {
   // Category priority by personality — scientific chases education, aggressive chases military
   const categories =
-    bot.personality === "scientific" ? ["education", "farming", "mining", "military"] :
-    bot.personality === "aggressive" ? ["military", "mining", "farming", "education"] :
-    bot.personality === "economic"   ? ["farming", "mining", "education", "military"] :
-    /* balanced */                     ["farming", "mining", "education", "military"];
+    bot.personality === "scientific" ? ["education", "infrastructure", "farming", "mining", "military"] :
+    bot.personality === "aggressive" ? ["military", "mining", "infrastructure", "farming", "education"] :
+    bot.personality === "economic"   ? ["farming", "mining", "infrastructure", "education", "military"] :
+    /* balanced */                     ["farming", "mining", "education", "infrastructure", "military"];
   for (const category of categories) {
     const check = canResearch(game, bot, category);
     if (!check.ok) continue;
@@ -153,17 +153,17 @@ function chooseTradeRequest(bot, partner) {
 }
 
 function tryBuild(game, bot) {
-  const farms = activeTiles(bot, game.tiles, TILE_TYPES.FARM).length;
+  const farms = activeTiles(bot, game.tiles, TILE_TYPES.FARM).length + activeTiles(bot, game.tiles, TILE_TYPES.FISHERY).length;
   const foodPressure = bot.resources.food < bot.population.total * 0.65;
   // Food pressure overrides personality order to prevent famine
-  const order = foodPressure ? [TILE_TYPES.FARM, ...PERSONALITY_BUILD_ORDER[bot.personality]] : PERSONALITY_BUILD_ORDER[bot.personality];
+  const order = foodPressure ? [TILE_TYPES.FARM, TILE_TYPES.FISHERY, ...PERSONALITY_BUILD_ORDER[bot.personality]] : PERSONALITY_BUILD_ORDER[bot.personality];
   for (const type of order) {
     const tile = chooseBuildTile(game, bot, type);
     if (!tile) continue;
     const result = game.buildTile(tile.id, type, bot.id, { silent: true });
     if (result.ok) {
       game.addEvent(`${bot.name} built a ${type}.`, { nationId: bot.id, type: "build", tileId: tile.id });
-      if (type === TILE_TYPES.FARM || farms < 2) game.assignWorkers(tile.id, WORKER_MIN[type] || 0, bot.id, { silent: true });
+      if (type === TILE_TYPES.FARM || type === TILE_TYPES.FISHERY || farms < 2) game.assignWorkers(tile.id, WORKER_MIN[type] || 0, bot.id, { silent: true });
       return true;
     }
   }
@@ -181,10 +181,11 @@ function chooseBuildTile(game, bot, type) {
     let weight = 1;
     // Farms: continent tiles are more fertile — universal preference
     if (type === TILE_TYPES.FARM && tile.landform === "continent") weight += 1;
+    if (type === TILE_TYPES.FISHERY && tile.landform === "sea") weight += 1;
     // Mines: economic bots strongly prioritize resource-rich regions
-    if (type === TILE_TYPES.MINE && tile.regionId % 2 === 0) weight += (p === "economic" ? 3 : 1);
+    if ((type === TILE_TYPES.MINE || type === TILE_TYPES.MOUNTAIN_MINE) && tile.regionId % 2 === 0) weight += (p === "economic" ? 3 : 1);
     // Schools: scientific bots want them anywhere
-    if (type === TILE_TYPES.SCHOOL) weight += (p === "scientific" ? 3 : 0);
+    if (type === TILE_TYPES.SCHOOL || type === TILE_TYPES.UNIVERSITY) weight += (p === "scientific" ? 3 : 0);
     // Military bases: aggressive bots prefer border tiles for offensive staging
     if (type === TILE_TYPES.MILITARY && game.neighbors(tile.id).some((n) => n.ownerId && n.ownerId !== bot.id)) {
       weight += (p === "aggressive" ? 5 : 3);

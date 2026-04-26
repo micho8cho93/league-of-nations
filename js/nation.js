@@ -69,6 +69,7 @@ export function createNation({
     resources: { ...start.resources },
     workers: {
       [WORKER_ROLES.FARMERS]: 2,
+      [WORKER_ROLES.FISHERS]: 0,
       [WORKER_ROLES.MINERS]: 0,
       [WORKER_ROLES.SCHOLARS]: 0,
       [WORKER_ROLES.ENGINEERS]: 0,
@@ -87,6 +88,7 @@ export function createNation({
       farming: 0,
       mining: 0,
       education: 0,
+      infrastructure: 0,
       military: 0,
       branches: {
         tanks: 0,
@@ -178,6 +180,7 @@ export function removePopulation(nation, amount) {
     WORKER_ROLES.ENGINEERS,
     WORKER_ROLES.SCHOLARS,
     WORKER_ROLES.MINERS,
+    WORKER_ROLES.FISHERS,
     WORKER_ROLES.FARMERS,
   ];
   for (const role of roleOrder) {
@@ -222,7 +225,7 @@ export function computeScore(nation, tiles) {
     return sum + countTiles(nation, tiles, type) * (score.buildingValue[type] || score.buildingValue.default);
   }, 0);
   const techValue =
-    (nation.tech.farming + nation.tech.mining + nation.tech.education + nation.tech.military) * score.techTierValue +
+    (nation.tech.farming + nation.tech.mining + nation.tech.education + (nation.tech.infrastructure || 0) + nation.tech.military) * score.techTierValue +
     Object.values(nation.tech.branches).reduce((sum, level) => sum + level * score.branchTierValue, 0);
   return Math.round(
     nation.money +

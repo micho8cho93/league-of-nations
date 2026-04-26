@@ -6,6 +6,7 @@ import {
   WORKER_ROLE_BY_TILE,
   formatNumber,
   isLand,
+  isWaterLike,
   isTileActive,
   signed,
   titleCase,
@@ -21,6 +22,7 @@ import {
   eraLabel,
   productionForTile,
   researchCost,
+  transportGrowthMultiplier,
   trainingOptionsForNation,
 } from "./tech.js";
 import { ALLIANCE_TYPES, getDiplomacy, projectTradeRouteYield, relationLabel } from "./trade.js";
@@ -32,18 +34,14 @@ const PANEL_STATE_KEY = "league-of-nations-panel-state";
 const SIDE_SECTION_STATE_KEY = "league-of-nations-side-sections";
 export const TUTORIAL_COMPLETED_KEY = "leagueOfNationsTutorialCompleted";
 const DEFAULT_PANEL_STATE = {
-  top: false,
   side: false,
   bottom: false,
 };
 const DEFAULT_SIDE_SECTION_STATE = {
   resources: true,
-  actions: true,
-  selection: true,
   nations: false,
   diplomacy: false,
   trade: false,
-  tech: false,
   summary: false,
 };
 
@@ -76,8 +74,8 @@ const TUTORIAL_STEPS = [
   },
   {
     title: "Technology and Eras",
-    body: "Research improves your nation. Strong progress moves the world into later eras with more options.",
-    target: "#tech-panel",
+    body: "Open the tech tree to research improvements. Strong progress moves the world into later eras with more options.",
+    target: "#tech-tree-btn",
   },
   {
     title: "Diplomacy Unlocks",
@@ -116,13 +114,17 @@ class GameUI {
     this.sideSectionState = loadSideSectionState();
     this.tutorial = null;
     this.savedPanelStateForTutorial = null;
+    this.turnTimeoutInProgress = false;
     this.cacheDom();
     this.applyPanelState();
     this.bindEvents();
     this.unsubscribeGame = this.game.on((event) => this.handleGameEvent(event));
     this.render();
     window.setTimeout(() => this.maybeStartTutorial(), 0);
-    window.setInterval(() => this.renderStatus(), 1000);
+    window.setInterval(() => {
+      this.enforceTurnTimer();
+      this.renderStatus();
+    }, 1000);
   }
 
   setGame(game) {
@@ -138,22 +140,18 @@ class GameUI {
     this.topPanel = document.getElementById("top-panel");
     this.sidePanel = document.getElementById("side-panel");
     this.bottomPanel = document.getElementById("bottom-panel");
-    this.topCollapseBtn = document.getElementById("top-collapse-btn");
     this.sideCollapseBtn = document.getElementById("side-collapse-btn");
     this.bottomCollapseBtn = document.getElementById("bottom-collapse-btn");
     this.statusStrip = document.getElementById("status-strip");
     this.phaseLabel = document.getElementById("phase-label");
     this.actionCounter = document.getElementById("action-counter");
+    this.techTreeBtn = document.getElementById("tech-tree-btn");
     this.endTurnBtn = document.getElementById("end-turn-btn");
-    this.newGameBtn = document.getElementById("new-game-btn");
     this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
     this.resourcePanel = document.getElementById("resource-panel");
-    this.actionSummaryPanel = document.getElementById("action-summary-panel");
-    this.selectionPanel = document.getElementById("selection-panel");
     this.nationPanel = document.getElementById("nation-panel");
     this.diplomacyPanel = document.getElementById("diplomacy-panel");
     this.tradePanel = document.getElementById("trade-panel");
-    this.techPanel = document.getElementById("tech-panel");
     this.summaryPanel = document.getElementById("summary-panel");
     this.feed = document.getElementById("event-feed-content");
     this.tilePopup = document.getElementById("tile-popup");
@@ -182,14 +180,12 @@ class GameUI {
       this.clearMilitarySelection();
       this.game.endTurn();
     });
-    this.newGameBtn.addEventListener("click", () => {
-      this.showConfirmNewGame();
-    });
     this.replayTutorialBtn.addEventListener("click", () => this.startTutorial({ replay: true }));
+    this.techTreeBtn.addEventListener("click", () => this.openTechDialog());
     this.dialogCloseBtn.addEventListener("click", () => this.closeDialog());
+    this.dialogBody.addEventListener("click", (event) => this.handleTechClick(event));
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
     this.diplomacyPanel.addEventListener("click", (event) => this.handleDiplomacyClick(event));
-    this.techPanel.addEventListener("click", (event) => this.handleTechClick(event));
     this.sidePanel.querySelectorAll("[data-side-section]").forEach((section) => {
       const key = section.dataset.sideSection;
       if (Object.prototype.hasOwnProperty.call(this.sideSectionState, key)) section.open = Boolean(this.sideSectionState[key]);
@@ -198,7 +194,6 @@ class GameUI {
         saveSideSectionState(this.sideSectionState);
       });
     });
-    this.topCollapseBtn.addEventListener("click", () => this.togglePanel("top"));
     this.sideCollapseBtn.addEventListener("click", () => this.togglePanel("side"));
     this.bottomCollapseBtn.addEventListener("click", () => this.togglePanel("bottom"));
   }
@@ -213,12 +208,10 @@ class GameUI {
   }
 
   applyPanelState() {
-    const { top, side, bottom } = this.panelState;
-    this.app.classList.toggle("panel-collapsed-top", top);
+    const { side, bottom } = this.panelState;
     this.app.classList.toggle("panel-collapsed-side", side);
     this.app.classList.toggle("panel-collapsed-bottom", bottom);
 
-    this.setPanelButton(this.topCollapseBtn, this.topPanel, top, "top", "↑", "↓");
     this.setPanelButton(this.sideCollapseBtn, this.sidePanel, side, "side", "→", "←");
     this.setPanelButton(this.bottomCollapseBtn, this.bottomPanel, bottom, "event feed", "↓", "↑");
     this.scheduleMapResize();
@@ -263,7 +256,7 @@ class GameUI {
   startTutorial({ replay = false } = {}) {
     if (this.tutorial) this.closeTutorial({ markComplete: false, restorePanels: false });
     this.savedPanelStateForTutorial = { ...this.panelState };
-    this.panelState = { top: false, side: false, bottom: false };
+    this.panelState = { side: false, bottom: false };
     this.applyPanelState();
     this.tutorial = {
       index: 0,
@@ -369,12 +362,10 @@ class GameUI {
   render() {
     this.renderStatus();
     this.renderResources();
-    this.renderActionSummary();
-    this.renderSelectionPanel();
     this.renderNations();
     this.renderDiplomacy();
     this.renderTrade();
-    this.renderTech();
+    this.refreshTechDialog();
     this.renderSummary();
     this.renderEvents();
     this.renderTilePopup();
@@ -479,14 +470,35 @@ class GameUI {
     this.endTurnBtn.textContent = waitingForTurn ? "Waiting" : "End Turn";
     this.renderActionCounter();
     const turnLimit = this.game.settings.unlimitedMode ? "Unlimited" : `${this.game.turn}/${this.game.settings.maxTurns}`;
-    this.statusStrip.innerHTML = [
+    const statusPills = [
       pill(player.name),
       pill(eraLabel(this.game.era)),
       pill(`Turn ${turnLimit}`),
       pill(`Money $${formatNumber(player.money)}`),
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
-      pill(this.timeText()),
-    ].join("");
+    ];
+    const timerText = this.turnTimerText();
+    if (timerText) statusPills.push(pill(timerText));
+    this.statusStrip.innerHTML = statusPills.join("");
+  }
+
+  enforceTurnTimer() {
+    if (this.turnTimeoutInProgress || this.isServerAuthoritative()) return;
+    if (!this.isTurnTimerExpired()) return;
+    this.turnTimeoutInProgress = true;
+    this.clearMilitarySelection();
+    Promise.resolve(this.game.missTurn(this.game.playerId, "Turn timer expired."))
+      .finally(() => {
+        this.turnTimeoutInProgress = false;
+      });
+  }
+
+  isTurnTimerExpired() {
+    const limit = Number(this.game.settings.turnTimerMinutes || this.game.settings.timeLimitMinutes || 0);
+    if (limit <= 0 || this.game.gameOver || this.game.isProcessingTurn || this.game.phase !== "player") return false;
+    if (this.isServerAuthoritative() && !this.isPlayersTurn()) return false;
+    const elapsed = Math.floor((Date.now() - (this.game.turnStartedAt || Date.now())) / 1000);
+    return elapsed >= limit * 60;
   }
 
   activeTurnNationId() {
@@ -667,7 +679,7 @@ class GameUI {
     flows.industry += trade.industry;
     flows.food -= flows.foodConsumed;
     flows.moneyNet = flows.money - flows.upkeep;
-    flows.population += projectedFoodGrowth(player, flows);
+    flows.population += projectedFoodGrowth(this.game, player, flows);
     return flows;
   }
 
@@ -800,16 +812,17 @@ class GameUI {
     `;
   }
 
-  renderTech() {
+  renderTechTreeHtml() {
     const player = this.game.player;
     const categoryRows = Object.entries(TECH_CATEGORIES).map(([id, config]) => {
       const check = canResearch(this.game, player, id);
-      const cost = researchCost(id, player.tech[id]);
+      const tier = player.tech[id] || 0;
+      const cost = researchCost(id, tier);
       return `
         <div class="tech-row">
           <div class="row-head">
             <strong>${config.label}</strong>
-            <span class="mini-pill">Tier ${player.tech[id]}/4</span>
+            <span class="mini-pill">Tier ${tier}/4</span>
           </div>
           <div class="muted">${escapeHtml(config.description)} Cost: $${formatNumber(cost)}.</div>
           <button class="secondary-btn" data-tech="${id}" ${check.ok ? "" : "disabled"} title="${escapeHtml(check.reason || "")}">
@@ -834,7 +847,16 @@ class GameUI {
         </div>
       `;
     }).join("");
-    this.techPanel.innerHTML = categoryRows + `<div class="tech-row"><strong>Era 4 Branches</strong></div>` + branchRows;
+    return categoryRows + `<div class="tech-row"><strong>Era 4 Branches</strong></div>` + branchRows;
+  }
+
+  openTechDialog() {
+    this.openDialog("Tech Tree", this.renderTechTreeHtml());
+  }
+
+  refreshTechDialog() {
+    if (this.dialogBackdrop.hidden || this.dialogTitle.textContent !== "Tech Tree") return;
+    this.dialogBody.innerHTML = this.renderTechTreeHtml();
   }
 
   renderSummary() {
@@ -912,7 +934,8 @@ class GameUI {
   }
 
   renderBuildButtons(tile) {
-    if (!isLand(tile)) return `<p class="muted">Water blocks construction until naval movement is used for military crossing.</p>`;
+    const buildableTerrain = isLand(tile) || isWaterLike(tile) || tile.type === TILE_TYPES.MOUNTAIN;
+    if (!buildableTerrain) return "";
     const buttons = BUILDING_TYPES.map((type) => {
       const check = this.game.canBuild(tile.id, type, this.game.playerId);
       const cost = buildingCost(type, this.game.era);
@@ -1151,6 +1174,7 @@ class GameUI {
       }
       const result = this.game.research(techButton.dataset.tech);
       if (!result.ok) this.showNotice("Research blocked", result.reason);
+      if (result.ok) this.refreshTechDialog();
       return;
     }
     const branchButton = event.target.closest("[data-branch]");
@@ -1161,6 +1185,7 @@ class GameUI {
       }
       const result = this.game.researchBranch(branchButton.dataset.branch);
       if (!result.ok) this.showNotice("Specialization blocked", result.reason);
+      if (result.ok) this.refreshTechDialog();
     }
   }
 
@@ -1279,22 +1304,11 @@ class GameUI {
         <tbody>${rows}</tbody>
       </table>
       <div class="row-actions">
-        <button id="victory-new-game" class="primary-btn">Start New Game</button>
+        <button id="victory-new-game" class="primary-btn">Return to Setup</button>
       </div>
     `, () => {
       this.dialogCloseBtn.hidden = true;
       this.dialogBody.querySelector("#victory-new-game").addEventListener("click", () => window.location.reload());
-    });
-  }
-
-  showConfirmNewGame() {
-    this.openDialog("Start New Game", `
-      <p>This will return to the setup screen and end the current session-only game.</p>
-      <div class="row-actions">
-        <button id="confirm-new-game" class="danger-btn">Return to Setup</button>
-      </div>
-    `, () => {
-      this.dialogBody.querySelector("#confirm-new-game").addEventListener("click", () => window.location.reload());
     });
   }
 
@@ -1317,15 +1331,15 @@ class GameUI {
     this.dialogCloseBtn.hidden = false;
   }
 
-  timeText() {
-    const limit = this.game.settings.timeLimitMinutes || 0;
-    if (!limit) return "No timer";
-    const elapsed = Math.floor((Date.now() - this.game.startedAt) / 1000);
+  turnTimerText() {
+    const limit = Number(this.game.settings.turnTimerMinutes || this.game.settings.timeLimitMinutes || 0);
+    if (!limit) return "";
+    const elapsed = Math.floor((Date.now() - (this.game.turnStartedAt || Date.now())) / 1000);
     const remaining = limit * 60 - elapsed;
     if (remaining <= 0) return "Time expired";
     const minutes = Math.floor(remaining / 60);
     const seconds = remaining % 60;
-    return `Time ${minutes}:${String(seconds).padStart(2, "0")}`;
+    return `Turn timer ${minutes}:${String(seconds).padStart(2, "0")}`;
   }
 }
 
@@ -1347,7 +1361,6 @@ function loadPanelState() {
     const parsed = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) || "null");
     if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PANEL_STATE };
     return {
-      top: Boolean(parsed.top),
       side: Boolean(parsed.side),
       bottom: Boolean(parsed.bottom),
     };
@@ -1358,7 +1371,6 @@ function loadPanelState() {
 
 function savePanelState(state) {
   localStorage.setItem(PANEL_STATE_KEY, JSON.stringify({
-    top: Boolean(state.top),
     side: Boolean(state.side),
     bottom: Boolean(state.bottom),
   }));
@@ -1442,16 +1454,20 @@ export function createTooltip(element, content) {
   return tooltip;
 }
 
-function projectedFoodGrowth(player, flows) {
+function projectedFoodGrowth(game, player, flows) {
   const stockAfterFood = player.resources.food + flows.food;
-  if (stockAfterFood < 0) return -Math.max(1, Math.ceil(Math.abs(stockAfterFood) / 7));
-  if (flows.food < 0) return 0;
+  if (stockAfterFood < 0) return -Math.max(1, Math.ceil(Math.abs(stockAfterFood) / BALANCE.population.famineFoodPerDeath));
+  if (flows.food < BALANCE.population.growth.minimumFoodSurplus) return 0;
   const headroom = Math.max(0, flows.capacity - player.population.total);
   if (headroom <= 0 || flows.capacity <= 0) return 0;
   const surplusRatio = Math.min(1, flows.food / Math.max(1, flows.foodConsumed));
   const headroomFraction = headroom / flows.capacity;
-  const baseGrowth = surplusRatio >= 0.8 ? 3 : surplusRatio >= 0.4 ? 2 : 1;
-  return Math.round(baseGrowth * headroomFraction);
+  const growth = BALANCE.population.growth;
+  const baseGrowth =
+    surplusRatio >= growth.thrivingSurplusRatio ? growth.thrivingGrowth :
+    surplusRatio >= growth.comfortableSurplusRatio ? growth.comfortableGrowth :
+    growth.marginalGrowth;
+  return Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(player, game.tiles));
 }
 
 function summaryLine(label, value, className = "") {

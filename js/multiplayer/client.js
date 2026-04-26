@@ -128,11 +128,12 @@ function getColyseusEndpoint() {
 }
 
 function readSettings(settings = {}) {
+  const turnTimerMinutes = Number(settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0);
   return {
     mapSize: settings.mapSize || "Medium",
     nationCount: Number(settings.nationCount || 5),
     maxTurns: Number(settings.maxTurns || 30),
-    timeLimitMinutes: Number(settings.timeLimitMinutes || 0),
+    turnTimerMinutes,
     unlimitedMode: Boolean(settings.unlimitedMode),
     seed: Number(settings.seed || 1),
   };

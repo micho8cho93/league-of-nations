@@ -34,8 +34,8 @@
           <input id="setup-max-turns" type="number" min="10" max="120" step="1" value="30" />
         </label>
         <label class="field">
-          <span>Time limit minutes</span>
-          <input id="setup-time-limit" type="number" min="0" max="240" step="5" value="0" />
+          <span>Minutes per turn</span>
+          <input id="setup-turn-timer" type="number" min="0" max="240" step="1" value="0" />
         </label>
         <label class="field checkbox-field">
           <input id="setup-unlimited" type="checkbox" />
@@ -44,10 +44,9 @@
       </div>
       <div id="continue-note" class="continue-note"></div>
       <div class="setup-actions">
-        <button id="setup-replay-tutorial-btn" type="button" class="secondary-btn">Replay Tutorial</button>
         <button id="enter-code-btn" type="button" class="secondary-btn">Enter Code</button>
-        <button id="create-match-btn" type="button" class="secondary-btn">Create Match</button>
-        <button type="submit" class="primary-btn">Start New Game</button>
+        <button id="create-match-btn" type="button" class="secondary-btn">Create Online Match</button>
+        <button type="submit" class="primary-btn">Start Bot Match</button>
       </div>
       <div id="join-panel" class="join-panel" hidden>
         <label class="field">
@@ -99,8 +98,8 @@
               <input id="lobby-max-turns" type="number" min="10" max="120" step="1" />
             </label>
             <label class="field">
-              <span>Time limit minutes</span>
-              <input id="lobby-time-limit" type="number" min="0" max="240" step="5" />
+              <span>Minutes per turn</span>
+              <input id="lobby-turn-timer" type="number" min="0" max="240" step="1" />
             </label>
             <label class="field checkbox-field">
               <input id="lobby-unlimited" type="checkbox" />
@@ -115,23 +114,21 @@
   </div>
 
   <div id="app" class="app" hidden>
-    <header id="top-panel" class="topbar">
-      <div class="brand-block">
-        <div class="brand">League of Nations</div>
-        <div id="phase-label" class="phase-label">Player Turn</div>
-      </div>
-      <div id="status-strip" class="status-strip"></div>
-      <div id="action-counter" class="action-counter" aria-live="polite">Actions left: 10</div>
-      <div class="top-actions">
-        <button id="new-game-btn" class="secondary-btn">New</button>
-        <button id="replay-tutorial-btn" class="secondary-btn">Tutorial</button>
-        <button id="end-turn-btn" class="primary-btn">End Turn</button>
-      </div>
-      <button id="top-collapse-btn" class="icon-btn panel-toggle top-toggle" type="button" aria-controls="top-panel" aria-expanded="true" aria-label="Collapse top panel">↑</button>
-    </header>
-
     <main class="game-shell">
       <section class="map-section">
+        <header id="top-panel" class="topbar">
+          <div class="brand-block">
+            <div class="brand">League of Nations</div>
+            <div id="phase-label" class="phase-label">Player Turn</div>
+          </div>
+          <div id="status-strip" class="status-strip"></div>
+          <div id="action-counter" class="action-counter" aria-live="polite">Actions left: 10</div>
+          <div class="top-actions">
+            <button id="tech-tree-btn" class="secondary-btn">Tech Tree</button>
+            <button id="replay-tutorial-btn" class="secondary-btn">Tutorial</button>
+            <button id="end-turn-btn" class="primary-btn">End Turn</button>
+          </div>
+        </header>
         <canvas id="map-canvas"></canvas>
         <div id="tooltip" class="tooltip" hidden></div>
         <section id="tile-popup" class="tile-popup" hidden>
@@ -147,14 +144,6 @@
             <summary>Resources</summary>
             <div id="resource-panel"></div>
           </details>
-          <details class="panel side-section" data-side-section="actions" open>
-            <summary>Actions Remaining</summary>
-            <div id="action-summary-panel"></div>
-          </details>
-          <details class="panel side-section" data-side-section="selection" open>
-            <summary>Selected Tile</summary>
-            <div id="selection-panel"></div>
-          </details>
           <details class="panel side-section" data-side-section="nations">
             <summary>Other Nations</summary>
             <div id="nation-panel"></div>
@@ -166,10 +155,6 @@
           <details class="panel side-section" data-side-section="trade">
             <summary>Detailed Trade</summary>
             <div id="trade-panel"></div>
-          </details>
-          <details class="panel side-section" data-side-section="tech">
-            <summary>Technology</summary>
-            <div id="tech-panel"></div>
           </details>
           <details class="panel side-section" data-side-section="summary">
             <summary>Last Turn</summary>

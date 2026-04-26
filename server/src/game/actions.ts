@@ -47,32 +47,54 @@ const MAX_ACTIONS_PER_TURN = 10;
 const TILE_TYPES = {
   EMPTY: "empty",
   FARM: "farm",
+  FISHERY: "fishery",
   MINE: "mine",
+  MOUNTAIN_MINE: "mountainMine",
   SCHOOL: "school",
+  UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  ROAD: "road",
+  RAILROAD: "railroad",
+  HIGHWAY: "highway",
+  AIRPORT: "airport",
   WATER: "water",
   MOUNTAIN: "mountain",
 } as const;
 
 const BUILDING_TYPES = [
   TILE_TYPES.FARM,
+  TILE_TYPES.FISHERY,
   TILE_TYPES.MINE,
+  TILE_TYPES.MOUNTAIN_MINE,
   TILE_TYPES.SCHOOL,
+  TILE_TYPES.UNIVERSITY,
+  TILE_TYPES.ROAD,
+  TILE_TYPES.RAILROAD,
+  TILE_TYPES.HIGHWAY,
+  TILE_TYPES.AIRPORT,
   TILE_TYPES.FACTORY,
   TILE_TYPES.MILITARY,
 ];
 
 const WORKER_MIN: Record<string, number> = {
   [TILE_TYPES.FARM]: 2,
+  [TILE_TYPES.FISHERY]: 2,
   [TILE_TYPES.MINE]: 3,
+  [TILE_TYPES.MOUNTAIN_MINE]: 4,
   [TILE_TYPES.SCHOOL]: 3,
+  [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.ROAD]: 2,
+  [TILE_TYPES.RAILROAD]: 3,
+  [TILE_TYPES.HIGHWAY]: 4,
+  [TILE_TYPES.AIRPORT]: 6,
 };
 
 const WORKER_ROLES = {
   FARMERS: "farmers",
+  FISHERS: "fishers",
   MINERS: "miners",
   SCHOLARS: "scholars",
   ENGINEERS: "engineers",
@@ -81,10 +103,17 @@ const WORKER_ROLES = {
 
 const WORKER_ROLE_BY_TILE: Record<string, string> = {
   [TILE_TYPES.FARM]: WORKER_ROLES.FARMERS,
+  [TILE_TYPES.FISHERY]: WORKER_ROLES.FISHERS,
   [TILE_TYPES.MINE]: WORKER_ROLES.MINERS,
+  [TILE_TYPES.MOUNTAIN_MINE]: WORKER_ROLES.MINERS,
   [TILE_TYPES.SCHOOL]: WORKER_ROLES.SCHOLARS,
+  [TILE_TYPES.UNIVERSITY]: WORKER_ROLES.SCHOLARS,
   [TILE_TYPES.FACTORY]: WORKER_ROLES.ENGINEERS,
   [TILE_TYPES.MILITARY]: WORKER_ROLES.SOLDIERS,
+  [TILE_TYPES.ROAD]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.RAILROAD]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.HIGHWAY]: WORKER_ROLES.ENGINEERS,
+  [TILE_TYPES.AIRPORT]: WORKER_ROLES.ENGINEERS,
 };
 
 const HEX_DIRECTIONS = [
@@ -98,9 +127,16 @@ const HEX_DIRECTIONS = [
 
 const BUILD_COST: Record<string, number> = {
   [TILE_TYPES.FARM]: 140,
+  [TILE_TYPES.FISHERY]: 170,
   [TILE_TYPES.MINE]: 190,
+  [TILE_TYPES.MOUNTAIN_MINE]: 310,
   [TILE_TYPES.SCHOOL]: 230,
+  [TILE_TYPES.UNIVERSITY]: 560,
   [TILE_TYPES.MILITARY]: 330,
+  [TILE_TYPES.ROAD]: 220,
+  [TILE_TYPES.RAILROAD]: 360,
+  [TILE_TYPES.HIGHWAY]: 620,
+  [TILE_TYPES.AIRPORT]: 980,
   [TILE_TYPES.FACTORY]: 780,
 };
 
@@ -136,11 +172,12 @@ const TRAINING = {
 
 const TECH = {
   categories: {
-    farming: { label: "Farming", tileType: TILE_TYPES.FARM, baseCost: 260, resource: "food" },
-    mining: { label: "Mining", tileType: TILE_TYPES.MINE, baseCost: 320, resource: "materials" },
-    education: { label: "Education", tileType: TILE_TYPES.SCHOOL, baseCost: 360, resource: "education" },
-    military: { label: "Military", tileType: TILE_TYPES.MILITARY, baseCost: 420, resource: "materials" },
-  } as Record<string, { label: string; tileType: string; baseCost: number; resource: string }>,
+    farming: { label: "Farming", tileTypes: [TILE_TYPES.FARM, TILE_TYPES.FISHERY], baseCost: 260, resource: "food" },
+    mining: { label: "Mining", tileTypes: [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE], baseCost: 320, resource: "materials" },
+    education: { label: "Education", tileTypes: [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY], baseCost: 360, resource: "education" },
+    infrastructure: { label: "Infrastructure", tileTypes: [TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.HIGHWAY, TILE_TYPES.AIRPORT], baseCost: 390, resource: "materials" },
+    military: { label: "Military", tileTypes: [TILE_TYPES.MILITARY], baseCost: 420, resource: "materials" },
+  } as Record<string, { label: string; tileTypes: string[]; baseCost: number; resource: string }>,
   research: {
     costExponent: 1.85,
     maxTier: 4,
@@ -164,6 +201,13 @@ const TECH = {
     maxLevel: 3,
   },
 };
+
+const INFRASTRUCTURE_UNLOCKS = [
+  { tier: 1, tileType: TILE_TYPES.ROAD, label: "Road", era: 1 },
+  { tier: 2, tileType: TILE_TYPES.RAILROAD, label: "Railroad", era: 2 },
+  { tier: 3, tileType: TILE_TYPES.HIGHWAY, label: "Highway", era: 3 },
+  { tier: 4, tileType: TILE_TYPES.AIRPORT, label: "Airport", era: 4 },
+];
 
 const UNIT_TYPES = {
   infantry: {
@@ -235,7 +279,20 @@ const WAR = {
   defense: {
     capital: { flatBonus: 4, multiplierBonus: 0.18 },
     developed: {
-      types: [TILE_TYPES.FARM, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+      types: [
+        TILE_TYPES.FARM,
+        TILE_TYPES.FISHERY,
+        TILE_TYPES.MINE,
+        TILE_TYPES.MOUNTAIN_MINE,
+        TILE_TYPES.SCHOOL,
+        TILE_TYPES.UNIVERSITY,
+        TILE_TYPES.FACTORY,
+        TILE_TYPES.MILITARY,
+        TILE_TYPES.ROAD,
+        TILE_TYPES.RAILROAD,
+        TILE_TYPES.HIGHWAY,
+        TILE_TYPES.AIRPORT,
+      ],
       flatBonus: 1,
       multiplierBonus: 0.04,
     },
@@ -249,7 +306,7 @@ const WAR = {
     progressPerVictory: 1,
     capitalRequiredProgress: 3,
     highValueRequiredProgress: 2,
-    highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+    highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY, TILE_TYPES.AIRPORT],
   },
 };
 
@@ -381,7 +438,7 @@ function destroyTile(game: ServerGameState, tileId: string, nationId: string): A
 
   spendMoney(nation, cost);
   releaseTileWorkers(game, tile);
-  tile.type = TILE_TYPES.EMPTY;
+  tile.type = destroyedFallbackType(tile.type);
   tile.unit = null;
   incrementStat(nation, "destroyed", 1);
   addEvent(game, `${nation.name} cleared a tile for $${cost}.`, {
@@ -745,11 +802,20 @@ function canBuild(
   const nation = game.nations[nationId];
   const tile = tileById(game, tileId);
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
-  if (!tile || !isLand(tile)) return { ok: false, reason: "Buildings require land." };
-  if (tile.type !== TILE_TYPES.EMPTY) return { ok: false, reason: "Tile is already developed." };
+  if (!tile) return { ok: false, reason: "Build target is unavailable." };
   if (tile.ownerId && tile.ownerId !== nationId) return { ok: false, reason: "Cannot build on foreign territory." };
   if (!BUILDING_TYPES.includes(type as (typeof BUILDING_TYPES)[number])) return { ok: false, reason: "Unknown building type." };
   if (!tileTypeUnlocked(type, game.era)) return { ok: false, reason: "This building is not unlocked yet." };
+  const techCheck = buildingTechRequirement(type, nation, game.era);
+  if (!techCheck.ok) return techCheck;
+  if (type === TILE_TYPES.FISHERY) {
+    if (tile.type !== TILE_TYPES.WATER) return { ok: false, reason: "Fisheries require lake or ocean water." };
+  } else if (type === TILE_TYPES.MOUNTAIN_MINE) {
+    if (tile.type !== TILE_TYPES.MOUNTAIN) return { ok: false, reason: "Mountain mines require mountains." };
+  } else {
+    if (!isLand(tile)) return { ok: false, reason: "Buildings require land." };
+    if (tile.type !== TILE_TYPES.EMPTY) return { ok: false, reason: "Tile is already developed." };
+  }
 
   if (!tile.ownerId) {
     const adjacentOwned = neighbors(game, tile.id).some((neighbor) => neighbor.ownerId === nationId);
@@ -798,8 +864,8 @@ function canBuildFactory(game: ServerGameState, nationId: string): ActionResult 
   const requiredPopulation = 35 + factories * 8;
   if ((nation.tech.mining || 0) < 2) return { ok: false, reason: "Requires Mining tier 2." };
   if ((nation.tech.education || 0) < 2) return { ok: false, reason: "Requires Education tier 2." };
-  if (activeTiles(game, nationId, TILE_TYPES.MINE).length < requiredMines) return { ok: false, reason: `Requires ${requiredMines} active mines.` };
-  if (activeTiles(game, nationId, TILE_TYPES.SCHOOL).length < requiredSchools) return { ok: false, reason: `Requires ${requiredSchools} active schools.` };
+  if (activeTileCount(game, nationId, [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE]) < requiredMines) return { ok: false, reason: `Requires ${requiredMines} active mines.` };
+  if (activeTileCount(game, nationId, [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY]) < requiredSchools) return { ok: false, reason: `Requires ${requiredSchools} active schools.` };
   if (nation.population.total < requiredPopulation) return { ok: false, reason: `Requires ${requiredPopulation} population.` };
   return { ok: true };
 }
@@ -816,9 +882,17 @@ function canResearch(
   const nextTier = current + 1;
   const activeRequired = Math.max(1, nextTier * TECH.research.activeTilesPerTier);
   const resourceCost = Math.ceil(config.baseCost * TECH.research.resourceCostRate * Math.pow(TECH.research.resourceCostExponent, nextTier - 1));
-  const active = activeTiles(game, nation.id, config.tileType).length;
+  const infrastructurePrevious = category === "infrastructure" ? INFRASTRUCTURE_UNLOCKS[nextTier - 2] : null;
+  const active = activeTileCount(game, nation.id, infrastructurePrevious ? [infrastructurePrevious.tileType] : config.tileTypes);
   const cost = Math.ceil(config.baseCost * Math.pow(TECH.research.costExponent, current));
-  if (active < activeRequired) return { ok: false, reason: `Requires ${activeRequired} active ${config.label.toLowerCase()} tiles.` };
+  if (category === "infrastructure" && nextTier === 1) {
+    if (activeTileCount(game, nation.id, [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE]) < 1) return { ok: false, reason: "Requires one active mine or mountain mine." };
+    if (activeTileCount(game, nation.id, [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY]) < 1) return { ok: false, reason: "Requires one active school or university." };
+  } else {
+    const required = category === "infrastructure" ? 1 : activeRequired;
+    const label = infrastructurePrevious ? infrastructurePrevious.label.toLowerCase() : config.label.toLowerCase();
+    if (active < required) return { ok: false, reason: `Requires ${required} active ${label} ${required === 1 ? "tile" : "tiles"}.` };
+  }
   if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
   if (resourceCount(nation, config.resource) < resourceCost) return { ok: false, reason: `Requires ${resourceCost} ${config.resource}.` };
   return { ok: true, cost, requirement: { resource: config.resource, resourceCost }, nextTier };
@@ -878,7 +952,7 @@ function getValidMilitaryActionsFromTile(game: ServerGameState, fromTileId: stri
       action: "move",
       fromTileId,
       toTileId: target.tile.id,
-      cost: target.tile.type === TILE_TYPES.WATER ? TROOP_MOVEMENT_COST.water : TROOP_MOVEMENT_COST.land,
+      cost: isWaterLike(target.tile) ? TROOP_MOVEMENT_COST.water : TROOP_MOVEMENT_COST.land,
       unitType,
       path: target.path,
       captureOnWin: false,
@@ -890,7 +964,7 @@ function getValidMilitaryActionsFromTile(game: ServerGameState, fromTileId: stri
       action: "attack",
       fromTileId,
       toTileId: target.id,
-      cost: target.type === TILE_TYPES.WATER ? TROOP_MOVEMENT_COST.water : TROOP_MOVEMENT_COST.land,
+      cost: isWaterLike(target) ? TROOP_MOVEMENT_COST.water : TROOP_MOVEMENT_COST.land,
       unitType,
       path: [from.id, target.id],
       captureOnWin: Boolean(config.capturesTerritory && distance <= 1),
@@ -933,7 +1007,7 @@ function reachableMoveTargets(game: ServerGameState, from: Tile, nationId: strin
       const path = [...current.path, neighbor.id];
       seen.set(neighbor.id, nextDistance);
       if (!neighbor.ownerId || neighbor.ownerId === nationId) targets.push({ tile: neighbor, path });
-      if (neighbor.ownerId === nationId || areAllied(game, nationId, neighbor.ownerId) || (config.canEnterWater && neighbor.type === TILE_TYPES.WATER)) {
+      if (neighbor.ownerId === nationId || areAllied(game, nationId, neighbor.ownerId) || (config.canEnterWater && isWaterLike(neighbor))) {
         queue.push({ tile: neighbor, path, distance: nextDistance });
       }
     }
@@ -953,26 +1027,26 @@ function canMoveDestination(game: ServerGameState, from: Tile, tile: Tile, natio
   if (!tile || tile.id === from.id) return false;
   if (!canUnitEnterTile(game, nationId, tile, unitType).ok) return false;
   if (tile.ownerId && tile.ownerId !== nationId) return false;
-  if (!tile.ownerId && tile.type !== TILE_TYPES.WATER && !bordersNation(game, tile, nationId)) return false;
-  return tile.type !== TILE_TYPES.WATER || unitTypeConfig(unitType).canEnterWater;
+  if (!tile.ownerId && !isWaterLike(tile) && !bordersNation(game, tile, nationId)) return false;
+  return !isWaterLike(tile) || unitTypeConfig(unitType).canEnterWater;
 }
 
 function canUnitEnterTile(game: ServerGameState, nationId: string, tile: Tile, unitType = "infantry"): ActionResult {
   const config = unitTypeConfig(unitType);
   if (tile.type === TILE_TYPES.MOUNTAIN) return { ok: false, reason: "Mountains cannot be traversed." };
-  if (tile.type === TILE_TYPES.WATER && !config.canEnterWater) return { ok: false, reason: `${config.label} cannot enter water.` };
-  if (tile.type === TILE_TYPES.WATER && !hasNavalAccess(game.nations[nationId])) return { ok: false, reason: "Water crossing requires naval specialization." };
-  if (config.coastalOnly && tile.type !== TILE_TYPES.WATER && !isCoastalTile(game, tile)) return { ok: false, reason: `${config.label} can only operate on water or coastal tiles.` };
+  if (isWaterLike(tile) && !config.canEnterWater) return { ok: false, reason: `${config.label} cannot enter water.` };
+  if (isWaterLike(tile) && !hasNavalAccess(game.nations[nationId])) return { ok: false, reason: "Water crossing requires naval specialization." };
+  if (config.coastalOnly && !isWaterLike(tile) && !isCoastalTile(game, tile)) return { ok: false, reason: `${config.label} can only operate on water or coastal tiles.` };
   if (!tile.ownerId || tile.ownerId === nationId || areAllied(game, nationId, tile.ownerId) || areAtWar(game, nationId, tile.ownerId)) return { ok: true };
   return { ok: false, reason: "Foreign territory requires war or alliance." };
 }
 
 function canUnitAttackTile(game: ServerGameState, tile: Tile, unitType: string) {
   const config = unitTypeConfig(unitType);
-  if (tile.type === TILE_TYPES.WATER && !config.canEnterWater && unitType !== "air") return false;
-  if (config.coastalOnly && tile.type !== TILE_TYPES.WATER && !isCoastalTile(game, tile)) return false;
-  if (unitType === "tanks" && tile.type === TILE_TYPES.WATER) return false;
-  if (unitType === "infantry" && tile.type === TILE_TYPES.WATER) return false;
+  if (isWaterLike(tile) && !config.canEnterWater && unitType !== "air") return false;
+  if (config.coastalOnly && !isWaterLike(tile) && !isCoastalTile(game, tile)) return false;
+  if (unitType === "tanks" && isWaterLike(tile)) return false;
+  if (unitType === "infantry" && isWaterLike(tile)) return false;
   return true;
 }
 
@@ -1520,7 +1594,7 @@ function removePopulation(nation: Nation, rawAmount: number) {
   nation.population.available -= fromAvailable;
   nation.population.total -= fromAvailable;
   remaining -= fromAvailable;
-  for (const role of [WORKER_ROLES.SOLDIERS, WORKER_ROLES.ENGINEERS, WORKER_ROLES.SCHOLARS, WORKER_ROLES.MINERS, WORKER_ROLES.FARMERS]) {
+  for (const role of [WORKER_ROLES.SOLDIERS, WORKER_ROLES.ENGINEERS, WORKER_ROLES.SCHOLARS, WORKER_ROLES.MINERS, WORKER_ROLES.FISHERS, WORKER_ROLES.FARMERS]) {
     if (remaining <= 0) break;
     const lost = Math.min(workerCount(nation, role), remaining);
     nation.workers[role] = workerCount(nation, role) - lost;
@@ -1546,6 +1620,10 @@ function activeTiles(game: ServerGameState, nationId: string, type: string) {
   return game.map.tiles.filter((tile) => tile.ownerId === nationId && tile.type === type && isTileActive(tile));
 }
 
+function activeTileCount(game: ServerGameState, nationId: string, types: string[]) {
+  return types.reduce((sum, type) => sum + activeTiles(game, nationId, type).length, 0);
+}
+
 function isTileActive(tile: Tile) {
   if (!tile || !WORKER_MIN[tile.type]) return false;
   if (tile.effects?.disabledTurns > 0 || tile.effects?.floodedTurns > 0) return false;
@@ -1555,6 +1633,20 @@ function isTileActive(tile: Tile) {
 function tileTypeUnlocked(type: string, era: number) {
   if (type === TILE_TYPES.FACTORY) return era >= 3;
   return type !== TILE_TYPES.WATER;
+}
+
+function buildingTechRequirement(type: string, nation: Nation, era: number): ActionResult {
+  if (type === TILE_TYPES.FISHERY && numberValue(nation.tech.farming) < 1) return { ok: false, reason: "Requires Farming tier 1." };
+  if (type === TILE_TYPES.MOUNTAIN_MINE && numberValue(nation.tech.mining) < 2) return { ok: false, reason: "Requires Mining tier 2." };
+  if (type === TILE_TYPES.UNIVERSITY && numberValue(nation.tech.education) < 3) return { ok: false, reason: "Requires Education tier 3." };
+  const unlock = INFRASTRUCTURE_UNLOCKS.find((item) => item.tileType === type);
+  if (unlock) {
+    if (era < unlock.era) return { ok: false, reason: `${unlock.label}s unlock in Era ${unlock.era}.` };
+    if (numberValue((nation.tech as unknown as Record<string, unknown>).infrastructure) < unlock.tier) {
+      return { ok: false, reason: `Requires Infrastructure tier ${unlock.tier}.` };
+    }
+  }
+  return { ok: true };
 }
 
 function buildingCost(type: string, era: number) {
@@ -1568,6 +1660,12 @@ function buildingCost(type: string, era: number) {
 function destroyCost(type: string) {
   if (type === TILE_TYPES.EMPTY || type === TILE_TYPES.WATER) return 0;
   return DESTROY_COST[type] || DESTROY_COST.default;
+}
+
+function destroyedFallbackType(type: string) {
+  if (type === TILE_TYPES.FISHERY) return TILE_TYPES.WATER;
+  if (type === TILE_TYPES.MOUNTAIN_MINE) return TILE_TYPES.MOUNTAIN;
+  return TILE_TYPES.EMPTY;
 }
 
 function workerAdminCost(amount: number) {
@@ -1591,12 +1689,16 @@ function tileByCoords(game: ServerGameState, q: number, r: number) {
 }
 
 function isLand(tile?: Tile | null) {
-  return tile && tile.terrain === "land" && tile.type !== TILE_TYPES.WATER && tile.type !== TILE_TYPES.MOUNTAIN;
+  return tile && tile.terrain === "land" && !isWaterLike(tile) && tile.type !== TILE_TYPES.MOUNTAIN;
+}
+
+function isWaterLike(tile?: Tile | null) {
+  return tile && (tile.type === TILE_TYPES.WATER || tile.type === TILE_TYPES.FISHERY);
 }
 
 function isCoastalTile(game: ServerGameState, tile: Tile) {
-  if (!tile || tile.type === TILE_TYPES.WATER) return true;
-  return neighbors(game, tile.id).some((neighbor) => neighbor.type === TILE_TYPES.WATER);
+  if (!tile || isWaterLike(tile)) return true;
+  return neighbors(game, tile.id).some((neighbor) => isWaterLike(neighbor));
 }
 
 function bordersNation(game: ServerGameState, tile: Tile, nationId: string) {
@@ -1708,6 +1810,7 @@ function normalizeActionCount(value: unknown, fallback: number) {
 
 function typeLabel(type: string) {
   if (type === TILE_TYPES.MILITARY) return "Military Base";
+  if (type === TILE_TYPES.MOUNTAIN_MINE) return "Mountain Mine";
   return String(type).replace(/^\w/, (letter) => letter.toUpperCase());
 }
 

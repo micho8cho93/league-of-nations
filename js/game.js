@@ -9,6 +9,7 @@ import {
   deepClone,
   delay,
   isLand,
+  isWaterLike,
   isTileActive,
   mulberry32,
   nationColor,
@@ -37,12 +38,14 @@ import {
 } from "./map.js";
 import {
   buildingCost,
+  buildingTechRequirement,
   canBuildFactory,
   canResearch,
   canResearchBranch,
   destroyCost,
   productionForTile,
   tileTypeUnlocked,
+  transportGrowthMultiplier,
   trainingCost,
   workerAdminCost,
   checkEraAdvancement,
@@ -348,9 +351,10 @@ export class GameState {
     const owned = this.tiles.filter((tile) => tile.ownerId === nationId);
     const ids = new Set();
     for (const tile of owned) {
-      if (tile.type === TILE_TYPES.EMPTY) ids.add(tile.id);
+      if ([TILE_TYPES.EMPTY, TILE_TYPES.WATER, TILE_TYPES.MOUNTAIN].includes(tile.type)) ids.add(tile.id);
       for (const neighbor of this.neighbors(tile.id)) {
-        if (isLand(neighbor) && (!neighbor.ownerId || neighbor.ownerId === nationId)) ids.add(neighbor.id);
+        const terrainBuildCandidate = isLand(neighbor) || isWaterLike(neighbor) || neighbor.type === TILE_TYPES.MOUNTAIN;
+        if (terrainBuildCandidate && (!neighbor.ownerId || neighbor.ownerId === nationId)) ids.add(neighbor.id);
       }
     }
     return [...ids].map((id) => this.tileById(id)).filter(Boolean);
@@ -360,11 +364,20 @@ export class GameState {
     const nation = this.nations[nationId];
     const tile = this.tileById(tileIdValue);
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
-    if (!tile || !isLand(tile)) return { ok: false, reason: "Buildings require land." };
-    if (tile.type !== TILE_TYPES.EMPTY) return { ok: false, reason: "Tile is already developed." };
+    if (!tile) return { ok: false, reason: "Build target is unavailable." };
     if (tile.ownerId && tile.ownerId !== nationId) return { ok: false, reason: "Cannot build on foreign territory." };
     if (!tileTypeUnlocked(type, this.era)) return { ok: false, reason: "This building is not unlocked yet." };
     if (!BUILDING_TYPES.includes(type)) return { ok: false, reason: "Unknown building type." };
+    const techCheck = buildingTechRequirement(type, nation, this.era);
+    if (!techCheck.ok) return techCheck;
+    if (type === TILE_TYPES.FISHERY) {
+      if (tile.type !== TILE_TYPES.WATER) return { ok: false, reason: "Fisheries require lake or ocean water." };
+    } else if (type === TILE_TYPES.MOUNTAIN_MINE) {
+      if (tile.type !== TILE_TYPES.MOUNTAIN) return { ok: false, reason: "Mountain mines require mountains." };
+    } else {
+      if (!isLand(tile)) return { ok: false, reason: "Buildings require land." };
+      if (tile.type !== TILE_TYPES.EMPTY) return { ok: false, reason: "Tile is already developed." };
+    }
     if (!tile.ownerId) {
       const adjacentOwned = this.neighbors(tile.id).some((neighbor) => neighbor.ownerId === nationId);
       if (!adjacentOwned && nation.territory.length > 0) return { ok: false, reason: "Unowned tiles must border your territory." };
@@ -409,7 +422,7 @@ export class GameState {
     if (!action.ok) return action;
     spendMoney(nation, cost);
     this.releaseTileWorkers(tile);
-    tile.type = TILE_TYPES.EMPTY;
+    tile.type = destroyedFallbackType(tile.type);
     tile.unit = null;
     nation.stats.destroyed += 1;
     this.addEvent(`${nation.name} cleared a tile for $${cost}.`, { nationId, type: "build", tileId: tile.id });
@@ -522,7 +535,7 @@ export class GameState {
     const unitConfig = unitTypeConfig(unitType);
     const actionPath = path || selectedAction.path || [from.id, to.id];
 
-    const movementCost = selectedAction.cost ?? (to.type === TILE_TYPES.WATER ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land);
+    const movementCost = selectedAction.cost ?? (isWaterLike(to) ? BALANCE.costs.troopMovement.water : BALANCE.costs.troopMovement.land);
     if (nation.money < movementCost) return { ok: false, reason: `Requires $${movementCost} to move troops.` };
     const action = this.spendAction(selectedAction.action === "attack" ? "attack" : "move", nationId);
     if (!action.ok) return action;
@@ -981,6 +994,19 @@ export class GameState {
     this.changed("turn_end");
   }
 
+  async missTurn(nationId = this.playerId, reason = "Turn timer expired.") {
+    const nation = this.nations[nationId];
+    if (!nation?.active || this.isProcessingTurn || this.gameOver) return { ok: false, reason: "Turn cannot be skipped now." };
+    this.addEvent(`${nation.name} missed their turn. ${reason}`, { nationId, type: "system" });
+    if (nationId === this.playerId) {
+      await this.endTurn();
+      return { ok: true, missedTurn: true };
+    }
+    this.resetTurnActions(nationId);
+    this.changed("missed_turn");
+    return { ok: true, missedTurn: true };
+  }
+
   processRound() {
     const summary = {
       turn: this.turn,
@@ -1174,7 +1200,7 @@ export class GameState {
     else if (surplusRatio >= BALANCE.population.growth.comfortableSurplusRatio) baseGrowth = BALANCE.population.growth.comfortableGrowth;
     else baseGrowth = BALANCE.population.growth.marginalGrowth;
 
-    const growth = Math.round(baseGrowth * headroomFraction);
+    const growth = Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(nation, this.tiles));
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
@@ -1346,12 +1372,13 @@ export class GameState {
 function normalizeSettings(raw) {
   const nationCount = clamp(Math.floor(Number(raw.nationCount) || 5), 2, 10);
   const unlimitedMode = Boolean(raw.unlimitedMode);
+  const turnTimerMinutes = clamp(Math.floor(Number(raw.turnTimerMinutes ?? raw.timeLimitMinutes) || 0), 0, 240);
   return {
     playerName: String(raw.playerName || "Republic of Nova").trim().slice(0, 40) || "Republic of Nova",
     mapSize: ["Small", "Medium", "Large"].includes(raw.mapSize) ? raw.mapSize : "Medium",
     nationCount,
     maxTurns: unlimitedMode ? 0 : clamp(Math.floor(Number(raw.maxTurns) || 30), 10, 120),
-    timeLimitMinutes: clamp(Math.floor(Number(raw.timeLimitMinutes) || 0), 0, 240),
+    turnTimerMinutes,
     unlimitedMode,
     seed: Math.floor(Number(raw.seed) || randomSeed()),
   };
@@ -1359,7 +1386,14 @@ function normalizeSettings(raw) {
 
 function typeLabel(type) {
   if (type === TILE_TYPES.MILITARY) return "Military Base";
+  if (type === TILE_TYPES.MOUNTAIN_MINE) return "Mountain Mine";
   return String(type).replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+function destroyedFallbackType(type) {
+  if (type === TILE_TYPES.FISHERY) return TILE_TYPES.WATER;
+  if (type === TILE_TYPES.MOUNTAIN_MINE) return TILE_TYPES.MOUNTAIN;
+  return TILE_TYPES.EMPTY;
 }
 
 function foodConsumptionFor(nation, era) {

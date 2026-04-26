@@ -1,7 +1,7 @@
 import { clampInt } from "./utils.js";
 import { GameState } from "./game.js";
 import { HexMapRenderer } from "./map.js";
-import { TUTORIAL_COMPLETED_KEY, bindUI } from "./ui.js";
+import { bindUI } from "./ui.js";
 import {
   CLOSED_GAME_MESSAGE,
   LeagueMultiplayerClient,
@@ -12,7 +12,6 @@ import {
 
 const setupScreen = document.getElementById("setup-screen");
 const setupForm = document.getElementById("setup-form");
-const setupReplayTutorialBtn = document.getElementById("setup-replay-tutorial-btn");
 const continueNote = document.getElementById("continue-note");
 const createMatchBtn = document.getElementById("create-match-btn");
 const enterCodeBtn = document.getElementById("enter-code-btn");
@@ -34,7 +33,7 @@ const inputs = {
   mapSize: document.getElementById("setup-map-size"),
   nationCount: document.getElementById("setup-nation-count"),
   maxTurns: document.getElementById("setup-max-turns"),
-  timeLimitMinutes: document.getElementById("setup-time-limit"),
+  turnTimerMinutes: document.getElementById("setup-turn-timer"),
   unlimitedMode: document.getElementById("setup-unlimited"),
 };
 
@@ -42,7 +41,7 @@ const lobbyInputs = {
   mapSize: document.getElementById("lobby-map-size"),
   nationCount: document.getElementById("lobby-nation-count"),
   maxTurns: document.getElementById("lobby-max-turns"),
-  timeLimitMinutes: document.getElementById("lobby-time-limit"),
+  turnTimerMinutes: document.getElementById("lobby-turn-timer"),
   unlimitedMode: document.getElementById("lobby-unlimited"),
 };
 
@@ -67,11 +66,6 @@ inputs.unlimitedMode.addEventListener("change", () => {
 
 lobbyInputs.unlimitedMode.addEventListener("change", () => {
   lobbyInputs.maxTurns.disabled = lobbyInputs.unlimitedMode.checked;
-});
-
-setupReplayTutorialBtn.addEventListener("click", () => {
-  localStorage.removeItem(TUTORIAL_COMPLETED_KEY);
-  continueNote.textContent = "Tutorial will replay when you start a game.";
 });
 
 setupForm.addEventListener("submit", (event) => {
@@ -142,7 +136,7 @@ function readSetup() {
     mapSize: inputs.mapSize.value,
     nationCount: clampInt(inputs.nationCount.value, 2, 10, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
-    timeLimitMinutes: clampInt(inputs.timeLimitMinutes.value, 0, 240, 0),
+    turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: inputs.unlimitedMode.checked,
   };
 }
@@ -150,7 +144,7 @@ function readSetup() {
 function setSessionOnlyNote() {
   // Active games are session-only: in memory on this page, or in the live server room for multiplayer.
   // Durable persistence can be added later through server/database storage, not browser localStorage.
-  continueNote.textContent = "Games are session-only. Start New Game always creates a fresh game.";
+  continueNote.textContent = "Games are session-only. Start Bot Match always creates a fresh bot match.";
 }
 
 async function joinMatch() {
@@ -253,7 +247,7 @@ function syncLobbyInputs(settings, editable) {
   lobbyInputs.mapSize.value = settings.mapSize;
   lobbyInputs.nationCount.value = settings.nationCount;
   lobbyInputs.maxTurns.value = settings.unlimitedMode ? 30 : settings.maxTurns;
-  lobbyInputs.timeLimitMinutes.value = settings.timeLimitMinutes;
+  lobbyInputs.turnTimerMinutes.value = settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0;
   lobbyInputs.unlimitedMode.checked = settings.unlimitedMode;
   lobbyInputs.maxTurns.disabled = settings.unlimitedMode || !editable;
 
@@ -268,7 +262,7 @@ function readLobbySetup() {
     mapSize: lobbyInputs.mapSize.value,
     nationCount: clampInt(lobbyInputs.nationCount.value, 2, 10, 5),
     maxTurns: lobbyInputs.unlimitedMode.checked ? 0 : clampInt(lobbyInputs.maxTurns.value, 10, 120, 30),
-    timeLimitMinutes: clampInt(lobbyInputs.timeLimitMinutes.value, 0, 240, 0),
+    turnTimerMinutes: clampInt(lobbyInputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: lobbyInputs.unlimitedMode.checked,
   };
 }
