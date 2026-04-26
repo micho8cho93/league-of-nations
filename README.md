@@ -4,7 +4,7 @@ Browser-based educational turn-based strategy game.
 
 ## Colyseus Multiplayer Server
 
-This repo includes a standalone Colyseus backend in `server/` for private online lobby creation and joining. It does not add authentication, accounts, matchmaking, persistence, a database, local saves, or gameplay synchronization yet.
+This repo includes a standalone Colyseus backend in `server/` for private online lobby creation, joining, authoritative gameplay actions, turn advancement, and snapshot broadcasts. It does not add authentication, accounts, matchmaking, persistence, a database, or local saves yet.
 
 Run the server locally:
 

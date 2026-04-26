@@ -197,11 +197,12 @@ const STARTING_PROFILES = {
   },
 };
 
-const BOT_NAMES = [
-  "Arden Republic",
+const NATION_NAMES = [
+  "Republic of Nova",
+  "Republic of Arden",
   "Vesper Union",
   "Meridian League",
-  "Solenne Duchy",
+  "Duchy of Solenne",
   "Orun Free Cities",
   "Caldor Dominion",
   "Istrian Commonwealth",
@@ -219,9 +220,10 @@ const HEX_DIRECTIONS = [
 ];
 
 export function createInitialServerGame(settings: InitialGameSettings, players: SeatPlayer[]): ServerGameState {
-  const rng = mulberry32(settings.seed);
+  const territoryRng = mulberry32(settings.seed);
+  const nameRng = mulberry32(settings.seed + 5050);
   const map = createMapData(settings);
-  const seats = createSeatAssignments(settings.nationCount, players);
+  const seats = createSeatAssignments(settings.nationCount, players, nameRng);
   const profiles = profileSequence(settings.nationCount);
   const nations: Record<string, Nation> = {};
   const botIds: string[] = [];
@@ -243,7 +245,7 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     if (nation.bot) botIds.push(nation.id);
   });
 
-  assignStartingTerritories(map, Object.values(nations), rng);
+  assignStartingTerritories(map, Object.values(nations), territoryRng);
 
   const startedAt = Date.now();
   return {
@@ -358,9 +360,21 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
   });
 }
 
-function createSeatAssignments(nationCount: number, players: SeatPlayer[]): SeatAssignment[] {
+function createSeatAssignments(nationCount: number, players: SeatPlayer[], rng = Math.random): SeatAssignment[] {
   const assignments: SeatAssignment[] = [];
   const playersByNation = new Map(players.map((player) => [player.nationId, player]));
+  const humanNames = new Set(players.map((player) => player.name).filter(Boolean));
+  const botNamePool = shuffle(NATION_NAMES.filter((name) => !humanNames.has(name)), rng);
+  let fallbackNationIndex = 1;
+
+  const nextBotName = () => {
+    const name = botNamePool.shift();
+    if (name) return name;
+    while (humanNames.has(`Nation ${fallbackNationIndex}`)) fallbackNationIndex += 1;
+    const fallback = `Nation ${fallbackNationIndex}`;
+    fallbackNationIndex += 1;
+    return fallback;
+  };
 
   for (let index = 0; index < nationCount; index += 1) {
     const nationId = `nation-${index + 1}`;
@@ -378,11 +392,10 @@ function createSeatAssignments(nationCount: number, players: SeatPlayer[]): Seat
       continue;
     }
 
-    const botIndex = index - players.length;
     assignments.push({
       nationId,
       sessionId: null,
-      playerName: BOT_NAMES[botIndex] || `Nation ${index + 1}`,
+      playerName: nextBotName(),
       controllerType: "bot",
       bot: true,
       isBot: true,

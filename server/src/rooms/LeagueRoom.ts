@@ -14,6 +14,18 @@ type RoomStatus = "lobby" | "playing" | "finished";
 const ROOM_CODE_CHANNEL = "$league-of-nations-room-codes";
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 5;
+const MULTIPLAYER_NATION_NAMES = [
+  "Republic of Nova",
+  "Republic of Arden",
+  "Vesper Union",
+  "Meridian League",
+  "Duchy of Solenne",
+  "Orun Free Cities",
+  "Caldor Dominion",
+  "Istrian Commonwealth",
+  "Kestral Accord",
+  "Namar Isles",
+];
 
 interface JoinOptions {
   playerName?: unknown;
@@ -169,7 +181,7 @@ export class LeagueRoom extends Room {
     const isFirstPlayer = this.state.players.size === 0;
     const player = new LobbyPlayer();
     player.sessionId = client.sessionId;
-    player.name = sanitizePlayerName(options.playerName, `Player ${this.state.players.size + 1}`);
+    player.name = this.randomAvailableNationName();
     player.nationId = assignedNationId;
     player.host = isFirstPlayer;
     player.ready = isFirstPlayer;
@@ -482,6 +494,18 @@ export class LeagueRoom extends Room {
     return Array.from(this.claimedNationIds()).reduce((highest, nationId) => Math.max(highest, nationIndex(nationId)), 0);
   }
 
+  private randomAvailableNationName() {
+    const claimed = new Set(Array.from(this.state.players.values()).map((player) => player.name).filter(Boolean));
+    const available = MULTIPLAYER_NATION_NAMES.filter((name) => !claimed.has(name));
+    if (available.length > 0) {
+      return available[Math.floor(Math.random() * available.length)];
+    }
+
+    let index = 1;
+    while (claimed.has(`Nation ${index}`)) index += 1;
+    return `Nation ${index}`;
+  }
+
   private generateRoomCodeSingle() {
     let code = "";
     for (let index = 0; index < ROOM_CODE_LENGTH; index += 1) {
@@ -501,11 +525,6 @@ export class LeagueRoom extends Room {
     await this.presence.sadd(ROOM_CODE_CHANNEL, code);
     return code;
   }
-}
-
-function sanitizePlayerName(value: unknown, fallback: string) {
-  const name = String(value ?? "").trim().slice(0, 40);
-  return name || fallback;
 }
 
 function sanitizeNationId(value: unknown) {
