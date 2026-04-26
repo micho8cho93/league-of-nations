@@ -1,4 +1,6 @@
 const ROOM_NAME = "league";
+const DEFAULT_LOCAL_COLYSEUS_ENDPOINT = "ws://localhost:2567";
+const PRODUCTION_COLYSEUS_ENDPOINT = "wss://league-of-nations-production.up.railway.app";
 export const CLOSED_GAME_MESSAGE = "This game has already started and is closed to new players.";
 
 export class LeagueMultiplayerClient {
@@ -103,10 +105,23 @@ export function normalizeRoomCode(value) {
 }
 
 function defaultServerUrl() {
-  if (window.LEAGUE_COLYSEUS_URL) return window.LEAGUE_COLYSEUS_URL;
-  const isSecure = window.location.protocol === "https:";
-  const host = window.location.hostname || "localhost";
-  return `${isSecure ? "wss" : "ws"}://${host}:2567`;
+  return getColyseusEndpoint();
+}
+
+function getColyseusEndpoint() {
+  const viteEndpoint = import.meta.env?.VITE_COLYSEUS_ENDPOINT;
+  if (viteEndpoint) return viteEndpoint;
+
+  const browserWindow = typeof window !== "undefined" ? window : undefined;
+  if (browserWindow?.COLYSEUS_ENDPOINT) return browserWindow.COLYSEUS_ENDPOINT;
+  if (browserWindow?.LEAGUE_COLYSEUS_URL) return browserWindow.LEAGUE_COLYSEUS_URL;
+
+  const host = browserWindow?.location.hostname || "localhost";
+  if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+    return PRODUCTION_COLYSEUS_ENDPOINT;
+  }
+
+  return DEFAULT_LOCAL_COLYSEUS_ENDPOINT;
 }
 
 function readSettings(settings = {}) {

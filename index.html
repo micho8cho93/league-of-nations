@@ -197,6 +197,11 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://unpkg.com/@colyseus/sdk@^0.17.0/dist/colyseus.js"></script>
+  <script>
+    // Local uses ws://localhost:2567; production uses wss://league-of-nations-production.up.railway.app.
+    // Do not include :2567 in production because Railway maps the public domain to the internal PORT.
+    window.COLYSEUS_ENDPOINT = window.COLYSEUS_ENDPOINT || "";
+  </script>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>
