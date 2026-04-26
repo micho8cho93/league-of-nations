@@ -1,4 +1,5 @@
 import {
+  BIOME_LABELS,
   BUILDING_TYPES,
   TILE_LABELS,
   TILE_TYPES,
@@ -22,7 +23,9 @@ import {
   eraLabel,
   productionForTile,
   researchCost,
+  transportHappinessBonus,
   transportGrowthMultiplier,
+  transportUnlockForTier,
   trainingOptionsForNation,
 } from "./tech.js";
 import { ALLIANCE_TYPES, getDiplomacy, projectTradeRouteYield, relationLabel } from "./trade.js";
@@ -501,6 +504,7 @@ class GameUI {
     const player = this.game.player;
     const flows = this.projectResourceFlows(player);
     const foodClass = flows.food < 0 || player.resources.food + flows.food < 0 ? "bad" : "good";
+    const happinessEnabled = this.game.settings.happinessEnabled !== false;
     this.resourcePanel.innerHTML = `
       ${resourceRow({
         id: "money",
@@ -540,17 +544,19 @@ class GameUI {
         className: flows.population < 0 ? "bad" : "good",
         note: `${formatNumber(player.population.available)} free people`,
         rate: `${signed(flows.population)}/turn`,
-        tooltip: `Population supplies workers and soldiers. It grows when food production beats consumption and territory has capacity. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`,
+        tooltip: `Population supplies workers and soldiers. It grows when food production beats consumption and territory has capacity. Transportation multiplier: ${formatPercent(transportGrowthMultiplier(player))}. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`,
       })}
       ${resourceRow({
         id: "happiness",
         label: "Happiness",
         icon: "🙂",
-        value: `${formatNumber(populationHappiness(player))}/100`,
-        className: happinessClass(player),
-        note: `${happinessBand(player).label} · ${formatPercent(happinessBand(player).workRate)} work rate`,
-        rate: happinessRiskText(player),
-        tooltip: `Happiness reflects food security, upkeep pressure, war, losses, and diplomatic stability. ${happinessEffectText(player)}`,
+        value: happinessEnabled ? `${formatNumber(populationHappiness(player))}/100` : "Off",
+        className: happinessEnabled ? happinessClass(player) : "warn",
+        note: happinessEnabled ? `${happinessBand(player).label} · ${formatPercent(happinessBand(player).workRate)} work rate` : "Mechanic disabled",
+        rate: happinessEnabled ? happinessRiskText(player) : "No happiness effects",
+        tooltip: happinessEnabled
+          ? `Happiness reflects food security, upkeep pressure, war, losses, diplomatic stability, and transportation supply chains. ${happinessEffectText(player)}`
+          : "Citizen happiness is disabled for this game.",
       })}
       ${resourceRow({
         id: "education",
@@ -604,12 +610,13 @@ class GameUI {
       capacity: foodFlow.capacity,
     };
     const available = { ...player.resources };
+    const happinessEnabled = this.game.settings.happinessEnabled !== false;
     for (const tile of this.game.tiles.filter((item) => item.ownerId === player.id)) {
       const production = productionForTile(player, tile, this.game.era);
       if (!production) continue;
       if (tile.type === TILE_TYPES.FACTORY) {
         if (available.materials < production.materialsCost || available.education < production.educationCost) {
-          flows.money += applyProjectedHappiness(player, 20);
+          flows.money += applyProjectedHappiness(player, 20, happinessEnabled);
           continue;
         }
         available.materials -= production.materialsCost;
@@ -619,12 +626,12 @@ class GameUI {
       }
       for (const resource of ["food", "materials", "education", "industry"]) {
         if (!production[resource]) continue;
-        const produced = applyProjectedHappiness(player, production[resource]);
+        const produced = applyProjectedHappiness(player, production[resource], happinessEnabled);
         flows[resource] += produced;
         available[resource] += produced;
         if (resource === "food") flows.foodProduced += produced;
       }
-      if (production.money) flows.money += applyProjectedHappiness(player, production.money);
+      if (production.money) flows.money += applyProjectedHappiness(player, production.money, happinessEnabled);
       if (production.people) flows.population += production.people;
     }
     const trade = projectTradeRouteYield(this.game, player.id);
@@ -641,16 +648,20 @@ class GameUI {
   }
 
   renderLeaderboardHtml() {
+    const happinessText = this.game.settings.happinessEnabled === false
+      ? "happiness off"
+      : null;
     const scores = this.game.scoreboard();
     return scores.map((entry, index) => {
       const nation = this.game.nations[entry.id];
+      const happiness = happinessText || `${formatNumber(populationHappiness(nation))} happiness (${happinessBand(nation).label})`;
       return `
         <div class="nation-row">
           <div class="row-head">
             <strong><span style="color:${nation.color}">■</span> ${escapeHtml(entry.name)}</strong>
             <span class="mini-pill">#${index + 1} ${formatNumber(entry.score)}</span>
           </div>
-          <div class="muted">${entry.active ? nation.profile : "Conquered"} · ${entry.territory} tiles · ${entry.population} people · ${entry.military} power · ${formatNumber(populationHappiness(nation))} happiness (${happinessBand(nation).label})</div>
+          <div class="muted">${entry.active ? nation.profile : "Conquered"} · ${entry.territory} tiles · ${entry.population} people · ${entry.military} power · ${happiness}</div>
         </div>
       `;
     }).join("");
@@ -681,6 +692,7 @@ class GameUI {
       <div class="metric-grid">
         ${metric("Owner", owner ? owner.name : "Unowned")}
         ${metric("Status", tile.type === TILE_TYPES.WATER ? "Water" : active ? "Active" : "Inactive")}
+        ${metric("Biome", biomeLabel(tile))}
         ${metric("Region", tile.regionId || "Sea")}
         ${metric("Context", actionContext)}
       </div>
@@ -773,6 +785,7 @@ class GameUI {
       const check = canResearch(this.game, player, id);
       const tier = player.tech[id] || 0;
       const cost = researchCost(id, tier);
+      const transportDetails = id === "infrastructure" ? `<div class="muted">${escapeHtml(transportTechSummary(player, tier))}</div>` : "";
       return `
         <div class="tech-row">
           <div class="row-head">
@@ -780,6 +793,7 @@ class GameUI {
             <span class="mini-pill">Tier ${tier}/4</span>
           </div>
           <div class="muted">${escapeHtml(config.description)} Cost: $${formatNumber(cost)}.</div>
+          ${transportDetails}
           <button class="secondary-btn" data-tech="${id}" ${check.ok ? "" : "disabled"} title="${escapeHtml(check.reason || "")}">
             Research
           </button>
@@ -870,6 +884,7 @@ class GameUI {
         ${metric("Coords", `${tile.q}, ${tile.r}`)}
         ${metric("Owner", owner ? owner.name : "Unowned")}
         ${metric("Region", tile.regionId || "Sea")}
+        ${metric("Biome", biomeLabel(tile))}
         ${metric("Status", tile.type === TILE_TYPES.WATER ? "Water" : active ? "Active" : "Inactive")}
       </div>
       ${tile.unit?.strength ? `<div class="metric"><span>Troops</span><strong>${tile.unit.strength} strength</strong></div>` : ""}
@@ -958,7 +973,7 @@ class GameUI {
       return;
     }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId]?.name : "Unowned";
-    this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(owner)} · ${tile.q}, ${tile.r}`;
+    this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(biomeLabel(tile))} · ${escapeHtml(owner)} · ${tile.q}, ${tile.r}`;
     this.tooltip.style.left = `${event.clientX + 14}px`;
     this.tooltip.style.top = `${event.clientY + 14}px`;
     this.tooltip.hidden = false;
@@ -1402,9 +1417,14 @@ function happinessEffectText(nation) {
   return `${band.label} population: ${formatPercent(band.workRate)} work rate, ${formatPercent(band.stoppageChance)} tile stoppage risk, ${formatPercent(band.militaryRefusalChance)} military refusal risk.`;
 }
 
-function applyProjectedHappiness(nation, amount) {
+function applyProjectedHappiness(nation, amount, enabled = true) {
   if (amount <= 0) return amount;
+  if (!enabled) return amount;
   return Math.max(0, Math.ceil(amount * happinessBand(nation).workRate));
+}
+
+function biomeLabel(tile) {
+  return BIOME_LABELS[tile?.biome] || (tile?.terrain === "water" ? BIOME_LABELS.water : BIOME_LABELS.grassland);
 }
 
 function projectedFoodGrowth(game, player, flows) {
@@ -1420,7 +1440,15 @@ function projectedFoodGrowth(game, player, flows) {
     surplusRatio >= growth.thrivingSurplusRatio ? growth.thrivingGrowth :
     surplusRatio >= growth.comfortableSurplusRatio ? growth.comfortableGrowth :
     growth.marginalGrowth;
-  return Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(player, game.tiles));
+  return Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(player));
+}
+
+function transportTechSummary(player, tier) {
+  const current = transportUnlockForTier(tier)?.label || "No transport network";
+  const next = transportUnlockForTier(tier + 1);
+  const currentEffect = `Current: ${current}, ${formatPercent(transportGrowthMultiplier(player))} population growth multiplier, +${transportHappinessBonus(player)} happiness recovery.`;
+  if (!next) return currentEffect;
+  return `${currentEffect} Next: ${next.label} in Era ${next.era}.`;
 }
 
 function metric(label, value) {

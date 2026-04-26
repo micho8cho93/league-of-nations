@@ -233,6 +233,31 @@ test("room settings use turnTimerMinutes and accept legacy timeLimitMinutes", as
   assert.equal(room.state.settings.turnTimerMinutes, 7);
 });
 
+test("room settings preserve map options and happiness toggle", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+
+  room.messages.updateSettings(creator.client, {
+    waterLevel: "High",
+    landscapeDiversity: "Low",
+    happinessEnabled: false,
+  });
+
+  assert.equal(room.state.settings.waterLevel, "High");
+  assert.equal(room.state.settings.landscapeDiversity, "Low");
+  assert.equal(room.state.settings.happinessEnabled, false);
+
+  const gameState = startGame(room, creator);
+  const snapshot = (room as any).createInitialGameSnapshot();
+
+  assert.equal(gameState.settings.waterLevel, "High");
+  assert.equal(gameState.settings.landscapeDiversity, "Low");
+  assert.equal(gameState.settings.happinessEnabled, false);
+  assert.equal(snapshot.settings.waterLevel, "High");
+  assert.equal(snapshot.settings.landscapeDiversity, "Low");
+  assert.equal(snapshot.settings.happinessEnabled, false);
+});
+
 test("gameplay build action is accepted for the active player", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
@@ -392,60 +417,24 @@ test("universities require Education tier 3", async () => {
   assert.equal(latestRejection(creator), "");
 });
 
-test("transport buildings respect infrastructure tier and era gates", async () => {
+test("transport buildings are rejected as tile builds", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
   const nation = gameState.nations["nation-1"];
   nation.money = 5000;
-
-  let tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "road" });
-  assert.match(latestRejection(creator), /Infrastructure tier 1/);
-
-  nation.tech.infrastructure = 1;
-  clearMessages(creator);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "road" });
-  assert.equal(tile.type, "road");
-  assert.equal(latestRejection(creator), "");
-
-  resetActions(gameState);
-  clearMessages(creator);
-  nation.tech.infrastructure = 2;
-  tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "railroad" });
-  assert.match(latestRejection(creator), /Era 2/);
-
-  gameState.era = 2;
-  clearMessages(creator);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "railroad" });
-  assert.equal(tile.type, "railroad");
-
-  resetActions(gameState);
-  clearMessages(creator);
-  nation.tech.infrastructure = 3;
-  tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "highway" });
-  assert.match(latestRejection(creator), /Era 3/);
-
-  gameState.era = 3;
-  clearMessages(creator);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "highway" });
-  assert.equal(tile.type, "highway");
-
-  resetActions(gameState);
-  clearMessages(creator);
   nation.tech.infrastructure = 4;
-  tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "airport" });
-  assert.match(latestRejection(creator), /Era 4/);
-
   gameState.era = 4;
-  clearMessages(creator);
-  await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType: "airport" });
-  assert.equal(tile.type, "airport");
-  assert.equal(latestRejection(creator), "");
+
+  for (const buildingType of ["road", "railroad", "highway", "airport"]) {
+    resetActions(gameState);
+    clearMessages(creator);
+    const tile = makeOwnedTile(gameState, "nation-1", "empty", 0);
+    await room.messages.playerAction(creator.client, { type: "buildTile", nationId: "nation-1", tileId: tile.id, buildingType });
+    assert.match(latestRejection(creator), /Unknown building type/);
+    assert.equal(tile.type, "empty");
+  }
 });
 
 test("active player can assign workers for their own nation", async () => {
@@ -574,6 +563,7 @@ test("turn timer skips expired online turns before accepting stale actions", asy
 });
 
 test("generated maps respect water bounds and keep enough viable starting land", () => {
+  const validBiomes = new Set(["grassland", "desert", "arctic", "jungle", "woods"]);
 	  for (const [seed, mapSize, nationCount] of [
 	    [101, "Small", 5],
 	    [202, "Medium", 8],
@@ -592,6 +582,7 @@ test("generated maps respect water bounds and keep enough viable starting land",
     const tiles = game.map.tiles;
     const waterRatio = tiles.filter((tile: any) => tile.terrain === "water").length / tiles.length;
     const buildableLand = tiles.filter((tile: any) => tile.terrain === "land" && tile.type !== "mountain" && tile.type !== "water").length;
+    const landBiomes = new Set(tiles.filter((tile: any) => tile.terrain === "land").map((tile: any) => tile.biome));
     const regions = new Set(tiles.filter((tile: any) => tile.terrain === "land" && tile.regionId).map((tile: any) => tile.regionId));
     const index = new Map(tiles.map((tile: any) => [tile.id, tile]));
     const lakeLikeWaters = tiles.filter((tile: any) => {
@@ -609,12 +600,39 @@ test("generated maps respect water bounds and keep enough viable starting land",
 
     assert.ok(waterRatio >= 0.19 && waterRatio <= 0.61, `${mapSize} seed ${seed} water ratio ${waterRatio}`);
     assert.ok(buildableLand >= nationCount * 5, `${mapSize} seed ${seed} has enough buildable land`);
+    assert.ok(landBiomes.size >= 1, `${mapSize} seed ${seed} should assign land biomes`);
+    assert.ok([...landBiomes].every((biome) => validBiomes.has(String(biome))), `${mapSize} seed ${seed} should only assign valid land biomes`);
     assert.ok(regions.size >= 2 || mapSize === "Small", `${mapSize} seed ${seed} should avoid one giant pangea`);
     assert.ok(lakeLikeWaters.length > 0, `${mapSize} seed ${seed} should include lake-like inland water`);
     for (const nation of Object.values(game.nations) as any[]) {
       assert.ok(nation.capitalTileId, `${nation.id} should receive a capital`);
       assert.ok(nation.territory.length > 0, `${nation.id} should receive territory`);
     }
+  }
+});
+
+test("generated maps follow water coverage presets", () => {
+  for (const [waterLevel, min, max] of [
+    ["Low", 0.2, 0.32],
+    ["Balanced", 0.34, 0.46],
+    ["High", 0.49, 0.6],
+  ] as const) {
+    const game = createInitialServerGame({
+      mapSize: "Medium",
+      waterLevel,
+      landscapeDiversity: "Balanced",
+      nationCount: 5,
+      maxTurns: 30,
+      turnTimerMinutes: 0,
+      unlimitedMode: false,
+      happinessEnabled: true,
+      seed: 98765,
+    }, []);
+    const waterRatio = game.map.tiles.filter((tile: any) => tile.terrain === "water").length / game.map.tiles.length;
+    const buildableLand = game.map.tiles.filter((tile: any) => tile.terrain === "land" && tile.type !== "mountain" && tile.type !== "water").length;
+
+    assert.ok(waterRatio >= min && waterRatio <= max, `${waterLevel} water ratio ${waterRatio}`);
+    assert.ok(buildableLand >= game.settings.nationCount * 5, `${waterLevel} should keep viable land`);
   }
 });
 
@@ -796,6 +814,40 @@ test("low happiness can make military refuse movement online without spending re
   assert.match(latestRejection(creator), /refused orders/);
 });
 
+test("disabled happiness does not make military refuse movement online", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.settings.happinessEnabled = false;
+  gameState.gameId = "";
+  gameState.roomId = "";
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 4, branch: "infantry", movedTurn: 0, branches: { infantry: 4 } },
+  });
+  prepareTile(to, { ownerId: null, type: "empty" });
+  const nation = gameState.nations["nation-1"];
+  nation.money = 1000;
+  nation.population.happiness = 0;
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: from.id,
+    toTileId: to.id,
+  });
+
+  assert.equal(from.unit, null);
+  assert.equal(to.ownerId, "nation-1");
+  assert.equal(to.unit?.strength, 4);
+  assert.equal(nation.actionsRemaining, 9);
+  assert.equal(latestRejection(creator), "");
+});
+
 test("declareWar and moveOrAttackUnit attack work online", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
@@ -868,7 +920,7 @@ test("research and researchBranch work online", async () => {
   assert.equal(latestRejection(creator), "");
 });
 
-test("infrastructure research requires starter and previous transport improvements", async () => {
+test("infrastructure research uses starter requirements then tech-only era gates", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
@@ -905,9 +957,9 @@ test("infrastructure research requires starter and previous transport improvemen
     nationId: "nation-1",
     category: "infrastructure",
   });
-  assert.match(latestRejection(creator), /active road/);
+  assert.match(latestRejection(creator), /Era 2/);
 
-  makeOwnedTile(gameState, "nation-1", "road", 2);
+  gameState.era = 2;
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
     type: "research",
@@ -915,6 +967,44 @@ test("infrastructure research requires starter and previous transport improvemen
     category: "infrastructure",
   });
   assert.equal(nation.tech.infrastructure, 2);
+  assert.equal(latestRejection(creator), "");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.match(latestRejection(creator), /Era 3/);
+
+  gameState.era = 3;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.equal(nation.tech.infrastructure, 3);
+  assert.equal(latestRejection(creator), "");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.match(latestRejection(creator), /Era 4/);
+
+  gameState.era = 4;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "research",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.equal(nation.tech.infrastructure, 4);
   assert.equal(latestRejection(creator), "");
 });
 

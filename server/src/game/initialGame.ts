@@ -1,12 +1,17 @@
 type ControllerType = "human" | "bot";
+type MapOptionLevel = "Low" | "Balanced" | "High";
+type Biome = "grassland" | "desert" | "arctic" | "jungle" | "woods" | "water";
 
 export interface InitialGameSettings {
   mapSize: "Small" | "Medium" | "Large" | "Extra Large" | "Enormous";
+  waterLevel?: MapOptionLevel;
+  landscapeDiversity?: MapOptionLevel;
   nationCount: number;
   maxTurns: number;
   turnTimerMinutes: number;
   timeLimitMinutes?: number;
   unlimitedMode: boolean;
+  happinessEnabled?: boolean;
   seed: number;
 }
 
@@ -63,6 +68,7 @@ interface Tile {
   r: number;
   terrain: "land" | "water";
   landform: "continent" | "island" | "sea";
+  biome: Biome;
   type: string;
   ownerId: string | null;
   workers: number;
@@ -177,10 +183,6 @@ const WORKER_MIN = {
   [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
-  [TILE_TYPES.ROAD]: 2,
-  [TILE_TYPES.RAILROAD]: 3,
-  [TILE_TYPES.HIGHWAY]: 4,
-  [TILE_TYPES.AIRPORT]: 6,
 };
 
 const NATION_COLOR_PALETTE = [
@@ -246,6 +248,7 @@ const HEX_DIRECTIONS = [
 ];
 
 export function createInitialServerGame(settings: InitialGameSettings, players: SeatPlayer[]): ServerGameState {
+  settings = normalizeInitialGameSettings(settings);
   const territoryRng = mulberry32(settings.seed);
   const nameRng = mulberry32(settings.seed + 5050);
   const map = createMapData(settings);
@@ -329,6 +332,19 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     playerId: seats.find((seat) => seat.controllerType === "human")?.nationId || seats[0]?.nationId || "nation-1",
     seats,
   };
+}
+
+function normalizeInitialGameSettings(settings: InitialGameSettings): InitialGameSettings {
+  return {
+    ...settings,
+    waterLevel: sanitizeMapOptionLevel(settings.waterLevel),
+    landscapeDiversity: sanitizeMapOptionLevel(settings.landscapeDiversity),
+    happinessEnabled: settings.happinessEnabled !== false,
+  };
+}
+
+function sanitizeMapOptionLevel(value: unknown): MapOptionLevel {
+  return value === "Low" || value === "Balanced" || value === "High" ? value : "Balanced";
 }
 
 export function serializeGameSnapshot(game: ServerGameState | Record<string, any>) {
@@ -535,7 +551,7 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
   const coords = hexMapCoords(radius);
   const rng = mulberry32(seed);
   const nationCount = Math.max(2, Math.floor(Number(settings.nationCount) || 5));
-  const waterRatio = targetWaterRatio(coords.length, nationCount, rng);
+  const waterRatio = targetWaterRatio(coords.length, nationCount, settings.waterLevel);
   const initialWaterRatio = Math.max(0.16, waterRatio - 0.045);
   const targetLandRatio = 1 - waterRatio;
   const initialLandRatio = 1 - initialWaterRatio;
@@ -640,6 +656,7 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
       r: coord.r,
       terrain: land ? "land" : "water",
       landform: land ? coord.nearestKind : "sea",
+      biome: land ? "grassland" : "water",
       type: land ? TILE_TYPES.EMPTY : TILE_TYPES.WATER,
       ownerId: null,
       workers: 0,
@@ -655,6 +672,7 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
   });
 
   carveWaterFeatures(tiles, radius, seed, Math.round(scored.length * targetLandRatio));
+  assignBiomes(tiles, radius, seed, settings.landscapeDiversity);
   addMountainRanges(tiles, radius, seed, nationCount);
 
   const map = {
@@ -668,8 +686,12 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
   return map;
 }
 
-function targetWaterRatio(tileCount: number, nationCount: number, rng: () => number) {
-  const requested = 0.2 + rng() * 0.4;
+function targetWaterRatio(tileCount: number, nationCount: number, waterLevel: MapOptionLevel = "Balanced") {
+  const requested = {
+    Low: 0.25,
+    Balanced: 0.4,
+    High: 0.55,
+  }[waterLevel] || 0.4;
   const requiredBuildable = nationCount * 10 + 12;
   const maxByLandNeed = 1 - requiredBuildable / tileCount;
   return clampNumber(requested, 0.2, Math.max(0.2, Math.min(0.6, maxByLandNeed)));
@@ -701,9 +723,86 @@ function carveWaterFeatures(tiles: Tile[], radius: number, seed: number, targetL
     if (neighbors.filter((neighbor) => neighbor.terrain === "land").length < 3) continue;
     tile.terrain = "water";
     tile.landform = "sea";
+    tile.biome = "water";
     tile.type = TILE_TYPES.WATER;
     budget -= 1;
   }
+}
+
+function assignBiomes(tiles: Tile[], radius: number, seed: number, landscapeDiversity: MapOptionLevel = "Balanced") {
+  const config = {
+    Low: { scale: 9, spread: 0.72, passes: 2 },
+    Balanced: { scale: 5.5, spread: 1, passes: 1 },
+    High: { scale: 3.3, spread: 1.22, passes: 1 },
+  }[landscapeDiversity] || { scale: 5.5, spread: 1, passes: 1 };
+
+  for (const tile of tiles) {
+    if (tile.terrain !== "land") {
+      tile.biome = "water";
+      continue;
+    }
+    tile.biome = biomeForTile(tile, radius, seed, config);
+  }
+
+  const index = buildTileIndex(tiles);
+  for (let pass = 0; pass < config.passes; pass += 1) {
+    const next = new Map<string, Biome>();
+    for (const tile of tiles) {
+      if (tile.terrain !== "land") continue;
+      const counts: Partial<Record<Biome, number>> = {};
+      for (const coord of axialNeighbors(tile.q, tile.r)) {
+        const neighbor = index.get(tileId(coord.q, coord.r));
+        if (!neighbor || neighbor.terrain !== "land") continue;
+        counts[neighbor.biome] = (counts[neighbor.biome] || 0) + 1;
+      }
+      const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] as [Biome, number] | undefined;
+      const currentCount = counts[tile.biome] || 0;
+      if (dominant && dominant[1] >= 4 && currentCount <= 1) next.set(tile.id, dominant[0]);
+      else if (dominant && dominant[1] >= 3 && currentCount === 0) next.set(tile.id, dominant[0]);
+    }
+    for (const [id, biome] of next) {
+      const tile = index.get(id);
+      if (tile) tile.biome = biome;
+    }
+  }
+}
+
+function biomeForTile(tile: Tile, radius: number, seed: number, config: { scale: number; spread: number }): Biome {
+  const y = (tile.r + tile.q * 0.5) / Math.max(1, radius);
+  const latitudeTemp = 1 - Math.min(1, Math.abs(y));
+  let temperature = latitudeTemp * 0.78 + smoothNoise(tile.q, tile.r, config.scale * 1.35, seed + 7001) * 0.38;
+  let moisture = smoothNoise(tile.q + 29, tile.r - 17, config.scale, seed + 7101);
+  const local = smoothNoise(tile.q - 11, tile.r + 23, config.scale * 0.58, seed + 7201);
+  temperature = clampNumber(0.5 + (temperature - 0.5) * config.spread, 0, 1);
+  moisture = clampNumber(0.5 + (moisture * 0.8 + local * 0.2 - 0.5) * config.spread, 0, 1);
+
+  if (temperature < 0.28) return "arctic";
+  if (moisture < 0.26 && temperature > 0.42) return "desert";
+  if (moisture > 0.68 && temperature > 0.52) return "jungle";
+  if (moisture > 0.48) return "woods";
+  return "grassland";
+}
+
+function smoothNoise(q: number, r: number, scale: number, seed: number) {
+  const x = (q + r * 0.5) / scale;
+  const y = (r * 0.866) / scale;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = smoothStep(x - x0);
+  const ty = smoothStep(y - y0);
+  const a = hash2d(x0, y0, seed);
+  const b = hash2d(x0 + 1, y0, seed);
+  const c = hash2d(x0, y0 + 1, seed);
+  const d = hash2d(x0 + 1, y0 + 1, seed);
+  return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
+}
+
+function smoothStep(value: number) {
+  return value * value * (3 - 2 * value);
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
 }
 
 function addMountainRanges(tiles: Tile[], radius: number, seed: number, nationCount: number) {

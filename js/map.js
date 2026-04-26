@@ -1,5 +1,6 @@
 import {
   MAP_SIZES,
+  BIOME_COLORS,
   HEX_DIRECTIONS,
   OWNER_COLORS,
   TILE_COLORS,
@@ -35,7 +36,7 @@ export function createMapData(settings) {
   const coords = hexMapCoords(radius);
   const rng = mulberry32(seed);
   const nationCount = Math.max(2, Math.floor(Number(settings.nationCount) || 5));
-  const waterRatio = targetWaterRatio(coords.length, nationCount, rng);
+  const waterRatio = targetWaterRatio(coords.length, nationCount, settings.waterLevel);
   const initialWaterRatio = Math.max(0.16, waterRatio - 0.045);
   const targetLandRatio = 1 - waterRatio;
   const initialLandRatio = 1 - initialWaterRatio;
@@ -129,6 +130,7 @@ export function createMapData(settings) {
       r: coord.r,
       terrain: land ? "land" : "water",
       landform: land ? coord.nearestKind : "sea",
+      biome: land ? "grassland" : "water",
       type: land ? TILE_TYPES.EMPTY : TILE_TYPES.WATER,
       ownerId: null,
       workers: 0,
@@ -144,6 +146,7 @@ export function createMapData(settings) {
   });
 
   carveWaterFeatures(tiles, radius, seed, Math.round(scored.length * targetLandRatio));
+  assignBiomes(tiles, radius, seed, settings.landscapeDiversity);
   addMountainRanges(tiles, radius, seed, nationCount);
 
   const map = {
@@ -157,8 +160,12 @@ export function createMapData(settings) {
   return map;
 }
 
-function targetWaterRatio(tileCount, nationCount, rng) {
-  const requested = 0.2 + rng() * 0.4;
+function targetWaterRatio(tileCount, nationCount, waterLevel = "Balanced") {
+  const requested = {
+    Low: 0.25,
+    Balanced: 0.4,
+    High: 0.55,
+  }[waterLevel] || 0.4;
   const requiredBuildable = nationCount * 10 + 12;
   const maxByLandNeed = 1 - requiredBuildable / tileCount;
   return clamp(requested, 0.2, Math.max(0.2, Math.min(0.6, maxByLandNeed)));
@@ -191,10 +198,84 @@ function carveWaterFeatures(tiles, radius, seed, targetLandCount) {
     if (neighbors.filter((neighbor) => neighbor.terrain === "land").length < 3) continue;
     tile.terrain = "water";
     tile.landform = "sea";
+    tile.biome = "water";
     tile.type = TILE_TYPES.WATER;
     budget -= 1;
     landCount -= 1;
   }
+}
+
+function assignBiomes(tiles, radius, seed, landscapeDiversity = "Balanced") {
+  const config = {
+    Low: { scale: 9, spread: 0.72, passes: 2 },
+    Balanced: { scale: 5.5, spread: 1, passes: 1 },
+    High: { scale: 3.3, spread: 1.22, passes: 1 },
+  }[landscapeDiversity] || { scale: 5.5, spread: 1, passes: 1 };
+
+  for (const tile of tiles) {
+    if (tile.terrain !== "land") {
+      tile.biome = "water";
+      continue;
+    }
+    tile.biome = biomeForTile(tile, radius, seed, config);
+  }
+
+  const index = buildTileIndex(tiles);
+  for (let pass = 0; pass < config.passes; pass += 1) {
+    const next = new Map();
+    for (const tile of tiles) {
+      if (tile.terrain !== "land") continue;
+      const counts = {};
+      for (const coord of axialNeighbors(tile.q, tile.r)) {
+        const neighbor = index.get(tileId(coord.q, coord.r));
+        if (!neighbor || neighbor.terrain !== "land") continue;
+        counts[neighbor.biome] = (counts[neighbor.biome] || 0) + 1;
+      }
+      const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+      const currentCount = counts[tile.biome] || 0;
+      if (dominant && dominant[1] >= 4 && currentCount <= 1) next.set(tile.id, dominant[0]);
+      else if (dominant && dominant[1] >= 3 && currentCount === 0) next.set(tile.id, dominant[0]);
+    }
+    for (const [id, biome] of next) index.get(id).biome = biome;
+  }
+}
+
+function biomeForTile(tile, radius, seed, config) {
+  const y = (tile.r + tile.q * 0.5) / Math.max(1, radius);
+  const latitudeTemp = 1 - Math.min(1, Math.abs(y));
+  let temperature = latitudeTemp * 0.78 + smoothNoise(tile.q, tile.r, config.scale * 1.35, seed + 7001) * 0.38;
+  let moisture = smoothNoise(tile.q + 29, tile.r - 17, config.scale, seed + 7101);
+  const local = smoothNoise(tile.q - 11, tile.r + 23, config.scale * 0.58, seed + 7201);
+  temperature = clamp(0.5 + (temperature - 0.5) * config.spread, 0, 1);
+  moisture = clamp(0.5 + (moisture * 0.8 + local * 0.2 - 0.5) * config.spread, 0, 1);
+
+  if (temperature < 0.28) return "arctic";
+  if (moisture < 0.26 && temperature > 0.42) return "desert";
+  if (moisture > 0.68 && temperature > 0.52) return "jungle";
+  if (moisture > 0.48) return "woods";
+  return "grassland";
+}
+
+function smoothNoise(q, r, scale, seed) {
+  const x = (q + r * 0.5) / scale;
+  const y = (r * 0.866) / scale;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = smoothStep(x - x0);
+  const ty = smoothStep(y - y0);
+  const a = hash2d(x0, y0, seed);
+  const b = hash2d(x0 + 1, y0, seed);
+  const c = hash2d(x0, y0 + 1, seed);
+  const d = hash2d(x0 + 1, y0 + 1, seed);
+  return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
+}
+
+function smoothStep(value) {
+  return value * value * (3 - 2 * value);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function addMountainRanges(tiles, radius, seed, nationCount) {
@@ -345,6 +426,7 @@ function claimStartingCluster(map, nation, center, rng) {
 }
 
 function terrainColor(tile) {
+  if (tile.type === TILE_TYPES.EMPTY && tile.terrain === "land") return BIOME_COLORS[tile.biome] || BIOME_COLORS.grassland;
   return TILE_COLORS[tile.type] || TILE_COLORS[TILE_TYPES.EMPTY];
 }
 
@@ -517,6 +599,7 @@ export class HexMapRenderer {
     this.decorations = new Map();
     this.decorationSignatures = new Map();
     this.territoryBorderSignature = "";
+    this.transportSignature = "";
     this.nationLabels = new Map();
     this.nationLabelSignature = "";
     this.animated = [];
@@ -559,11 +642,13 @@ export class HexMapRenderer {
 
     this.tileGroup = new THREE.Group();
     this.territoryBorderGroup = new THREE.Group();
+    this.transportGroup = new THREE.Group();
     this.highlightGroup = new THREE.Group();
     this.decorationGroup = new THREE.Group();
     this.effectGroup = new THREE.Group();
     this.scene.add(this.tileGroup);
     this.scene.add(this.territoryBorderGroup);
+    this.scene.add(this.transportGroup);
     this.scene.add(this.highlightGroup);
     this.scene.add(this.decorationGroup);
     this.scene.add(this.effectGroup);
@@ -617,6 +702,7 @@ export class HexMapRenderer {
       this._updateDecoration(tile);
     }
     this._renderTerritoryBorders();
+    this._renderTransportOverlay();
     this._renderNationLabels();
     this._renderMilitaryHighlights();
   }
@@ -810,6 +896,208 @@ export class HexMapRenderer {
     }
   }
 
+  _renderTransportOverlay() {
+    if (!this.map) return;
+    const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false && (nation.tech?.infrastructure || 0) > 0);
+    const signature = [
+      activeNations.map((nation) => `${nation.id}:${nation.tech?.infrastructure || 0}:${nation.capitalTileId || ""}:${nation.color}`).sort().join("|"),
+      this.map.tiles.filter((tile) => tile.ownerId).map((tile) => `${tile.id}:${tile.ownerId}`).sort().join("|"),
+    ].join("::");
+    if (signature === this.transportSignature) return;
+    this.transportSignature = signature;
+    this._clearObjectGroup(this.transportGroup);
+
+    const segmentsByNation = this._transportSegmentsByNation();
+    for (const nation of activeNations) {
+      const tier = Math.max(0, Math.min(4, Math.floor(Number(nation.tech?.infrastructure) || 0)));
+      const segments = segmentsByNation.get(nation.id) || [];
+      if (!segments.length) {
+        if (tier >= 4) this._addAirportOverlay(nation);
+        continue;
+      }
+
+      const roadSegments = [];
+      const railSegments = [];
+      for (const segment of segments) {
+        const rail = tier >= 2 && hash2d(segment.tile.q + segment.neighbor.q * 3, segment.tile.r + segment.neighbor.r * 5, (this.map?.seed || 1) + 5501) > 0.5;
+        if (rail) railSegments.push(segment);
+        else roadSegments.push(segment);
+      }
+
+      for (const segment of roadSegments) this._addRoadSegment(segment, nation, tier);
+      for (const segment of railSegments) this._addRailSegment(segment, nation);
+      if (!this.animationManager.reducedMotion) {
+        this._addTrafficOverlays(roadSegments, nation, tier);
+        this._addTrainOverlay(railSegments, nation);
+      }
+      if (tier >= 4) this._addAirportOverlay(nation);
+    }
+  }
+
+  _transportSegmentsByNation() {
+    const index = buildTileIndex(this.map.tiles);
+    const segmentsByNation = new Map();
+    for (const tile of this.map.tiles) {
+      if (!tile.ownerId || !isLand(tile)) continue;
+      const nation = this.nations[tile.ownerId];
+      if (!nation || (nation.tech?.infrastructure || 0) <= 0) continue;
+      const corners = hexCorners(tile);
+      for (const direction of HEX_DIRECTIONS) {
+        const neighbor = index.get(tileId(tile.q + direction.q, tile.r + direction.r));
+        if (!neighbor || neighbor.ownerId !== tile.ownerId || !isLand(neighbor) || tile.id > neighbor.id) continue;
+        const [fromIndex, toIndex] = edgeCornersForDirection(direction);
+        const from = corners[fromIndex];
+        const to = corners[toIndex];
+        const segment = { tile, neighbor, from, to };
+        if (!segmentsByNation.has(tile.ownerId)) segmentsByNation.set(tile.ownerId, []);
+        segmentsByNation.get(tile.ownerId).push(segment);
+      }
+    }
+    for (const segments of segmentsByNation.values()) {
+      segments.sort((a, b) => `${a.tile.id}:${a.neighbor.id}`.localeCompare(`${b.tile.id}:${b.neighbor.id}`));
+    }
+    return segmentsByNation;
+  }
+
+  _addRoadSegment(segment, nation, tier) {
+    const THREE = window.THREE;
+    const dx = segment.to.x - segment.from.x;
+    const dz = segment.to.z - segment.from.z;
+    const length = Math.hypot(dx, dz);
+    const angle = Math.atan2(dz, dx);
+    const midX = (segment.from.x + segment.to.x) / 2;
+    const midZ = (segment.from.z + segment.to.z) / 2;
+    const highway = tier >= 3;
+    const base = new THREE.Mesh(
+      new THREE.BoxGeometry(length + 0.02, 0.012, highway ? 0.105 : 0.064),
+      new THREE.MeshBasicMaterial({ color: highway ? 0x2f3740 : 0x5c5147, transparent: true, opacity: highway ? 0.78 : 0.68, depthWrite: false })
+    );
+    base.position.set(midX, HEX_HEIGHT + 0.035, midZ);
+    base.rotation.y = -angle;
+    base.renderOrder = 2;
+    this.transportGroup.add(base);
+    if (highway) {
+      const stripe = new THREE.Mesh(
+        new THREE.BoxGeometry(length * 0.72, 0.014, 0.014),
+        new THREE.MeshBasicMaterial({ color: 0xf4e7a0, transparent: true, opacity: 0.72, depthWrite: false })
+      );
+      stripe.position.set(midX, HEX_HEIGHT + 0.045, midZ);
+      stripe.rotation.y = -angle;
+      stripe.renderOrder = 3;
+      this.transportGroup.add(stripe);
+    }
+  }
+
+  _addRailSegment(segment, nation) {
+    const THREE = window.THREE;
+    const dx = segment.to.x - segment.from.x;
+    const dz = segment.to.z - segment.from.z;
+    const length = Math.hypot(dx, dz);
+    const angle = Math.atan2(dz, dx);
+    const midX = (segment.from.x + segment.to.x) / 2;
+    const midZ = (segment.from.z + segment.to.z) / 2;
+    const bed = new THREE.Mesh(
+      new THREE.BoxGeometry(length + 0.03, 0.012, 0.088),
+      new THREE.MeshBasicMaterial({ color: 0x4a423c, transparent: true, opacity: 0.62, depthWrite: false })
+    );
+    bed.position.set(midX, HEX_HEIGHT + 0.035, midZ);
+    bed.rotation.y = -angle;
+    bed.renderOrder = 2;
+    this.transportGroup.add(bed);
+    for (const offset of [-0.026, 0.026]) {
+      const rail = new THREE.Mesh(
+        new THREE.BoxGeometry(length + 0.01, 0.016, 0.012),
+        new THREE.MeshBasicMaterial({ color: 0xc9c3b8, transparent: true, opacity: 0.82, depthWrite: false })
+      );
+      rail.position.set(midX + Math.sin(angle) * offset, HEX_HEIGHT + 0.048, midZ - Math.cos(angle) * offset);
+      rail.rotation.y = -angle;
+      rail.renderOrder = 3;
+      this.transportGroup.add(rail);
+    }
+  }
+
+  _addTrafficOverlays(segments, nation, tier) {
+    const count = tier >= 3 ? 3 : 1;
+    for (let i = 0; i < Math.min(count, segments.length); i += 1) {
+      const segment = segments[(i * 7) % segments.length];
+      this._addVehicleOnSegment(segment, nation, i % 2 === 0 ? "truck" : "car", 9 + i * 2.3, i * 1.7);
+    }
+  }
+
+  _addTrainOverlay(segments, nation) {
+    if (!segments.length) return;
+    const segment = segments[Math.floor(segments.length / 2)];
+    this._addVehicleOnSegment(segment, nation, "train", 13.5, 2.2);
+  }
+
+  _addVehicleOnSegment(segment, nation, kind, duration, phaseOffset = 0) {
+    const THREE = window.THREE;
+    const color = kind === "car" ? 0xd9e6f2 : kind === "train" ? 0xc94e4e : 0xd8aa54;
+    const vehicle = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(kind === "train" ? 0.22 : kind === "truck" ? 0.15 : 0.11, kind === "train" ? 0.07 : 0.055, kind === "train" ? 0.075 : 0.06),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
+    );
+    vehicle.add(body);
+    if (kind === "train") {
+      const car = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.06, 0.07),
+        new THREE.MeshBasicMaterial({ color: 0x36424c, transparent: true, opacity: 0.88, depthWrite: false })
+      );
+      car.position.x = -0.2;
+      vehicle.add(car);
+    }
+    vehicle.renderOrder = 4;
+    this.transportGroup.add(vehicle);
+    const from = new THREE.Vector3(segment.from.x, HEX_HEIGHT + 0.095, segment.from.z);
+    const to = new THREE.Vector3(segment.to.x, HEX_HEIGHT + 0.095, segment.to.z);
+    this._registerAnimation(this.transportGroup, vehicle, kind === "train" ? "transportTrain" : "transportVehicle", {
+      from,
+      to,
+      phase: this._phaseForTile(segment.tile, kind === "train" ? 202 : 200 + phaseOffset),
+      duration,
+      offset: phaseOffset * 0.07,
+    });
+  }
+
+  _addAirportOverlay(nation) {
+    const capital = this.map?.tiles.find((tile) => tile.id === nation.capitalTileId || (tile.ownerId === nation.id && tile.isCapital));
+    if (!capital) return;
+    const THREE = window.THREE;
+    const { x, z } = axialToWorld(capital.q, capital.r, HEX_SIZE);
+    const group = new THREE.Group();
+    group.position.set(x, HEX_HEIGHT + 0.075, z);
+    const runway = new THREE.Mesh(
+      new THREE.BoxGeometry(0.78, 0.014, 0.105),
+      new THREE.MeshBasicMaterial({ color: 0xdce5ec, transparent: true, opacity: 0.62, depthWrite: false })
+    );
+    runway.rotation.y = Math.PI / 6;
+    group.add(runway);
+    const terminal = new THREE.Mesh(
+      new THREE.BoxGeometry(0.2, 0.06, 0.13),
+      new THREE.MeshBasicMaterial({ color: 0x82a9c8, transparent: true, opacity: 0.72, depthWrite: false })
+    );
+    terminal.position.set(-0.28, 0.05, -0.16);
+    group.add(terminal);
+    this.transportGroup.add(group);
+    if (!this.animationManager.reducedMotion) this._addAirportPlane(capital, nation);
+  }
+
+  _addAirportPlane(capital, nation) {
+    const THREE = window.THREE;
+    const { x, z } = axialToWorld(capital.q, capital.r, HEX_SIZE);
+    const plane = this._createUnitEffectMesh("air", nation.id);
+    plane.scale.setScalar(0.42);
+    plane.renderOrder = 5;
+    this.transportGroup.add(plane);
+    this._registerAnimation(this.transportGroup, plane, "airportPlane", {
+      from: new THREE.Vector3(x - 1.25, HEX_HEIGHT + 0.82, z - 0.9),
+      to: new THREE.Vector3(x + 1.3, HEX_HEIGHT + 0.98, z + 0.86),
+      phase: this._phaseForTile(capital, 240),
+      duration: 15,
+    });
+  }
+
   _renderNationLabels() {
     if (!this.map || !this.labelLayer) return;
     const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false);
@@ -913,10 +1201,12 @@ export class HexMapRenderer {
   _clearObjectGroup(group) {
     if (!group) return;
     while (group.children.length) {
-      const child = group.children.pop();
+      const child = group.children[group.children.length - 1];
+      group.remove(child);
       child.traverse?.((obj) => {
         if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) obj.material.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((material) => material.dispose());
+        else if (obj.material) obj.material.dispose();
       });
     }
   }
@@ -1420,6 +1710,8 @@ export class HexMapRenderer {
       amplitude: options.amplitude ?? 1,
       speed: options.speed || 1,
       offset: options.offset || 0,
+      from: options.from || null,
+      to: options.to || null,
     });
   }
 
@@ -1559,14 +1851,31 @@ export class HexMapRenderer {
     const seed = this.map?.seed || 1;
     const density = hash2d(tile.q * 29 + 5, tile.r * 31 - 7, seed + 5151);
     if (density < 0.32 && tile.ownerId) return;
-    const count = density > 0.76 ? 4 : density > 0.52 ? 3 : 2;
+    const biome = tile.biome || "grassland";
+    const count = biome === "jungle"
+      ? density > 0.68 ? 5 : 4
+      : biome === "woods"
+        ? density > 0.72 ? 4 : 3
+        : density > 0.76 ? 4 : density > 0.52 ? 3 : 2;
     for (let i = 0; i < count; i += 1) {
       const angle = hash2d(tile.q + i * 13, tile.r - i * 17, seed + 5200) * TAU;
       const dist = 0.16 + hash2d(tile.q - i * 19, tile.r + i * 23, seed + 5300) * 0.36;
       const x = Math.cos(angle) * dist;
       const z = Math.sin(angle) * dist;
       const variant = hash2d(tile.q * 3 + i, tile.r * 5 - i, seed + 5400);
-      if (variant > 0.66) this._addTinyTree(group, x, 0.02, z, 0.82 + variant * 0.45);
+      if (biome === "desert") {
+        if (variant > 0.62) this._addCactus(group, x, 0.02, z, 0.72 + variant * 0.42);
+        else this._addPebble(group, x, 0.025, z, 0.75 + variant * 0.48, 0xa97842);
+      } else if (biome === "arctic") {
+        if (variant > 0.52) this._addPebble(group, x, 0.025, z, 0.86 + variant * 0.4, 0xd8e1df);
+        else this._addGrassTuft(group, x, 0.02, z, 0.55 + variant * 0.35, 0xc3d1c7);
+      } else if (biome === "jungle") {
+        if (variant > 0.28) this._addTinyTree(group, x, 0.02, z, 0.92 + variant * 0.55, 0x27723f);
+        else this._addGrassTuft(group, x, 0.02, z, 0.9 + variant * 0.7, 0x3f9b4d);
+      } else if (biome === "woods") {
+        if (variant > 0.38) this._addTinyTree(group, x, 0.02, z, 0.82 + variant * 0.45, 0x2f7b42);
+        else this._addGrassTuft(group, x, 0.02, z, 0.72 + variant * 0.5, 0x6b9b52);
+      } else if (variant > 0.66) this._addTinyTree(group, x, 0.02, z, 0.82 + variant * 0.45);
       else if (variant > 0.34) this._addPebble(group, x, 0.025, z, 0.8 + variant * 0.5);
       else this._addGrassTuft(group, x, 0.02, z, 0.75 + variant * 0.6);
     }
@@ -1585,7 +1894,7 @@ export class HexMapRenderer {
     }
   }
 
-  _addTinyTree(group, x, y, z, scale = 1) {
+  _addTinyTree(group, x, y, z, scale = 1, crownColor = 0x2f8a55) {
     const THREE = window.THREE;
     const trunk = new THREE.Mesh(
       new THREE.CylinderGeometry(0.025 * scale, 0.032 * scale, 0.16 * scale, 5),
@@ -1595,21 +1904,33 @@ export class HexMapRenderer {
     group.add(trunk);
     const crown = new THREE.Mesh(
       new THREE.ConeGeometry(0.12 * scale, 0.24 * scale, 6),
-      new THREE.MeshStandardMaterial({ color: 0x2f8a55, roughness: 0.9 })
+      new THREE.MeshStandardMaterial({ color: crownColor, roughness: 0.9 })
     );
     crown.position.set(x, y + 0.25 * scale, z);
     group.add(crown);
   }
 
-  _addGrassTuft(group, x, y, z, scale = 1) {
+  _addGrassTuft(group, x, y, z, scale = 1, color = 0x5aa65a) {
     const THREE = window.THREE;
     const tuft = new THREE.Mesh(
       new THREE.ConeGeometry(0.055 * scale, 0.15 * scale, 5),
-      new THREE.MeshStandardMaterial({ color: 0x5aa65a, roughness: 0.94 })
+      new THREE.MeshStandardMaterial({ color, roughness: 0.94 })
     );
     tuft.position.set(x, y + 0.07 * scale, z);
     tuft.rotation.z = 0.18;
     group.add(tuft);
+  }
+
+  _addCactus(group, x, y, z, scale = 1) {
+    const THREE = window.THREE;
+    const mat = new THREE.MeshStandardMaterial({ color: 0x4f8f55, roughness: 0.88 });
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025 * scale, 0.035 * scale, 0.22 * scale, 6), mat);
+    stem.position.set(x, y + 0.11 * scale, z);
+    group.add(stem);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.014 * scale, 0.018 * scale, 0.12 * scale, 6), mat);
+    arm.position.set(x + 0.055 * scale, y + 0.13 * scale, z);
+    arm.rotation.z = Math.PI / 2;
+    group.add(arm);
   }
 
   _addPebble(group, x, y, z, scale = 1, color = 0x8b8578) {
@@ -1988,13 +2309,15 @@ export class HexMapRenderer {
 	  }
 
   _clearGroups() {
-    const groups = [this.tileGroup, this.territoryBorderGroup, this.highlightGroup, this.decorationGroup, this.effectGroup];
+    const groups = [this.tileGroup, this.territoryBorderGroup, this.transportGroup, this.highlightGroup, this.decorationGroup, this.effectGroup];
     for (const group of groups) {
       while (group.children.length) {
-        const child = group.children.pop();
+        const child = group.children[group.children.length - 1];
+        group.remove(child);
         child.traverse?.((obj) => {
           if (obj.geometry) obj.geometry.dispose();
-          if (obj.material) obj.material.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((material) => material.dispose());
+          else if (obj.material) obj.material.dispose();
         });
       }
     }
@@ -2002,6 +2325,7 @@ export class HexMapRenderer {
     this.decorations.clear();
     this.decorationSignatures.clear();
     this.territoryBorderSignature = "";
+    this.transportSignature = "";
     this.nationLabelSignature = "";
     this.nationLabels.forEach((label) => label.remove());
     this.nationLabels.clear();
@@ -2121,6 +2445,32 @@ export class HexMapRenderer {
         item.object.position.y = item.baseY + wave * 0.035;
         item.object.rotation.z = item.baseRotZ + Math.sin(phaseTime * 1.2) * 0.08;
       }
+      if (item.kind === "transportVehicle" || item.kind === "transportTrain") {
+        const loop = (time / duration + item.phase / TAU + item.offset) % 1;
+        const visible = item.kind === "transportTrain" ? loop < 0.46 : loop < 0.58;
+        const t = visible ? loop / (item.kind === "transportTrain" ? 0.46 : 0.58) : 0;
+        if (item.from && item.to) {
+          item.object.position.lerpVectors(item.from, item.to, t);
+          const dx = item.to.x - item.from.x;
+          const dz = item.to.z - item.from.z;
+          item.object.rotation.y = -Math.atan2(dz, dx);
+        }
+        this._setObjectOpacity(item.object, visible ? 0.9 : 0);
+      }
+      if (item.kind === "airportPlane") {
+        const loop = (time / duration + item.phase / TAU) % 1;
+        const visible = loop < 0.62;
+        const t = visible ? loop / 0.62 : 0;
+        if (item.from && item.to) {
+          item.object.position.lerpVectors(item.from, item.to, t);
+          const dx = item.to.x - item.from.x;
+          const dz = item.to.z - item.from.z;
+          item.object.rotation.y = -Math.atan2(dz, dx);
+          item.object.rotation.z = -0.35 + Math.sin(t * Math.PI) * 0.18;
+          item.object.position.y += Math.sin(t * Math.PI) * 0.38;
+        }
+        this._setObjectOpacity(item.object, visible ? 0.86 : 0);
+      }
       if (item.kind === "orbit") {
         const angle = time * 0.8 + item.phase;
         const radius = Math.hypot(item.baseX, item.baseZ) || 0.35;
@@ -2131,6 +2481,21 @@ export class HexMapRenderer {
     this._updateEffects(now);
     this._updateNationLabels();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  _setObjectOpacity(object, opacity) {
+    object.traverse?.((child) => {
+      if (!child.material) return;
+      if (Array.isArray(child.material)) {
+        for (const material of child.material) {
+          material.transparent = true;
+          material.opacity = opacity;
+        }
+      } else {
+        child.material.transparent = true;
+        child.material.opacity = opacity;
+      }
+    });
   }
 
   _updateEffects(now) {

@@ -31,18 +31,24 @@ const canvas = document.getElementById("map-canvas");
 const inputs = {
   playerName: document.getElementById("setup-player-name"),
   mapSize: document.getElementById("setup-map-size"),
+  waterLevel: document.getElementById("setup-water-level"),
+  landscapeDiversity: document.getElementById("setup-landscape-diversity"),
   nationCount: document.getElementById("setup-nation-count"),
   maxTurns: document.getElementById("setup-max-turns"),
   turnTimerMinutes: document.getElementById("setup-turn-timer"),
   unlimitedMode: document.getElementById("setup-unlimited"),
+  happinessEnabled: document.getElementById("setup-happiness-enabled"),
 };
 
 const lobbyInputs = {
   mapSize: document.getElementById("lobby-map-size"),
+  waterLevel: document.getElementById("lobby-water-level"),
+  landscapeDiversity: document.getElementById("lobby-landscape-diversity"),
   nationCount: document.getElementById("lobby-nation-count"),
   maxTurns: document.getElementById("lobby-max-turns"),
   turnTimerMinutes: document.getElementById("lobby-turn-timer"),
   unlimitedMode: document.getElementById("lobby-unlimited"),
+  happinessEnabled: document.getElementById("lobby-happiness-enabled"),
 };
 
 if (!window.THREE) {
@@ -134,10 +140,13 @@ function readSetup() {
   return {
     playerName: inputs.playerName.value,
     mapSize: inputs.mapSize.value,
+    waterLevel: inputs.waterLevel.value,
+    landscapeDiversity: inputs.landscapeDiversity.value,
     nationCount: clampInt(inputs.nationCount.value, 2, 16, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: inputs.unlimitedMode.checked,
+    happinessEnabled: inputs.happinessEnabled.checked,
   };
 }
 
@@ -245,10 +254,13 @@ function renderLobby(nextLobbyState) {
 function syncLobbyInputs(settings, editable) {
   syncingLobbyInputs = true;
   lobbyInputs.mapSize.value = settings.mapSize;
+  lobbyInputs.waterLevel.value = settings.waterLevel || "Balanced";
+  lobbyInputs.landscapeDiversity.value = settings.landscapeDiversity || "Balanced";
   lobbyInputs.nationCount.value = settings.nationCount;
   lobbyInputs.maxTurns.value = settings.unlimitedMode ? 30 : settings.maxTurns;
   lobbyInputs.turnTimerMinutes.value = settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0;
   lobbyInputs.unlimitedMode.checked = settings.unlimitedMode;
+  lobbyInputs.happinessEnabled.checked = settings.happinessEnabled !== false;
   lobbyInputs.maxTurns.disabled = settings.unlimitedMode || !editable;
 
   for (const [key, input] of Object.entries(lobbyInputs)) {
@@ -260,10 +272,13 @@ function syncLobbyInputs(settings, editable) {
 function readLobbySetup() {
   return {
     mapSize: lobbyInputs.mapSize.value,
+    waterLevel: lobbyInputs.waterLevel.value,
+    landscapeDiversity: lobbyInputs.landscapeDiversity.value,
     nationCount: clampInt(lobbyInputs.nationCount.value, 2, 16, 5),
     maxTurns: lobbyInputs.unlimitedMode.checked ? 0 : clampInt(lobbyInputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(lobbyInputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: lobbyInputs.unlimitedMode.checked,
+    happinessEnabled: lobbyInputs.happinessEnabled.checked,
   };
 }
 

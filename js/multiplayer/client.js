@@ -131,10 +131,13 @@ function readSettings(settings = {}) {
   const turnTimerMinutes = Number(settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0);
   return {
     mapSize: settings.mapSize || "Medium",
+    waterLevel: settings.waterLevel || "Balanced",
+    landscapeDiversity: settings.landscapeDiversity || "Balanced",
     nationCount: Number(settings.nationCount || 5),
     maxTurns: Number(settings.maxTurns || 30),
     turnTimerMinutes,
     unlimitedMode: Boolean(settings.unlimitedMode),
+    happinessEnabled: settings.happinessEnabled !== false,
     seed: Number(settings.seed || 1),
   };
 }

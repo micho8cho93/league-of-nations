@@ -78,10 +78,6 @@ const BUILDING_TYPES = [
   TILE_TYPES.MOUNTAIN_MINE,
   TILE_TYPES.SCHOOL,
   TILE_TYPES.UNIVERSITY,
-  TILE_TYPES.ROAD,
-  TILE_TYPES.RAILROAD,
-  TILE_TYPES.HIGHWAY,
-  TILE_TYPES.AIRPORT,
   TILE_TYPES.FACTORY,
   TILE_TYPES.MILITARY,
 ];
@@ -95,10 +91,6 @@ const WORKER_MIN: Record<string, number> = {
   [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
-  [TILE_TYPES.ROAD]: 2,
-  [TILE_TYPES.RAILROAD]: 3,
-  [TILE_TYPES.HIGHWAY]: 4,
-  [TILE_TYPES.AIRPORT]: 6,
 };
 
 const WORKER_ROLES = {
@@ -119,10 +111,6 @@ const WORKER_ROLE_BY_TILE: Record<string, string> = {
   [TILE_TYPES.UNIVERSITY]: WORKER_ROLES.SCHOLARS,
   [TILE_TYPES.FACTORY]: WORKER_ROLES.ENGINEERS,
   [TILE_TYPES.MILITARY]: WORKER_ROLES.SOLDIERS,
-  [TILE_TYPES.ROAD]: WORKER_ROLES.ENGINEERS,
-  [TILE_TYPES.RAILROAD]: WORKER_ROLES.ENGINEERS,
-  [TILE_TYPES.HIGHWAY]: WORKER_ROLES.ENGINEERS,
-  [TILE_TYPES.AIRPORT]: WORKER_ROLES.ENGINEERS,
 };
 
 const HEX_DIRECTIONS = [
@@ -142,10 +130,6 @@ const BUILD_COST: Record<string, number> = {
   [TILE_TYPES.SCHOOL]: 230,
   [TILE_TYPES.UNIVERSITY]: 560,
   [TILE_TYPES.MILITARY]: 330,
-  [TILE_TYPES.ROAD]: 220,
-  [TILE_TYPES.RAILROAD]: 360,
-  [TILE_TYPES.HIGHWAY]: 620,
-  [TILE_TYPES.AIRPORT]: 980,
   [TILE_TYPES.FACTORY]: 780,
 };
 
@@ -184,7 +168,7 @@ const TECH = {
     farming: { label: "Farming", tileTypes: [TILE_TYPES.FARM, TILE_TYPES.FISHERY], baseCost: 260, resource: "food" },
     mining: { label: "Mining", tileTypes: [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE], baseCost: 320, resource: "materials" },
     education: { label: "Education", tileTypes: [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY], baseCost: 360, resource: "education" },
-    infrastructure: { label: "Infrastructure", tileTypes: [TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.HIGHWAY, TILE_TYPES.AIRPORT], baseCost: 390, resource: "materials" },
+    infrastructure: { label: "Infrastructure", tileTypes: [], baseCost: 390, resource: "materials" },
     military: { label: "Military", tileTypes: [TILE_TYPES.MILITARY], baseCost: 420, resource: "materials" },
   } as Record<string, { label: string; tileTypes: string[]; baseCost: number; resource: string }>,
   research: {
@@ -297,10 +281,6 @@ const WAR = {
         TILE_TYPES.UNIVERSITY,
         TILE_TYPES.FACTORY,
         TILE_TYPES.MILITARY,
-        TILE_TYPES.ROAD,
-        TILE_TYPES.RAILROAD,
-        TILE_TYPES.HIGHWAY,
-        TILE_TYPES.AIRPORT,
       ],
       flatBonus: 1,
       multiplierBonus: 0.04,
@@ -315,7 +295,7 @@ const WAR = {
     progressPerVictory: 1,
     capitalRequiredProgress: 3,
     highValueRequiredProgress: 2,
-    highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY, TILE_TYPES.AIRPORT],
+    highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
   },
 };
 
@@ -876,6 +856,7 @@ function happinessBand(nation: Nation) {
 }
 
 function checkMilitaryRefusal(game: ServerGameState, nation: Nation, fromTileId: string, toTileId: string): ActionResult {
+  if (game.settings?.happinessEnabled === false) return { ok: true };
   nation.population.happiness = normalizeHappiness(nation.population.happiness);
   const band = happinessBand(nation);
   if (!band.militaryRefusalChance) return { ok: true };
@@ -923,16 +904,17 @@ function canResearch(
   const nextTier = current + 1;
   const activeRequired = Math.max(1, nextTier * TECH.research.activeTilesPerTier);
   const resourceCost = Math.ceil(config.baseCost * TECH.research.resourceCostRate * Math.pow(TECH.research.resourceCostExponent, nextTier - 1));
-  const infrastructurePrevious = category === "infrastructure" ? INFRASTRUCTURE_UNLOCKS[nextTier - 2] : null;
-  const active = activeTileCount(game, nation.id, infrastructurePrevious ? [infrastructurePrevious.tileType] : config.tileTypes);
+  const infrastructureUnlock = category === "infrastructure" ? INFRASTRUCTURE_UNLOCKS[nextTier - 1] : null;
+  const active = category === "infrastructure" ? 0 : activeTileCount(game, nation.id, config.tileTypes);
   const cost = Math.ceil(config.baseCost * Math.pow(TECH.research.costExponent, current));
+  if (infrastructureUnlock && game.era < infrastructureUnlock.era) {
+    return { ok: false, reason: `${infrastructureUnlock.label}s unlock in Era ${infrastructureUnlock.era}.` };
+  }
   if (category === "infrastructure" && nextTier === 1) {
     if (activeTileCount(game, nation.id, [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE]) < 1) return { ok: false, reason: "Requires one active mine or mountain mine." };
     if (activeTileCount(game, nation.id, [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY]) < 1) return { ok: false, reason: "Requires one active school or university." };
-  } else {
-    const required = category === "infrastructure" ? 1 : activeRequired;
-    const label = infrastructurePrevious ? infrastructurePrevious.label.toLowerCase() : config.label.toLowerCase();
-    if (active < required) return { ok: false, reason: `Requires ${required} active ${label} ${required === 1 ? "tile" : "tiles"}.` };
+  } else if (category !== "infrastructure") {
+    if (active < activeRequired) return { ok: false, reason: `Requires ${activeRequired} active ${config.label.toLowerCase()} ${activeRequired === 1 ? "tile" : "tiles"}.` };
   }
   if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
   if (resourceCount(nation, config.resource) < resourceCost) return { ok: false, reason: `Requires ${resourceCost} ${config.resource}.` };

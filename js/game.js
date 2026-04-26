@@ -45,6 +45,7 @@ import {
   destroyCost,
   productionForTile,
   tileTypeUnlocked,
+  transportHappinessBonus,
   transportGrowthMultiplier,
   trainingCost,
   workerAdminCost,
@@ -659,6 +660,7 @@ export class GameState {
   }
 
   checkMilitaryRefusal(nationId) {
+    if (this.settings.happinessEnabled === false) return { ok: true };
     const nation = this.nations[nationId];
     const band = happinessBand(nation);
     if (!band.militaryRefusalChance || this.rng() >= band.militaryRefusalChance) return { ok: true };
@@ -1115,17 +1117,19 @@ export class GameState {
   produceForNation(nation, summary) {
     let populationGain = 0;
     let foodProduced = 0;
+    const happinessEnabled = this.settings.happinessEnabled !== false;
     for (const tile of this.tiles.filter((item) => item.ownerId === nation.id)) {
       const production = productionForTile(nation, tile, this.era);
       if (!production) continue;
-      const band = happinessBand(nation);
+      const band = happinessEnabled ? happinessBand(nation) : { stoppageChance: 0 };
       if (band.stoppageChance && this.rng() < band.stoppageChance) {
         if (nation.isPlayer) summary.notes.push(`${nation.name}: unhappy workers stopped work on a ${typeLabel(tile.type)}.`);
         continue;
       }
       if (tile.type === TILE_TYPES.FACTORY) {
         if (nation.resources.materials < production.materialsCost || nation.resources.education < production.educationCost) {
-          const fallbackIncome = applyHappinessProduction(nation, applyWarExhaustionIncome(nation, BALANCE.costs.factoryFallbackMoney));
+          const exhaustedIncome = applyWarExhaustionIncome(nation, BALANCE.costs.factoryFallbackMoney);
+          const fallbackIncome = happinessEnabled ? applyHappinessProduction(nation, exhaustedIncome) : exhaustedIncome;
           earnMoney(nation, fallbackIncome);
           summary.money += fallbackIncome;
           continue;
@@ -1136,7 +1140,7 @@ export class GameState {
       for (const resource of ["food", "materials", "education", "industry"]) {
         if (production[resource]) {
           const exhaustedProduction = applyWarExhaustionProduction(nation, production[resource]);
-          const happyProduction = applyHappinessProduction(nation, exhaustedProduction);
+          const happyProduction = happinessEnabled ? applyHappinessProduction(nation, exhaustedProduction) : exhaustedProduction;
           const produced = applyStockpileDiminishingReturns(nation, resource, happyProduction);
           nation.resources[resource] += produced;
           nation.stats.resourcesProduced += produced;
@@ -1146,7 +1150,8 @@ export class GameState {
         }
       }
       if (production.money) {
-        const income = applyHappinessProduction(nation, applyWarExhaustionIncome(nation, production.money));
+        const exhaustedIncome = applyWarExhaustionIncome(nation, production.money);
+        const income = happinessEnabled ? applyHappinessProduction(nation, exhaustedIncome) : exhaustedIncome;
         earnMoney(nation, income);
         summary.money += income;
       }
@@ -1248,7 +1253,7 @@ export class GameState {
     else if (surplusRatio >= BALANCE.population.growth.comfortableSurplusRatio) baseGrowth = BALANCE.population.growth.comfortableGrowth;
     else baseGrowth = BALANCE.population.growth.marginalGrowth;
 
-    const growth = Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(nation, this.tiles));
+    const growth = Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(nation));
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
@@ -1256,6 +1261,10 @@ export class GameState {
   }
 
   updatePopulationHappiness(nation, summary, context) {
+    if (this.settings.happinessEnabled === false) {
+      nation.population.happiness = BALANCE.population.happiness.default;
+      return;
+    }
     const before = normalizeHappiness(nation.population.happiness);
     const delta = populationHappinessDelta(this, nation, context);
     const after = normalizeHappiness(before + delta);
@@ -1434,13 +1443,17 @@ function normalizeSettings(raw) {
   const unlimitedMode = Boolean(raw.unlimitedMode);
   const turnTimerMinutes = clamp(Math.floor(Number(raw.turnTimerMinutes ?? raw.timeLimitMinutes) || 0), 0, 240);
   const mapSizes = ["Small", "Medium", "Large", "Extra Large", "Enormous"];
+  const mapOptionLevels = ["Low", "Balanced", "High"];
   return {
     playerName: String(raw.playerName || "Republic of Nova").trim().slice(0, 40) || "Republic of Nova",
     mapSize: mapSizes.includes(raw.mapSize) ? raw.mapSize : "Medium",
+    waterLevel: mapOptionLevels.includes(raw.waterLevel) ? raw.waterLevel : "Balanced",
+    landscapeDiversity: mapOptionLevels.includes(raw.landscapeDiversity) ? raw.landscapeDiversity : "Balanced",
     nationCount,
     maxTurns: unlimitedMode ? 0 : clamp(Math.floor(Number(raw.maxTurns) || 30), 10, 120),
     turnTimerMinutes,
     unlimitedMode,
+    happinessEnabled: raw.happinessEnabled !== false,
     seed: Math.floor(Number(raw.seed) || randomSeed()),
   };
 }
@@ -1517,6 +1530,9 @@ function populationHappinessDelta(game, nation, context = {}) {
 
   if (activeWarCount === 0 && surplus >= BALANCE.population.growth.minimumFoodSurplus && (Number(context.unpaidUpkeep) || 0) <= 0) {
     delta += config.peacefulRecovery;
+  }
+  if (!context.famine && surplus >= BALANCE.population.growth.minimumFoodSurplus && (Number(context.unpaidUpkeep) || 0) <= 0) {
+    delta += transportHappinessBonus(nation);
   }
 
   if (delta === 0 && normalizeHappiness(nation.population.happiness) < BALANCE.population.happiness.default) return 1;

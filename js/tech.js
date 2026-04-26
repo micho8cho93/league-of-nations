@@ -62,10 +62,10 @@ export const TECH_CATEGORIES = {
   infrastructure: {
     label: "Infrastructure",
     tileType: TILE_TYPES.ROAD,
-    tileTypes: [TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.HIGHWAY, TILE_TYPES.AIRPORT],
+    tileTypes: [],
     baseCost: BALANCE.tech.categories.infrastructure.baseCost,
     resource: "materials",
-    description: "Unlocks roads, railroads, highways, and airports to support growth.",
+    description: "Unlocks national transportation networks that improve growth and supply-chain happiness.",
   },
   military: {
     label: "Military",
@@ -234,14 +234,16 @@ export function researchRequirement(category, nextTier) {
   const config = TECH_CATEGORIES[category];
   const research = BALANCE.tech.research;
   if (category === "infrastructure") {
-    const previous = INFRASTRUCTURE_UNLOCKS[nextTier - 2];
+    const unlock = transportUnlockForTier(nextTier);
     return {
-      activeTiles: nextTier === 1 ? 0 : 1,
-      activeTileTypes: previous ? [previous.tileType] : [],
-      activeLabel: previous ? previous.label.toLowerCase() : "",
+      activeTiles: 0,
+      activeTileTypes: [],
+      activeLabel: "",
       resource: config?.resource,
       resourceCost: Math.ceil((config?.baseCost || 250) * research.resourceCostRate * Math.pow(research.resourceCostExponent, nextTier - 1)),
       starter: nextTier === 1,
+      era: unlock?.era || 1,
+      unlockLabel: unlock?.label || "Transport",
     };
   }
   const requiredActive = Math.max(1, nextTier * research.activeTilesPerTier);
@@ -260,8 +262,13 @@ export function canResearch(game, nation, category) {
   if (current >= BALANCE.tech.research.maxTier) return { ok: false, reason: "Maximum linear tier reached." };
   const nextTier = current + 1;
   const req = researchRequirement(category, nextTier);
-  const active = req.activeTileTypes ? activeTileCount(nation, game.tiles, req.activeTileTypes) : activeTileCount(nation, game.tiles, config.tileTypes || [config.tileType]);
+  const active = category === "infrastructure"
+    ? 0
+    : activeTileCount(nation, game.tiles, config.tileTypes || [config.tileType]);
   const cost = researchCost(category, current);
+  if (category === "infrastructure" && game.era < req.era) {
+    return { ok: false, reason: `${req.unlockLabel}s unlock in Era ${req.era}.` };
+  }
   if (category === "infrastructure" && req.starter) {
     if (activeTileCount(nation, game.tiles, [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE]) < 1) {
       return { ok: false, reason: "Requires one active mine or mountain mine." };
@@ -269,7 +276,7 @@ export function canResearch(game, nation, category) {
     if (activeTileCount(nation, game.tiles, [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY]) < 1) {
       return { ok: false, reason: "Requires one active school or university." };
     }
-  } else if (active < req.activeTiles) {
+  } else if (category !== "infrastructure" && active < req.activeTiles) {
     return { ok: false, reason: `Requires ${req.activeTiles} active ${req.activeLabel || config.label.toLowerCase()} ${req.activeTiles === 1 ? "tile" : "tiles"}.` };
   }
   if (nation.money < cost) return { ok: false, reason: `Requires $${formatNumber(cost)}.` };
@@ -316,7 +323,6 @@ export function productionForTile(nation, tile, era) {
   const farming = nation.tech.farming || 0;
   const mining = nation.tech.mining || 0;
   const education = nation.tech.education || 0;
-  const infrastructure = nation.tech.infrastructure || 0;
   const military = nation.tech.military || 0;
   const eraScale = 1 + (era - 1) * BALANCE.production.eraScalePerEra;
   if (tile.type === TILE_TYPES.FARM) {
@@ -385,23 +391,25 @@ export function productionForTile(nation, tile, era) {
       materials: military >= config.materialsTechTier ? config.materials : 0,
     };
   }
-  if ([TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.HIGHWAY, TILE_TYPES.AIRPORT].includes(tile.type)) {
-    const config = BALANCE.production[tile.type];
-    return {
-      money: Math.ceil(config.moneyBase + infrastructure * config.moneyPerTech),
-      education: config.education || 0,
-    };
-  }
   return null;
 }
 
-export function transportGrowthMultiplier(nation, tiles) {
-  const bonuses = BALANCE.population.growth.transportBonus;
-  let multiplier = 1;
-  for (const [type, bonus] of Object.entries(bonuses)) {
-    multiplier += activeTiles(nation, tiles, type).length * bonus;
-  }
-  return Math.min(BALANCE.population.growth.maxTransportMultiplier, multiplier);
+export function infrastructureTier(nation) {
+  return Math.max(0, Math.min(4, Math.floor(Number(nation?.tech?.infrastructure) || 0)));
+}
+
+export function transportGrowthMultiplier(nation) {
+  const tier = infrastructureTier(nation);
+  return BALANCE.population.growth.transportMultipliers[tier] || 1;
+}
+
+export function transportHappinessBonus(nation) {
+  const tier = infrastructureTier(nation);
+  return BALANCE.population.growth.transportHappinessBonus[tier] || 0;
+}
+
+export function transportUnlockForTier(tier) {
+  return INFRASTRUCTURE_UNLOCKS.find((item) => item.tier === tier) || null;
 }
 
 export function checkEraAdvancement(game) {
