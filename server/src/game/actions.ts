@@ -799,8 +799,12 @@ function assignWorkers(
 
   const currentTileWorkers = Math.max(0, Math.floor(Number(tile.workers) || 0));
   const availablePopulation = Math.max(0, Math.floor(Number(nation.population.available) || 0));
+  const requiredWorkers = Math.max(0, Math.floor(Number(WORKER_MIN[tile.type]) || 0));
 
   if (delta > 0) {
+    const openSlots = Math.max(0, requiredWorkers - currentTileWorkers);
+    if (openSlots <= 0) return { ok: false, reason: "This tile is already fully staffed." };
+    if (delta > openSlots) return { ok: false, reason: `Only ${openSlots} more worker${openSlots === 1 ? "" : "s"} needed for this tile.` };
     if (delta > availablePopulation) return { ok: false, reason: "Not enough available population." };
     const cost = workerAdminCost(delta);
     if (nation.money < cost) return { ok: false, reason: `Requires $${cost} to organize workers.` };

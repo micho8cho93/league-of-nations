@@ -475,6 +475,8 @@ test("action points reject exhausted and spoofed client actions", async () => {
   const gameState = startGame(room, creator);
   const nation = gameState.nations["nation-1"];
   const tile = workerTile(gameState, "nation-1", "farm");
+  tile.workers = 1;
+  nation.workers.farmers = 1;
 
   for (const amount of [1, -1, 1, -1, 1]) {
     clearMessages(creator);
@@ -636,6 +638,8 @@ test("active player can assign workers for their own nation", async () => {
   const gameState = startGame(room, creator);
   const tile = workerTile(gameState, "nation-1", "farm");
   const nation = gameState.nations["nation-1"];
+  tile.workers = 1;
+  nation.workers.farmers = 1;
   const startingWorkers = tile.workers;
   const startingAvailable = nation.population.available;
   const startingMoney = nation.money;
@@ -649,11 +653,64 @@ test("active player can assign workers for their own nation", async () => {
 
   assert.equal(tile.workers, startingWorkers + 1);
   assert.equal(nation.population.available, startingAvailable - 1);
-  assert.equal(nation.workers.farmers, 3);
+  assert.equal(nation.workers.farmers, 2);
   assert.equal(nation.money, startingMoney - 5);
   assert.equal(nation.actionsRemaining, 4);
   assert.equal(creator.sent.some((message) => message.type === "actionRejected"), false);
   assert.equal((room as any).broadcasts.some((message: any) => message.type === "gameSnapshot"), true);
+});
+
+test("worker assignments stop at the tile minimum and still cost one action", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tile = workerTile(gameState, "nation-1", "mine");
+  const nation = gameState.nations["nation-1"];
+  tile.workers = 1;
+  nation.workers.miners = 1;
+  const startingAvailable = nation.population.available;
+  const startingMoney = nation.money;
+
+  await room.messages.playerAction(creator.client, {
+    type: "assignWorkers",
+    nationId: "nation-1",
+    tileId: tile.id,
+    amount: 2,
+  });
+
+  assert.equal(tile.workers, 3);
+  assert.equal(nation.workers.miners, 3);
+  assert.equal(nation.population.available, startingAvailable - 2);
+  assert.equal(nation.money, startingMoney - 10);
+  assert.equal(nation.actionsRemaining, 4);
+  assert.equal(nation.actionsUsedThisTurn, 1);
+  assert.equal(latestRejection(creator), "");
+});
+
+test("player cannot assign workers past the tile minimum", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tile = workerTile(gameState, "nation-1", "farm");
+  const nation = gameState.nations["nation-1"];
+  const startingActions = nation.actionsRemaining;
+  const startingMoney = nation.money;
+  const startingAvailable = nation.population.available;
+
+  await room.messages.playerAction(creator.client, {
+    type: "assignWorkers",
+    nationId: "nation-1",
+    tileId: tile.id,
+    amount: 1,
+  });
+
+  assert.equal(tile.workers, 2);
+  assert.equal(nation.money, startingMoney);
+  assert.equal(nation.population.available, startingAvailable);
+  assert.equal(nation.actionsRemaining, startingActions);
+  assert.match(latestRejection(creator), /fully staffed/);
 });
 
 test("player cannot assign workers for another nation", async () => {
@@ -884,6 +941,9 @@ test("invalid worker counts are rejected", async () => {
   const gameState = startGame(room, creator);
   const tile = workerTile(gameState, "nation-1", "farm");
   const nation = gameState.nations["nation-1"];
+  tile.workers = 0;
+  nation.workers.farmers = 0;
+  nation.population.available = 0;
   const startingWorkers = tile.workers;
   const startingAvailable = nation.population.available;
 
@@ -891,7 +951,7 @@ test("invalid worker counts are rejected", async () => {
     type: "assignWorkers",
     nationId: "nation-1",
     tileId: tile.id,
-    amount: startingAvailable + 1,
+    amount: 1,
   });
 
   assert.equal(tile.workers, startingWorkers);

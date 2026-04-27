@@ -551,6 +551,139 @@ function terrainColor(tile) {
   return TILE_COLORS[tile.type] || TILE_COLORS[TILE_TYPES.EMPTY];
 }
 
+function tileSurfaceColor(tile, nations = {}) {
+  if (tile?.ownerId && nations[tile.ownerId]?.color) return colorFromHex(nations[tile.ownerId].color);
+  return terrainColor(tile);
+}
+
+function mapWorldBounds(map) {
+  if (!map?.tiles?.length) {
+    return {
+      minX: -HEX_SIZE,
+      maxX: HEX_SIZE,
+      minZ: -HEX_SIZE,
+      maxZ: HEX_SIZE,
+      centerX: 0,
+      centerZ: 0,
+      width: HEX_SIZE * 2,
+      depth: HEX_SIZE * 2,
+      radius: HEX_SIZE,
+    };
+  }
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const tile of map.tiles) {
+    const { x, z } = axialToWorld(tile.q, tile.r, HEX_SIZE);
+    minX = Math.min(minX, x - HEX_SIZE);
+    maxX = Math.max(maxX, x + HEX_SIZE);
+    minZ = Math.min(minZ, z - HEX_SIZE);
+    maxZ = Math.max(maxZ, z + HEX_SIZE);
+  }
+
+  const width = maxX - minX;
+  const depth = maxZ - minZ;
+  return {
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    centerX: (minX + maxX) / 2,
+    centerZ: (minZ + maxZ) / 2,
+    width,
+    depth,
+    radius: Math.max(width, depth) * 0.5,
+  };
+}
+
+function createBackdropCloudCluster(THREE, scale = 1, tint = 0xeaf1f4) {
+  const group = new THREE.Group();
+  const puffs = [
+    { x: -0.7, y: 0, z: 0.05, sx: 1.3, sy: 0.5, sz: 0.9 },
+    { x: -0.15, y: 0.08, z: -0.22, sx: 1.4, sy: 0.62, sz: 1 },
+    { x: 0.55, y: 0.02, z: 0.18, sx: 1.2, sy: 0.52, sz: 0.88 },
+    { x: 0.05, y: 0.16, z: 0.02, sx: 1.05, sy: 0.58, sz: 0.82 },
+  ];
+  for (const puff of puffs) {
+    const mesh = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.72, 0),
+      new THREE.MeshStandardMaterial({
+        color: tint,
+        roughness: 1,
+        metalness: 0,
+        flatShading: true,
+      })
+    );
+    mesh.position.set(puff.x, puff.y, puff.z);
+    mesh.scale.set(puff.sx, puff.sy, puff.sz);
+    group.add(mesh);
+  }
+  group.scale.setScalar(scale);
+  return group;
+}
+
+function createBackdropMountain(THREE, scale = 1, rockTint = 0x79818a) {
+  const group = new THREE.Group();
+  const rock = new THREE.MeshStandardMaterial({
+    color: rockTint,
+    roughness: 0.96,
+    metalness: 0,
+    flatShading: true,
+  });
+  const snow = new THREE.MeshStandardMaterial({
+    color: 0xf4f7fa,
+    roughness: 0.92,
+    metalness: 0,
+    flatShading: true,
+  });
+
+  const mainPeak = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.8, 5), rock);
+  mainPeak.position.set(-0.1, 0.9, 0.02);
+  group.add(mainPeak);
+
+  const secondPeak = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.15, 5), rock.clone());
+  secondPeak.position.set(0.62, 0.62, -0.32);
+  secondPeak.rotation.z = -0.08;
+  group.add(secondPeak);
+
+  const snowCap = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.3, 5), snow);
+  snowCap.position.set(-0.1, 1.66, 0.02);
+  group.add(snowCap);
+
+  group.scale.setScalar(scale);
+  return group;
+}
+
+function createBackdropBird(THREE, color = 0x31424c, scale = 1) {
+  const group = new THREE.Group();
+  const material = new THREE.MeshBasicMaterial({ color });
+
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.18, 4), material);
+  body.rotation.z = -Math.PI / 2;
+  group.add(body);
+
+  const leftWing = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.018, 0.08), material);
+  leftWing.position.set(0.005, 0.02, 0.08);
+  leftWing.rotation.z = 0.34;
+  group.add(leftWing);
+
+  const rightWing = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.018, 0.08), material);
+  rightWing.position.set(0.005, 0.02, -0.08);
+  rightWing.rotation.z = -0.34;
+  group.add(rightWing);
+
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.014, 0.1), material);
+  tail.position.set(-0.1, 0, 0);
+  tail.rotation.y = Math.PI / 2;
+  group.add(tail);
+
+  group.userData.parts = { leftWing, rightWing };
+  group.scale.setScalar(scale);
+  return group;
+}
+
 function visualTierForTile(tile, nations) {
   const tech = nations[tile.ownerId]?.tech;
   if (!tech) return 0;
@@ -758,12 +891,14 @@ export class HexMapRenderer {
     this.camPolar = Math.PI / 3.1;
     this._updateCamera();
 
+    this.backdropGroup = new THREE.Group();
     this.tileGroup = new THREE.Group();
     this.territoryBorderGroup = new THREE.Group();
     this.transportGroup = new THREE.Group();
     this.highlightGroup = new THREE.Group();
     this.decorationGroup = new THREE.Group();
     this.effectGroup = new THREE.Group();
+    this.scene.add(this.backdropGroup);
     this.scene.add(this.tileGroup);
     this.scene.add(this.territoryBorderGroup);
     this.scene.add(this.transportGroup);
@@ -791,6 +926,7 @@ export class HexMapRenderer {
     this.camRadius = this.maxCamRadius;
     this._updateCamera();
     this._clearGroups();
+    this._renderBackdrop(map);
 
     const THREE = window.THREE;
     for (const tile of map.tiles) {
@@ -936,23 +1072,23 @@ export class HexMapRenderer {
       return;
     }
 
-    const base = new THREE.Color(terrainColor(tile));
-    if (tile.ownerId && this.nations[tile.ownerId]) {
-      base.lerp(new THREE.Color(this.nations[tile.ownerId].color), 0.42);
-    }
-    if (tile.effects?.floodedTurns > 0) base.lerp(new THREE.Color(0x3d9dcc), 0.5);
+    const ownerColor = tile.ownerId && this.nations[tile.ownerId]
+      ? new THREE.Color(this.nations[tile.ownerId].color)
+      : null;
+    const base = ownerColor ? ownerColor.clone() : new THREE.Color(tileSurfaceColor(tile, this.nations));
+    if (tile.effects?.floodedTurns > 0 && !ownerColor) base.lerp(new THREE.Color(0x3d9dcc), 0.5);
     mesh.material.color.copy(base);
     mesh.material.roughness = isWaterTile ? 0.45 : 0.86;
     mesh.material.metalness = isWaterTile ? 0.12 : 0.04;
     mesh.material.transparent = false;
     mesh.material.opacity = 1;
-    const emissive = new THREE.Color(terrainColor(tile)).multiplyScalar(isWaterTile ? 0.14 : 0.05);
+    const emissive = (ownerColor ? ownerColor.clone() : new THREE.Color(terrainColor(tile)))
+      .multiplyScalar(ownerColor ? (isWaterTile ? 0.12 : 0.055) : (isWaterTile ? 0.14 : 0.05));
     if (highlight === "move") emissive.add(new THREE.Color(0x39d9a3).multiplyScalar(0.42));
     if (highlight === "attack") emissive.add(new THREE.Color(0xff7142).multiplyScalar(0.5));
     if (highlight === "source") emissive.add(new THREE.Color(0xffdf7a).multiplyScalar(0.58));
     if (tile.id === this.selectedTileId) emissive.add(new THREE.Color(0xd8bd6a).multiplyScalar(0.38));
     if (tile.id === this.hoveredTileId) emissive.add(new THREE.Color(0xffffff).multiplyScalar(0.12));
-    if (tile.ownerId && this.nations[tile.ownerId]) emissive.add(new THREE.Color(this.nations[tile.ownerId].color).multiplyScalar(0.18));
     if (tile.isCapital) emissive.add(new THREE.Color(0xffd700).multiplyScalar(0.28));
     mesh.material.emissive.copy(emissive);
     mesh.material.needsUpdate = true;
@@ -996,54 +1132,8 @@ export class HexMapRenderer {
   }
 
   _renderTerritoryBorders() {
-    if (!this.map) return;
-    const signature = [
-      this._visibilitySignature(),
-      this.map.tiles
-        .filter((tile) => tile.ownerId && this._isTileVisible(tile.id))
-        .map((tile) => `${tile.id}:${tile.ownerId}`)
-        .sort()
-        .join("|"),
-    ].join("::");
-    if (signature === this.territoryBorderSignature) return;
-    this.territoryBorderSignature = signature;
-    this._clearObjectGroup(this.territoryBorderGroup);
-
-    const THREE = window.THREE;
-    const index = buildTileIndex(this.map.tiles);
-    for (const tile of this.map.tiles) {
-      if (!tile.ownerId || !this.nations[tile.ownerId] || !this._isTileVisible(tile.id)) continue;
-      const ownerColor = colorFromHex(this.nations[tile.ownerId].color);
-      const corners = hexCorners(tile);
-      for (const direction of HEX_DIRECTIONS) {
-        const neighbor = index.get(tileId(tile.q + direction.q, tile.r + direction.r));
-        if (neighbor?.ownerId === tile.ownerId) continue;
-        const [fromIndex, toIndex] = edgeCornersForDirection(direction);
-        const from = corners[fromIndex];
-        const to = corners[toIndex];
-        const dx = to.x - from.x;
-        const dz = to.z - from.z;
-        const length = Math.hypot(dx, dz);
-        const angle = Math.atan2(dz, dx);
-        const midX = (from.x + to.x) / 2;
-        const midZ = (from.z + to.z) / 2;
-        const glow = new THREE.Mesh(
-          new THREE.BoxGeometry(length + 0.06, 0.005, 0.11),
-          new THREE.MeshBasicMaterial({ color: ownerColor, transparent: true, opacity: 0.34, depthWrite: false })
-        );
-        glow.position.set(midX, HEX_HEIGHT + 0.012, midZ);
-        glow.rotation.y = -angle;
-        this.territoryBorderGroup.add(glow);
-
-        const line = new THREE.Mesh(
-          new THREE.BoxGeometry(length + 0.03, 0.006, 0.046),
-          new THREE.MeshBasicMaterial({ color: ownerColor, transparent: true, opacity: 0.94, depthWrite: false })
-        );
-        line.position.set(midX, HEX_HEIGHT + 0.016, midZ);
-        line.rotation.y = -angle;
-        this.territoryBorderGroup.add(line);
-      }
-    }
+    this.territoryBorderSignature = "disabled";
+    if (this.territoryBorderGroup?.children.length) this._clearObjectGroup(this.territoryBorderGroup);
   }
 
   _renderTransportOverlay() {
@@ -1448,18 +1538,6 @@ export class HexMapRenderer {
     group.position.set(x, isWaterLike(tile) ? 0.08 : HEX_HEIGHT + 0.02, z);
     const ownerColor = colorFromHex(this.nations[tile.ownerId]?.color || "#e2dcc8");
 
-    // Ownership ring — shown on every owned land tile so nation borders are unambiguous
-    if (tile.ownerId && this.nations[tile.ownerId]) {
-      const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(0.88, 0.035, 6, 6),
-        new THREE.MeshBasicMaterial({ color: ownerColor })
-      );
-      ring.rotation.x = Math.PI / 2;
-      ring.rotation.z = Math.PI / 6; // align with hex flat-top orientation
-      ring.position.set(0, 0.04, 0);
-      group.add(ring);
-    }
-
     if (tile.isCapital) {
       this._addCapitalMarker(group, tile, ownerColor);
     }
@@ -1487,7 +1565,7 @@ export class HexMapRenderer {
       return group.children.length ? group : null;
     }
 
-    // Empty owned tiles get the ownership ring plus any troops stationed there.
+    // Empty owned tiles still get props and troops, but the tile surface now carries ownership.
     if (tile.type === TILE_TYPES.EMPTY) {
       this._addLandNature(group, tile);
       if (tile.ownerId && this.nations[tile.ownerId]) {
@@ -2016,6 +2094,109 @@ export class HexMapRenderer {
     });
   }
 
+  _renderBackdrop(map) {
+    if (!this.backdropGroup) return;
+    this._clearObjectGroup(this.backdropGroup);
+    if (!map?.tiles?.length) return;
+
+    const THREE = window.THREE;
+    const bounds = mapWorldBounds(map);
+    const edgeOffset = map.radius * HEX_SIZE;
+    const rimRadius = bounds.radius + Math.max(8, map.radius * HEX_SIZE * 0.9);
+    const cloudRadius = rimRadius + Math.max(9, map.radius * HEX_SIZE * 0.65);
+    const floorRadius = cloudRadius + Math.max(16, map.radius * HEX_SIZE * 1.35);
+
+    const floor = new THREE.Mesh(
+      new THREE.CylinderGeometry(floorRadius, floorRadius, 0.48, 40),
+      new THREE.MeshStandardMaterial({
+        color: 0xe5edf1,
+        roughness: 1,
+        metalness: 0,
+        flatShading: true,
+      })
+    );
+    floor.position.set(bounds.centerX, -0.56, bounds.centerZ);
+    floor.scale.y = 0.24;
+    this.backdropGroup.add(floor);
+
+    const cloudCount = Math.max(18, Math.round(map.radius * 1.5));
+    for (let i = 0; i < cloudCount; i += 1) {
+      const angle = i / cloudCount * TAU;
+      const drift = hash2d(i * 7, map.seed || 1, 1901);
+      const radius = rimRadius + drift * (cloudRadius - rimRadius);
+      const cluster = createBackdropCloudCluster(
+        THREE,
+        1.35 + hash2d(i * 11, map.seed || 1, 1902) * 2.4,
+        i % 3 === 0 ? 0xf0f5f7 : i % 3 === 1 ? 0xe7eef2 : 0xdfe8ed
+      );
+      cluster.position.set(
+        bounds.centerX + Math.cos(angle) * radius,
+        -0.12 + hash2d(i * 13, map.seed || 1, 1903) * 0.18,
+        bounds.centerZ + Math.sin(angle) * radius
+      );
+      cluster.rotation.y = hash2d(i * 17, map.seed || 1, 1904) * TAU;
+      this.backdropGroup.add(cluster);
+      this._registerAnimation(this.backdropGroup, cluster, "cloud", {
+        phase: angle + drift * TAU,
+        duration: 20 + hash2d(i * 19, map.seed || 1, 1905) * 14,
+        amplitude: 0.5 + drift * 0.6,
+      });
+    }
+
+    const mountainCount = Math.max(8, Math.round(map.radius * 0.72));
+    for (let i = 0; i < mountainCount; i += 1) {
+      const angle = (i / mountainCount) * TAU + hash2d(i * 23, map.seed || 1, 1910) * 0.22;
+      const radius = rimRadius + (cloudRadius - rimRadius) * 0.46 + hash2d(i * 29, map.seed || 1, 1911) * 4.2;
+      const mountain = createBackdropMountain(
+        THREE,
+        1.35 + hash2d(i * 31, map.seed || 1, 1912) * 2.3,
+        i % 2 === 0 ? 0x7a828d : 0x6f7882
+      );
+      mountain.position.set(
+        bounds.centerX + Math.cos(angle) * radius,
+        -0.5,
+        bounds.centerZ + Math.sin(angle) * radius
+      );
+      mountain.rotation.y = angle + Math.PI / 2;
+      this.backdropGroup.add(mountain);
+    }
+
+    const birdLanes = [
+      {
+        from: new THREE.Vector3(bounds.minX - edgeOffset * 1.35, 1.7, bounds.maxZ + edgeOffset * 0.78),
+        to: new THREE.Vector3(bounds.maxX + edgeOffset * 1.05, 1.95, bounds.maxZ + edgeOffset * 0.38),
+      },
+      {
+        from: new THREE.Vector3(bounds.maxX + edgeOffset * 1.18, 1.55, bounds.centerZ - edgeOffset * 0.46),
+        to: new THREE.Vector3(bounds.maxX + edgeOffset * 1.18, 1.82, bounds.centerZ + edgeOffset * 0.64),
+      },
+      {
+        from: new THREE.Vector3(bounds.minX - edgeOffset * 1.24, 1.62, bounds.centerZ + edgeOffset * 0.18),
+        to: new THREE.Vector3(bounds.minX - edgeOffset * 1.06, 1.86, bounds.centerZ - edgeOffset * 0.82),
+      },
+    ];
+
+    birdLanes.forEach((lane, laneIndex) => {
+      const flockSize = 2 + (laneIndex % 2);
+      for (let i = 0; i < flockSize; i += 1) {
+        const bird = createBackdropBird(THREE, laneIndex === 0 ? 0x38505a : 0x2d3e47, 1 + i * 0.16);
+        bird.position.copy(lane.from);
+        bird.position.y += i * 0.08;
+        bird.position.x += i * 0.26;
+        bird.position.z += i * 0.18;
+        this.backdropGroup.add(bird);
+        this._registerAnimation(this.backdropGroup, bird, "birdFlight", {
+          from: lane.from.clone().add(new THREE.Vector3(i * 0.3, i * 0.06, i * 0.18)),
+          to: lane.to.clone().add(new THREE.Vector3(i * 0.1, i * 0.08, i * 0.12)),
+          duration: 15 + laneIndex * 3 + i * 1.4,
+          phase: hash2d(laneIndex * 41 + i, map.seed || 1, 1915) * TAU,
+          offset: i * 0.17,
+          amplitude: 0.8 + i * 0.18,
+        });
+      }
+    });
+  }
+
   _addLowPolyPerson(group, options = {}) {
     return decorations.addLowPolyPerson(this, group, options);
   }
@@ -2386,7 +2567,7 @@ export class HexMapRenderer {
       for (const visual of visuals) this._detachUnitVisual(visual);
     }
     for (const visual of this.transientUnitVisuals) this._detachUnitVisual(visual);
-    const groups = [this.tileGroup, this.territoryBorderGroup, this.transportGroup, this.highlightGroup, this.decorationGroup, this.effectGroup];
+    const groups = [this.backdropGroup, this.tileGroup, this.territoryBorderGroup, this.transportGroup, this.highlightGroup, this.decorationGroup, this.effectGroup];
     for (const group of groups) {
       while (group.children.length) {
         const child = group.children[group.children.length - 1];
@@ -2510,8 +2691,20 @@ export class HexMapRenderer {
         item.object.material.opacity = Math.max(0, 0.36 * (1 - t));
       }
       if (item.kind === "cloud") {
-        item.object.position.x = item.baseX + wave * 0.16;
-        item.object.material.opacity = 0.32 + soft * 0.18;
+        item.object.position.x = item.baseX + wave * 0.16 * item.amplitude;
+        if (item.object.material) item.object.material.opacity = 0.32 + soft * 0.18;
+      }
+      if (item.kind === "birdFlight") {
+        const t = (time / duration + item.offset + item.phase / TAU) % 1;
+        if (item.from && item.to) {
+          item.object.position.lerpVectors(item.from, item.to, t);
+          item.object.position.y += Math.sin(phaseTime * 1.8) * 0.08 * item.amplitude;
+          const dx = item.to.x - item.from.x;
+          const dz = item.to.z - item.from.z;
+          item.object.rotation.y = -Math.atan2(dz, dx);
+        }
+        if (item.parts.leftWing) item.parts.leftWing.rotation.z = 0.28 + Math.sin(phaseTime * 2.6) * 0.38;
+        if (item.parts.rightWing) item.parts.rightWing.rotation.z = -0.28 - Math.sin(phaseTime * 2.6) * 0.38;
       }
       if (item.kind === "telescope") item.object.rotation.y = item.baseRotY + wave * 0.5;
       if (item.kind === "turretScan") item.object.rotation.y = item.baseRotY + wave * 0.42 * item.amplitude;

@@ -123,6 +123,8 @@ class GameUI {
     this.militarySelection = null;
     this.tutorial = null;
     this.turnTimeoutInProgress = false;
+    this.lastTileActionSignature = "";
+    this.lastTileActionAt = 0;
     this.cacheDom();
     this.scheduleMapResize();
     this.bindEvents();
@@ -146,6 +148,7 @@ class GameUI {
   cacheDom() {
     this.app = document.getElementById("app");
     this.topPanel = document.getElementById("top-panel");
+    this.menuToggleBtn = document.getElementById("menu-toggle-btn");
     this.statusStrip = document.getElementById("status-strip");
     this.phaseLabel = document.getElementById("phase-label");
     this.actionCounter = document.getElementById("action-counter");
@@ -170,6 +173,7 @@ class GameUI {
   bindEvents() {
     this.renderer.onSelect = (tileId) => this.handleMapSelect(tileId);
     this.renderer.onHover = (tileId, event) => this.renderTooltip(tileId, event);
+    this.menuToggleBtn.addEventListener("click", () => this.toggleMenuCollapse());
     this.tileCloseBtn.addEventListener("click", () => {
       this.clearMilitarySelection();
       this.game.selectTile(null);
@@ -193,6 +197,17 @@ class GameUI {
     this.dialogBody.addEventListener("click", (event) => this.handleTechClick(event));
     this.dialogBody.addEventListener("click", (event) => this.handleDiplomacyClick(event));
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
+  }
+
+  toggleMenuCollapse() {
+    const isCollapsed = this.topPanel.classList.contains("collapsed");
+    if (isCollapsed) {
+      this.topPanel.classList.remove("collapsed");
+      this.menuToggleBtn.setAttribute("aria-expanded", "false");
+    } else {
+      this.topPanel.classList.add("collapsed");
+      this.menuToggleBtn.setAttribute("aria-expanded", "true");
+    }
   }
 
   scheduleMapResize() {
@@ -1094,6 +1109,10 @@ class GameUI {
   renderWorkerControls(tile, active) {
     const min = WORKER_MIN[tile.type] || 0;
     const need = Math.max(0, min - tile.workers);
+    const addButtons = [];
+    if (need > 1) addButtons.push(`<button type="button" class="secondary-btn" data-tile-action="workers" data-amount="1" ${this.actionDisabledAttribute("assignWorkers")}>Assign 1</button>`);
+    if (need > 0) addButtons.push(`<button type="button" class="secondary-btn" data-tile-action="workers" data-amount="${need}" ${this.actionDisabledAttribute("assignWorkers")}>Fill</button>`);
+    if (need <= 0) addButtons.push(`<span class="mini-pill">Fully staffed</span>`);
     return `
       <div class="stack">
         <strong>Workers</strong>
@@ -1105,10 +1124,9 @@ class GameUI {
         </div>
         ${this.actionPreview("assignWorkers", { ok: true }, `$${workerAdminCost(1)} per worker`)}
         <div class="row-actions">
-          <button class="secondary-btn" data-tile-action="workers" data-amount="1" ${this.actionDisabledAttribute("assignWorkers")}>Assign 1</button>
-          <button class="secondary-btn" data-tile-action="workers" data-amount="${need || 1}" ${this.actionDisabledAttribute("assignWorkers")}>Fill Minimum</button>
-          <button class="secondary-btn" data-tile-action="workers" data-amount="-1" ${this.actionDisabledAttribute("assignWorkers")}>Remove 1</button>
-          <button class="danger-btn" data-tile-action="destroy" ${this.actionDisabledAttribute("destroyTile")}>Destroy</button>
+          ${addButtons.join("")}
+          <button type="button" class="secondary-btn" data-tile-action="workers" data-amount="-1" ${this.actionDisabledAttribute("assignWorkers")}>Remove 1</button>
+          <button type="button" class="danger-btn" data-tile-action="destroy" ${this.actionDisabledAttribute("destroyTile")}>Destroy</button>
         </div>
       </div>
     `;
@@ -1164,12 +1182,20 @@ class GameUI {
   handleTileClick(event) {
     const button = event.target.closest("[data-tile-action]");
     if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
     const tileId = this.game.selectedTileId;
+    if (!tileId || button.disabled) return;
     const action = button.dataset.tileAction;
     if (action === "details") {
       this.openTileDetailDialog(tileId);
       return;
     }
+    const signature = [tileId, action, button.dataset.type || "", button.dataset.amount || "", button.dataset.target || ""].join("|");
+    const now = Date.now();
+    if (signature === this.lastTileActionSignature && now - this.lastTileActionAt < 250) return;
+    this.lastTileActionSignature = signature;
+    this.lastTileActionAt = now;
     if (this.isServerAuthoritative()) {
       // Multiplayer/server-authoritative logic: UI sends intent only. The
       // Colyseus room validates and mutates, then returns a fresh snapshot.
@@ -1278,7 +1304,7 @@ class GameUI {
       deltas.push(...this.buildingProductionDeltas(tile, context.buildingType));
     } else if (action === "workers") {
       if (result.cost) deltas.push({ resource: "money", delta: -result.cost });
-      deltas.push({ resource: "population", delta: -Math.abs(result.changed) });
+      deltas.push({ resource: "population", delta: -result.changed });
     } else if (action === "destroy") {
       deltas.push({ resource: "money", delta: -result.cost });
     } else if (action === "train") {
