@@ -3,6 +3,48 @@ const DEFAULT_LOCAL_COLYSEUS_ENDPOINT = "ws://localhost:2567";
 const PRODUCTION_COLYSEUS_ENDPOINT = "wss://league-of-nations-production.up.railway.app";
 export const CLOSED_GAME_MESSAGE = "This game has already started and is closed to new players.";
 
+export const MULTIPLAYER_ACTION_TYPES = Object.freeze({
+  ASSIGN_WORKERS: "ASSIGN_WORKERS",
+  BUILD_TILE: "BUILD_TILE",
+  DESTROY_TILE: "DESTROY_TILE",
+  TRAIN_UNIT: "TRAIN_UNIT",
+  MOVE_OR_ATTACK_UNIT: "MOVE_OR_ATTACK_UNIT",
+  DECLARE_WAR: "DECLARE_WAR",
+  TRADE: "TRADE",
+  PROPOSE_TRADE: "PROPOSE_TRADE",
+  ACCEPT_TRADE: "ACCEPT_TRADE",
+  REJECT_TRADE: "REJECT_TRADE",
+  ATTACK: "ATTACK",
+  PROPOSE_ALLIANCE: "PROPOSE_ALLIANCE",
+  BREAK_ALLIANCE: "BREAK_ALLIANCE",
+  EMBARGO: "EMBARGO",
+  RESEARCH: "RESEARCH",
+  RESEARCH_TECH: "RESEARCH_TECH",
+  RESEARCH_BRANCH: "RESEARCH_BRANCH",
+  END_TURN: "END_TURN",
+});
+
+const ACTION_ALIASES = Object.freeze({
+  assignWorkers: MULTIPLAYER_ACTION_TYPES.ASSIGN_WORKERS,
+  buildTile: MULTIPLAYER_ACTION_TYPES.BUILD_TILE,
+  destroyTile: MULTIPLAYER_ACTION_TYPES.DESTROY_TILE,
+  trainUnit: MULTIPLAYER_ACTION_TYPES.TRAIN_UNIT,
+  moveOrAttackUnit: MULTIPLAYER_ACTION_TYPES.MOVE_OR_ATTACK_UNIT,
+  declareWar: MULTIPLAYER_ACTION_TYPES.DECLARE_WAR,
+  trade: MULTIPLAYER_ACTION_TYPES.TRADE,
+  proposeTrade: MULTIPLAYER_ACTION_TYPES.PROPOSE_TRADE,
+  acceptTrade: MULTIPLAYER_ACTION_TYPES.ACCEPT_TRADE,
+  rejectTrade: MULTIPLAYER_ACTION_TYPES.REJECT_TRADE,
+  attack: MULTIPLAYER_ACTION_TYPES.ATTACK,
+  proposeAlliance: MULTIPLAYER_ACTION_TYPES.PROPOSE_ALLIANCE,
+  breakAlliance: MULTIPLAYER_ACTION_TYPES.BREAK_ALLIANCE,
+  embargo: MULTIPLAYER_ACTION_TYPES.EMBARGO,
+  research: MULTIPLAYER_ACTION_TYPES.RESEARCH,
+  researchTech: MULTIPLAYER_ACTION_TYPES.RESEARCH_TECH,
+  researchBranch: MULTIPLAYER_ACTION_TYPES.RESEARCH_BRANCH,
+  endTurn: MULTIPLAYER_ACTION_TYPES.END_TURN,
+});
+
 export class LeagueMultiplayerClient {
   constructor({ serverUrl = defaultServerUrl() } = {}) {
     this.serverUrl = serverUrl;
@@ -48,7 +90,54 @@ export class LeagueMultiplayerClient {
   }
 
   sendPlayerAction(payload) {
-    this.room?.send("playerAction", payload);
+    this.sendGameAction(payload?.type, payload);
+  }
+
+  send(type, payload = {}) {
+    const {
+      actionPoints,
+      maxActionPoints,
+      actionsRemaining,
+      actionsUsedThisTurn,
+      tech,
+      cost,
+      type: _type,
+      ...intent
+    } = payload || {};
+    this.room?.send(type, intent);
+  }
+
+  proposeTrade(payload = {}) {
+    this.send("proposeTrade", payload);
+  }
+
+  acceptTrade(payload = {}) {
+    this.send("acceptTrade", payload);
+  }
+
+  rejectTrade(payload = {}) {
+    this.send("rejectTrade", payload);
+  }
+
+  attack(payload = {}) {
+    this.send("attack", payload);
+  }
+
+  sendGameAction(type, payload = {}) {
+    const actionType = normalizeActionType(type);
+    const {
+      actionPoints,
+      maxActionPoints,
+      actionsRemaining,
+      actionsUsedThisTurn,
+      tech,
+      cost,
+      ...intent
+    } = payload || {};
+    this.room?.send("playerAction", {
+      ...intent,
+      type: actionType,
+    });
   }
 
   setRoom(room) {
@@ -63,6 +152,17 @@ export class LeagueMultiplayerClient {
 }
 
 export function bindRoomEvents(room, handlers = {}) {
+  let lastActionErrorSignature = "";
+  let lastActionErrorAt = 0;
+  const forwardActionError = (payload) => {
+    const signature = `${payload?.actionType || ""}:${payload?.message || ""}`;
+    const now = Date.now();
+    if (signature === lastActionErrorSignature && now - lastActionErrorAt < 100) return;
+    lastActionErrorSignature = signature;
+    lastActionErrorAt = now;
+    handleActionError(payload, handlers);
+  };
+
   room.onStateChange((state) => {
     const lobbyState = readLobbyState(room, state);
     handlers.onLobbyChange?.(lobbyState);
@@ -84,12 +184,47 @@ export function bindRoomEvents(room, handlers = {}) {
     handlers.onActionAccepted?.(payload);
   });
   room.onMessage("actionRejected", (payload) => {
-    handlers.onActionRejected?.(payload?.message || "That action was rejected by the server.");
+    forwardActionError(payload);
+  });
+  room.onMessage("actionError", (payload) => {
+    forwardActionError(payload);
   });
   room.onMessage("serverError", (payload) => {
     handlers.onError?.(payload?.message || "The multiplayer server reported an error.");
   });
   room.onLeave((code) => handlers.onLeave?.(code));
+}
+
+export function sendGameAction(room, type, payload = {}) {
+  const {
+    actionPoints,
+    maxActionPoints,
+    actionsRemaining,
+    actionsUsedThisTurn,
+    tech,
+    cost,
+    ...intent
+  } = payload || {};
+  room?.send("playerAction", { ...intent, type: normalizeActionType(type) });
+}
+
+export function handleGameStateUpdate(snapshot, handler) {
+  if (!snapshot?.gameState) return false;
+  handler?.(snapshot);
+  return true;
+}
+
+export function handleActionError(payload, handlers = {}) {
+  handlers.onActionRejected?.({
+    type: payload?.type || "ACTION_ERROR",
+    actionType: payload?.actionType || "",
+    message: payload?.message || "That action was rejected by the server.",
+  });
+}
+
+export function normalizeActionType(type) {
+  const raw = String(type || "").trim();
+  return ACTION_ALIASES[raw] || raw;
 }
 
 export function readLobbyState(room, state = room?.state) {

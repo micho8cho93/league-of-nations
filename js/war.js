@@ -83,6 +83,7 @@ export function syncMobilizationForWarStatus(game, nationId) {
 }
 
 export function updateWarReadinessForTurn(game, nationId) {
+  if (isServerAuthoritative(game)) return { activeWars: 0, exhaustionDelta: 0, mobilizationLevel: 0 };
   const nation = normalizeWarReadiness(game.nations[nationId]);
   if (!nation?.active) return { activeWars: 0, exhaustionDelta: 0, mobilizationLevel: 0 };
   const activeWarCount = activeWarsFor(game, nationId).length;
@@ -105,6 +106,7 @@ export function updateWarReadinessForTurn(game, nationId) {
 }
 
 export function applyBattleWarExhaustion(game, attackerId, defenderId, losses, attackerWins) {
+  if (isServerAuthoritative(game)) return;
   const attacker = normalizeWarReadiness(game.nations[attackerId]);
   const defender = normalizeWarReadiness(game.nations[defenderId]);
   const exhaustion = BALANCE.war.exhaustion;
@@ -136,6 +138,7 @@ export function combatEffectivenessMultiplier(nation) {
 }
 
 export function declareWar(game, attackerId, defenderId, reason = "Strategic conflict") {
+  if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   if (game.era < 3) return { ok: false, reason: "War unlocks in Era 3." };
   if (attackerId === defenderId) return { ok: false, reason: "A nation cannot declare war on itself." };
   const attacker = game.nations[attackerId];
@@ -171,6 +174,7 @@ export function declareWar(game, attackerId, defenderId, reason = "Strategic con
 }
 
 export function endWar(game, a, b) {
+  if (isServerAuthoritative(game)) return null;
   const war = game.wars[warRecordKey(a, b)];
   if (!war) return null;
   war.active = false;
@@ -190,7 +194,7 @@ export function activeWarsFor(game, nationId) {
 export function warUpkeep(game, nationId) {
   const wars = activeWarsFor(game, nationId).length;
   if (wars <= 0) return 0;
-  const nation = normalizeWarReadiness(game.nations[nationId]);
+  const nation = isServerAuthoritative(game) ? game.nations[nationId] : normalizeWarReadiness(game.nations[nationId]);
   const units = game.tiles
     .filter((tile) => tile.ownerId === nationId && tile.unit?.strength > 0)
     .reduce((sum, tile) => sum + tile.unit.strength, 0);
@@ -638,4 +642,15 @@ function isCoastalTile(game, tile) {
 
 function bordersNation(game, tile, nationId) {
   return axialNeighbors(tile.q, tile.r).some((coord) => game.tileAt(coord.q, coord.r)?.ownerId === nationId);
+}
+
+function isServerAuthoritative(game) {
+  return Boolean(game?.serverAuthoritative);
+}
+
+function serverAuthoritativeRejection() {
+  return {
+    ok: false,
+    reason: "Multiplayer state is server-authoritative. Send an action to the server instead of mutating local state.",
+  };
 }

@@ -54,3 +54,23 @@ Supported client-to-server messages:
 - `updateSettings`: host-only, lobby-only settings update.
 - `playerReady`: lobby-only readiness toggle/update.
 - `startGame`: host-only, locks the lobby and starts the room.
+- `playerAction`: playing-only authoritative gameplay intent. The server validates ownership, active turn, payload shape, tile ownership, resources, action points, and game-over lockout before mutating and broadcasting a snapshot.
+
+Supported `playerAction` action types include canonical uppercase names plus legacy camelCase aliases:
+
+- `ASSIGN_WORKERS`
+- `BUILD_TILE`
+- `DESTROY_TILE`
+- `TRAIN_UNIT`
+- `MOVE_OR_ATTACK_UNIT`
+- `DECLARE_WAR`
+- `TRADE`
+- `PROPOSE_ALLIANCE`
+- `BREAK_ALLIANCE`
+- `EMBARGO`
+- `RESEARCH`
+- `RESEARCH_TECH`
+- `RESEARCH_BRANCH`
+- `END_TURN`
+
+Unsupported actions return a structured action error instead of throwing. Online multiplayer has a minimal server-side round economy and victory system. Full offline bot AI and the richer offline round simulation remain local/offline behavior for now.

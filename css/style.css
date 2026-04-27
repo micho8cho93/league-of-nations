@@ -513,6 +513,21 @@ button:disabled {
   font-size: 12px;
 }
 
+.server-error-display {
+  position: absolute;
+  z-index: 11;
+  right: 14px;
+  bottom: 14px;
+  max-width: min(420px, calc(100% - 28px));
+  border: 1px solid #9a4d4d;
+  border-radius: 7px;
+  background: #371c20;
+  color: #ffd6d6;
+  padding: 10px 12px;
+  box-shadow: 0 12px 34px var(--shadow);
+  font-size: 13px;
+}
+
 .tile-popup {
   position: absolute;
   z-index: 9;
@@ -592,6 +607,28 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
+}
+
+.action-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.action-preview {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.action-preview.blocked {
+  color: var(--red);
+}
+
+.turn-log-group {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
 }
 
 .stack {

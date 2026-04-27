@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LeagueRoom } from "./LeagueRoom.js";
-import { SERVER_PLAYER_ACTION_TYPES } from "../game/actions.js";
+import { DEFAULT_VICTORY_CONFIG, SERVER_PLAYER_ACTION_TYPES, processServerRound } from "../game/actions.js";
+import { expireEvents, maybeTriggerEvent } from "../game/events.js";
 import { createInitialServerGame, serializeGameSnapshot } from "../game/initialGame.js";
 
 type SentMessage = { type: string; payload: any };
@@ -78,6 +79,10 @@ function latestRejection(client: ReturnType<typeof fakeClient>) {
   return client.sent.findLast((message) => message.type === "actionRejected")?.payload.message || "";
 }
 
+function latestRejectionPayload(client: ReturnType<typeof fakeClient>) {
+  return client.sent.findLast((message) => message.type === "actionRejected")?.payload || null;
+}
+
 function clearMessages(client: ReturnType<typeof fakeClient>) {
   client.sent.length = 0;
 }
@@ -87,7 +92,9 @@ function setResources(nation: any, values: Record<string, number>) {
 }
 
 function resetActions(gameState: any, nationId = "nation-1") {
-  gameState.nations[nationId].actionsRemaining = 10;
+  gameState.nations[nationId].actionPoints = 3;
+  gameState.nations[nationId].maxActionPoints = 3;
+  gameState.nations[nationId].actionsRemaining = 3;
   gameState.nations[nationId].actionsUsedThisTurn = 0;
 }
 
@@ -174,6 +181,26 @@ test("new server nations include default population happiness", () => {
 
   assert.equal(gameState.nations["nation-1"].population.happiness, 65);
   assert.equal(gameState.nations["nation-2"].population.happiness, 65);
+  assert.equal(gameState.nations["nation-1"].reputation, 0);
+  assert.deepEqual(gameState.tradeProposals, []);
+  assert.deepEqual(gameState.warLog, []);
+  assert.deepEqual(gameState.activeEvents, []);
+  assert.deepEqual(gameState.eventHistory, []);
+});
+
+test("new server nations start each turn with three action points", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [
+      { sessionId: "creator", playerName: "Creator", nationId: "nation-1", controllerType: "human", bot: false },
+      { sessionId: "second", playerName: "Second", nationId: "nation-2", controllerType: "human", bot: false },
+    ],
+  );
+
+  assert.equal(gameState.nations["nation-1"].actionPoints, 3);
+  assert.equal(gameState.nations["nation-1"].maxActionPoints, 3);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 3);
+  assert.equal(gameState.nations["nation-1"].actionsUsedThisTurn, 0);
 });
 
 test("server snapshots preserve population happiness", () => {
@@ -275,7 +302,8 @@ test("gameplay build action is accepted for the active player", async () => {
 
   assert.equal(gameState.map.tiles.find((tile: any) => tile.id === tileId).type, "farm");
   assert.equal(gameState.nations["nation-1"].money, startingMoney - 140);
-  assert.equal(gameState.nations["nation-1"].actionsRemaining, 9);
+  assert.equal(gameState.nations["nation-1"].actionPoints, 2);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 2);
   assert.equal(creator.sent.some((message) => message.type === "actionRejected"), false);
   assert.equal((room as any).broadcasts.some((message: any) => message.type === "gameSnapshot"), true);
 });
@@ -312,6 +340,44 @@ test("gameplay build action is rejected for the wrong player or wrong turn", asy
     second.sent.find((message) => message.type === "actionRejected")?.payload.message,
     /not your turn/,
   );
+});
+
+test("action points reject exhausted and spoofed client actions", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  const tile = workerTile(gameState, "nation-1", "farm");
+
+  for (const amount of [1, -1, 1]) {
+    clearMessages(creator);
+    await room.messages.playerAction(creator.client, {
+      type: "assignWorkers",
+      nationId: "nation-1",
+      tileId: tile.id,
+      amount,
+    });
+    assert.equal(latestRejection(creator), "");
+  }
+
+  assert.equal(nation.actionPoints, 0);
+  assert.equal(nation.actionsRemaining, 0);
+  const beforeWorkers = tile.workers;
+
+  await room.messages.playerAction(creator.client, {
+    type: "assignWorkers",
+    nationId: "nation-1",
+    tileId: tile.id,
+    amount: -1,
+    actionPoints: 99,
+    maxActionPoints: 99,
+    actionsRemaining: 99,
+  });
+
+  assert.equal(tile.workers, beforeWorkers);
+  assert.equal(nation.actionPoints, 0);
+  assert.match(latestRejection(creator), /action points/i);
 });
 
 test("fishery builds on adjacent water and land buildings fail there", async () => {
@@ -459,7 +525,7 @@ test("active player can assign workers for their own nation", async () => {
   assert.equal(nation.population.available, startingAvailable - 1);
   assert.equal(nation.workers.farmers, 3);
   assert.equal(nation.money, startingMoney - 5);
-  assert.equal(nation.actionsRemaining, 9);
+  assert.equal(nation.actionsRemaining, 2);
   assert.equal(creator.sent.some((message) => message.type === "actionRejected"), false);
   assert.equal((room as any).broadcasts.some((message: any) => message.type === "gameSnapshot"), true);
 });
@@ -512,6 +578,9 @@ test("end turn hands control to the next active human player", async () => {
   const second = join(room, "second", "Second");
   const gameState = startGame(room, creator);
   const startingTurn = gameState.turn;
+  gameState.nations["nation-2"].actionPoints = 0;
+  gameState.nations["nation-2"].actionsRemaining = 0;
+  gameState.nations["nation-2"].actionsUsedThisTurn = 3;
 
   await room.messages.playerAction(creator.client, {
     type: "endTurn",
@@ -520,6 +589,9 @@ test("end turn hands control to the next active human player", async () => {
 
   assert.equal(gameState.currentTurnIndex, 1);
   assert.equal(gameState.turn, startingTurn);
+  assert.equal(gameState.nations["nation-2"].actionPoints, 3);
+  assert.equal(gameState.nations["nation-2"].actionsRemaining, 3);
+  assert.equal(gameState.nations["nation-2"].actionsUsedThisTurn, 0);
   assert.equal(latestRejection(creator), "");
 
   await room.messages.playerAction(creator.client, {
@@ -723,7 +795,7 @@ test("destroyTile works online", async () => {
   assert.equal(tile.type, "empty");
   assert.equal(tile.workers, 0);
   assert.equal(nation.money, startingMoney - 70);
-  assert.equal(nation.actionsRemaining, 9);
+  assert.equal(nation.actionsRemaining, 2);
   assert.equal(latestRejection(creator), "");
 });
 
@@ -748,7 +820,7 @@ test("trainUnit works online", async () => {
 
   assert.equal(tile.unit?.nationId, "nation-1");
   assert.equal(tile.unit?.strength, 3);
-  assert.equal(nation.actionsRemaining, 9);
+  assert.equal(nation.actionsRemaining, 2);
   assert.equal(latestRejection(creator), "");
 });
 
@@ -777,7 +849,7 @@ test("moveOrAttackUnit movement works online", async () => {
   assert.equal(from.unit, null);
   assert.equal(to.ownerId, "nation-1");
   assert.equal(to.unit?.strength, 4);
-  assert.equal(gameState.nations["nation-1"].actionsRemaining, 9);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 2);
   assert.equal(latestRejection(creator), "");
 });
 
@@ -810,7 +882,7 @@ test("low happiness can make military refuse movement online without spending re
   assert.equal(from.unit?.strength, 4);
   assert.equal(to.ownerId, null);
   assert.equal(nation.money, 1000);
-  assert.equal(nation.actionsRemaining, 10);
+  assert.equal(nation.actionsRemaining, 3);
   assert.match(latestRejection(creator), /refused orders/);
 });
 
@@ -844,7 +916,7 @@ test("disabled happiness does not make military refuse movement online", async (
   assert.equal(from.unit, null);
   assert.equal(to.ownerId, "nation-1");
   assert.equal(to.unit?.strength, 4);
-  assert.equal(nation.actionsRemaining, 9);
+  assert.equal(nation.actionsRemaining, 2);
   assert.equal(latestRejection(creator), "");
 });
 
@@ -896,12 +968,13 @@ test("research and researchBranch work online", async () => {
   makeOwnedTile(gameState, "nation-1", "farm", 2);
 
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "farming",
   });
 
   assert.equal(nation.tech.farming, 1);
+  assert.equal(nation.actionPoints, 2);
   assert.equal(latestRejection(creator), "");
 
   gameState.era = 4;
@@ -917,7 +990,156 @@ test("research and researchBranch work online", async () => {
   });
 
   assert.equal(nation.tech.branches.tanks, 1);
+  assert.equal(nation.actionPoints, 2);
   assert.equal(latestRejection(creator), "");
+});
+
+test("researchTech rejects invalid category, max tier, missing money, resource, active tiles, and AP spoofing", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+  setResources(nation, { food: 100, materials: 300, education: 300, industry: 100 });
+  makeOwnedTile(gameState, "nation-1", "farm", 2);
+  makeOwnedTile(gameState, "nation-1", "farm", 2);
+
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "irrigation",
+  });
+  assert.match(latestRejection(creator), /Unknown technology/);
+
+  clearMessages(creator);
+  nation.tech.farming = 4;
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "farming",
+  });
+  assert.match(latestRejection(creator), /Maximum linear tier/);
+
+  clearMessages(creator);
+  nation.tech.farming = 0;
+  nation.money = 0;
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "farming",
+  });
+  assert.match(latestRejection(creator), /Requires \$260/);
+
+  clearMessages(creator);
+  nation.money = 5000;
+  nation.resources.food = 0;
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "farming",
+  });
+  assert.match(latestRejection(creator), /Requires \d+ food/);
+
+  clearMessages(creator);
+  nation.resources.food = 100;
+  for (const tile of gameState.map.tiles.filter((item: any) => item.ownerId === "nation-1" && item.type === "farm")) {
+    tile.workers = 0;
+  }
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "farming",
+  });
+  assert.match(latestRejection(creator), /active farming tiles/);
+
+  clearMessages(creator);
+  for (const tile of gameState.map.tiles.filter((item: any) => item.ownerId === "nation-1" && item.type === "farm")) {
+    tile.workers = 2;
+  }
+  nation.actionPoints = 0;
+  nation.actionsRemaining = 0;
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "farming",
+    tech: { farming: 4 },
+    cost: 0,
+    actionPoints: 99,
+  });
+  assert.equal(nation.tech.farming, 0);
+  assert.match(latestRejection(creator), /action points/i);
+});
+
+test("researchBranch rejects era, military tier, factory, resource, max level, and AP failures", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+  setResources(nation, { materials: 300, education: 300, industry: 100 });
+  nation.tech.military = 3;
+
+  await room.messages.playerAction(creator.client, {
+    type: "researchBranch",
+    nationId: "nation-1",
+    branch: "tanks",
+  });
+  assert.match(latestRejection(creator), /Era 4/);
+
+  gameState.era = 4;
+  nation.tech.military = 2;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "researchBranch",
+    nationId: "nation-1",
+    branch: "tanks",
+  });
+  assert.match(latestRejection(creator), /Military tier 3/);
+
+  nation.tech.military = 3;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "researchBranch",
+    nationId: "nation-1",
+    branch: "tanks",
+  });
+  assert.match(latestRejection(creator), /active factory/);
+
+  makeOwnedTile(gameState, "nation-1", "factory", 5);
+  nation.resources.materials = 0;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "researchBranch",
+    nationId: "nation-1",
+    branch: "tanks",
+  });
+  assert.match(latestRejection(creator), /materials/);
+
+  nation.resources.materials = 300;
+  nation.tech.branches.tanks = 3;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "researchBranch",
+    nationId: "nation-1",
+    branch: "tanks",
+  });
+  assert.match(latestRejection(creator), /fully specialized/);
+
+  nation.tech.branches.tanks = 0;
+  nation.actionPoints = 0;
+  nation.actionsRemaining = 0;
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "researchBranch",
+    nationId: "nation-1",
+    branch: "tanks",
+    cost: { money: 0, materials: 0, education: 0, industry: 0 },
+    actionPoints: 99,
+  });
+  assert.equal(nation.tech.branches.tanks, 0);
+  assert.match(latestRejection(creator), /action points/i);
 });
 
 test("infrastructure research uses starter requirements then tech-only era gates", async () => {
@@ -930,7 +1152,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   setResources(nation, { materials: 500, education: 300, food: 100, industry: 100 });
 
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -943,7 +1165,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   if (!nation.territory.includes(school.id)) nation.territory.push(school.id);
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -953,7 +1175,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   resetActions(gameState);
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -962,7 +1184,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   gameState.era = 2;
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -972,7 +1194,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   resetActions(gameState);
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -981,7 +1203,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   gameState.era = 3;
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -991,7 +1213,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   resetActions(gameState);
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -1000,7 +1222,7 @@ test("infrastructure research uses starter requirements then tech-only era gates
   gameState.era = 4;
   clearMessages(creator);
   await room.messages.playerAction(creator.client, {
-    type: "research",
+    type: "researchTech",
     nationId: "nation-1",
     category: "infrastructure",
   });
@@ -1051,6 +1273,170 @@ test("trade, alliance, and breakAlliance work online", async () => {
   assert.equal(latestRejection(creator), "");
 });
 
+test("trade proposal is created through the dedicated server message", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  gameState.nations["nation-1"].money = 1000;
+
+  await room.messages.proposeTrade(creator.client, {
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: 100 },
+    request: { food: 5 },
+  });
+
+  assert.equal(gameState.tradeProposals.length, 1);
+  assert.equal(gameState.tradeProposals[0].fromId, "nation-1");
+  assert.equal(gameState.tradeProposals[0].toId, "nation-2");
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 2);
+  assert.equal(latestRejection(creator), "");
+});
+
+test("accepted trade proposal transfers resources and removes proposal", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  const second = join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  gameState.nations["nation-1"].money = 1000;
+  setResources(gameState.nations["nation-2"], { food: 50 });
+
+  await room.messages.proposeTrade(creator.client, {
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: 100 },
+    request: { food: 5 },
+  });
+  const proposalId = gameState.tradeProposals[0].id;
+  gameState.currentTurnIndex = 1;
+  resetActions(gameState, "nation-2");
+
+  await room.messages.acceptTrade(second.client, {
+    nationId: "nation-2",
+    proposalId,
+  });
+
+  assert.equal(gameState.tradeProposals.length, 0);
+  assert.equal(gameState.nations["nation-1"].money, 900);
+  assert.equal(gameState.nations["nation-2"].money, 1090);
+  assert.equal(gameState.nations["nation-1"].resources.food, 63);
+  assert.equal(gameState.nations["nation-2"].resources.food, 45);
+  assert.equal(gameState.trades.length, 1);
+  assert.equal(gameState.nations["nation-2"].actionsRemaining, 2);
+  assert.equal(latestRejection(second), "");
+});
+
+test("invalid trade proposal is rejected without spending action points", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  gameState.nations["nation-1"].money = 10;
+
+  await room.messages.proposeTrade(creator.client, {
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: 100 },
+    request: {},
+  });
+
+  assert.equal(gameState.tradeProposals.length, 0);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 3);
+  assert.match(latestRejection(creator), /cannot afford/);
+});
+
+test("trade proposal can be rejected through the dedicated server message", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  const second = join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  gameState.nations["nation-1"].money = 1000;
+
+  await room.messages.proposeTrade(creator.client, {
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: 100 },
+    request: {},
+  });
+  const proposalId = gameState.tradeProposals[0].id;
+  gameState.currentTurnIndex = 1;
+
+  await room.messages.rejectTrade(second.client, {
+    nationId: "nation-2",
+    proposalId,
+  });
+
+  assert.equal(gameState.tradeProposals.length, 0);
+  assert.equal(latestRejection(second), "");
+});
+
+test("dedicated attack changes tile ownership, spends action points, and increases war exhaustion", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 3;
+  gameState.nations["nation-1"].money = 1000;
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 10, branch: "infantry", movedTurn: 0, branches: { infantry: 10 } },
+  });
+  prepareTile(to, { ownerId: "nation-2", type: "empty", workers: 0 });
+
+  await room.messages.playerAction(creator.client, {
+    type: "declareWar",
+    nationId: "nation-1",
+    targetId: "nation-2",
+  });
+  resetActions(gameState);
+  clearMessages(creator);
+
+  await room.messages.attack(creator.client, {
+    nationId: "nation-1",
+    fromTileId: from.id,
+    toTileId: to.id,
+  });
+
+  assert.equal(to.ownerId, "nation-1");
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 2);
+  assert.ok(gameState.nations["nation-1"].warExhaustion > 0);
+  assert.ok(gameState.warLog.length > 0);
+  assert.equal(latestRejection(creator), "");
+});
+
+test("dedicated attack rejects invalid targets without spending action points", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 5, branch: "infantry", movedTurn: 0, branches: { infantry: 5 } },
+  });
+  prepareTile(to, { ownerId: null, type: "empty" });
+
+  await room.messages.attack(creator.client, {
+    nationId: "nation-1",
+    fromTileId: from.id,
+    toTileId: to.id,
+  });
+
+  assert.equal(to.ownerId, null);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 3);
+  assert.match(latestRejection(creator), /not a valid attack/);
+});
+
 test("wrong player, wrong nation, and bot control are rejected", async () => {
   const room = await createRoom(3);
   const creator = join(room, "creator", "Creator");
@@ -1097,4 +1483,235 @@ test("valid gameplay actions no longer hit unsupported-action errors", async () 
   });
   assert.doesNotMatch(latestRejection(creator), /Unsupported multiplayer action/);
   assert.ok(gameState);
+});
+
+test("unsupported multiplayer action returns a structured action error", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  startGame(room, creator);
+
+  await room.messages.playerAction(creator.client, {
+    type: "notARealAction",
+    nationId: "nation-1",
+  });
+
+  const rejection = creator.sent.findLast((message) => message.type === "actionRejected");
+  assert.equal(rejection?.payload.type, "ACTION_ERROR");
+  assert.equal(rejection?.payload.actionType, "notARealAction");
+  assert.match(rejection?.payload.message, /Unsupported multiplayer action/);
+});
+
+test("economic victory is set when a nation reaches the configured gold threshold", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.nations["nation-1"].money = DEFAULT_VICTORY_CONFIG.economicGoldThreshold;
+  const tile = makeOwnedTile(gameState, "nation-1", "farm", 2);
+
+  await room.messages.playerAction(creator.client, {
+    type: "ASSIGN_WORKERS",
+    nationId: "nation-1",
+    tileId: tile.id,
+    amount: -1,
+  });
+
+  assert.equal(gameState.gameOver?.isGameOver, true);
+  assert.equal(gameState.gameOver?.winnerNationId, "nation-1");
+  assert.equal(gameState.gameOver?.victoryType, "economic");
+  assert.equal((room as any).state.status, "finished");
+});
+
+test("server event trigger stores active event and history", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+
+  const event = maybeTriggerEvent(gameState, { force: true, eventId: "resource_boom" });
+
+  assert.equal(event?.eventId, "resource_boom");
+  assert.equal(gameState.activeEvents.length, 1);
+  assert.equal(gameState.activeEvents[0].eventId, "resource_boom");
+  assert.equal(gameState.eventHistory.length, 1);
+  assert.ok(gameState.events.some((entry: any) => entry.type === "global_event"));
+});
+
+test("server events expire from active state after their duration", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  maybeTriggerEvent(gameState, { force: true, eventId: "resource_boom" });
+
+  gameState.turn = 2;
+  assert.equal(expireEvents(gameState), 0);
+  assert.equal(gameState.activeEvents.length, 1);
+
+  gameState.turn = 3;
+  assert.equal(expireEvents(gameState), 1);
+  assert.equal(gameState.activeEvents.length, 0);
+});
+
+test("active server event modifies resource output", () => {
+  const baseGame = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  const eventGame = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  const baseFood = baseGame.nations["nation-1"].resources.food;
+  const eventFood = eventGame.nations["nation-1"].resources.food;
+
+  processServerRound(baseGame);
+  maybeTriggerEvent(eventGame, { force: true, eventId: "resource_boom" });
+  processServerRound(eventGame);
+
+  const baseGain = baseGame.nations["nation-1"].resources.food - baseFood;
+  const eventGain = eventGame.nations["nation-1"].resources.food - eventFood;
+  assert.ok(eventGain > baseGain, `expected event food gain ${eventGain} to exceed base ${baseGain}`);
+});
+
+test("actions after game over are rejected", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.gameOver = {
+    isGameOver: true,
+    winnerNationId: "nation-1",
+    winnerId: "nation-1",
+    victoryType: "economic",
+    label: "Economic Victory",
+  };
+
+  await room.messages.playerAction(creator.client, {
+    type: "ASSIGN_WORKERS",
+    nationId: "nation-1",
+    tileId: workerTile(gameState, "nation-1", "farm").id,
+    amount: 1,
+  });
+
+  assert.match(latestRejection(creator), /already finished/);
+});
+
+test("spoofed payload is rejected with a structured ownership error", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const foreignTile = workerTile(gameState, "nation-2", "farm");
+
+  await room.messages.playerAction(creator.client, {
+    type: "assignWorkers",
+    nationId: "nation-2",
+    tileId: foreignTile.id,
+    amount: 1,
+    actionPoints: 99,
+    actionsRemaining: 99,
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.equal(rejection?.code, "OWNERSHIP_MISMATCH");
+  assert.match(rejection?.message, /do not control/);
+  assert.equal(foreignTile.workers, 2);
+});
+
+test("invalid nationId is rejected before action handlers mutate state", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  startGame(room, creator);
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-999",
+    tileId: "0:0",
+    buildingType: "farm",
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.equal(rejection?.code, "INVALID_NATION");
+  assert.match(rejection?.message, /Unknown nation/);
+});
+
+test("invalid tile attack is rejected without spending resources or action points", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const { from } = makeAdjacentPair(gameState);
+  prepareTile(from, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 8, branch: "infantry", movedTurn: 0, branches: { infantry: 8 } },
+  });
+  gameState.nations["nation-1"].money = 1000;
+
+  await room.messages.attack(creator.client, {
+    nationId: "nation-1",
+    fromTileId: from.id,
+    toTileId: "missing:tile",
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 3);
+  assert.equal(gameState.nations["nation-1"].money, 1000);
+  assert.match(rejection?.message, /Invalid movement|target/i);
+});
+
+test("negative resource trade is rejected", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  const startingMoney = gameState.nations["nation-1"].money;
+
+  await room.messages.playerAction(creator.client, {
+    type: "trade",
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: -50 },
+    request: {},
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.equal(rejection?.code, "INVALID_PAYLOAD");
+  assert.match(rejection?.message, /positive/);
+  assert.equal(gameState.trades.length, 0);
+  assert.equal(gameState.nations["nation-1"].money, startingMoney);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 3);
+});
+
+test("action points cannot go below zero", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tile = workerTile(gameState, "nation-1", "farm");
+  const nation = gameState.nations["nation-1"];
+  nation.actionPoints = 0;
+  nation.actionsRemaining = 0;
+  nation.actionsUsedThisTurn = 3;
+
+  await room.messages.playerAction(creator.client, {
+    type: "assignWorkers",
+    nationId: "nation-1",
+    tileId: tile.id,
+    amount: 1,
+    actionPoints: 99,
+    actionsRemaining: 99,
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.equal(rejection?.code, "INSUFFICIENT_ACTION_POINTS");
+  assert.match(rejection?.message, /action points/i);
+  assert.equal(nation.actionPoints, 0);
+  assert.equal(nation.actionsRemaining, 0);
+  assert.ok(nation.actionPoints >= 0);
 });

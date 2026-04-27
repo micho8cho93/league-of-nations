@@ -98,6 +98,7 @@ export const GLOBAL_EVENTS = [
 ];
 
 export function scheduleEraEvent(game, era) {
+  if (game.serverAuthoritative) return;
   if (!game.globalEvents[era]) {
     game.globalEvents[era] = {
       era,
@@ -109,6 +110,7 @@ export function scheduleEraEvent(game, era) {
 }
 
 export function maybeRunGlobalEvent(game, { force = false } = {}) {
+  if (game.serverAuthoritative) return null;
   const slot = game.globalEvents[game.era];
   if (!slot || slot.fired || (!force && game.turn < slot.scheduledTurn)) return null;
   const event = GLOBAL_EVENTS[randInt(game.rng, 0, GLOBAL_EVENTS.length - 1)];
@@ -124,9 +126,22 @@ export function maybeRunGlobalEvent(game, { force = false } = {}) {
 }
 
 export function tickTileEffects(game) {
+  if (game.serverAuthoritative) return;
   for (const tile of game.tiles) {
     if (tile.effects.disabledTurns > 0) tile.effects.disabledTurns -= 1;
     if (tile.effects.floodedTurns > 0) tile.effects.floodedTurns -= 1;
     if (tile.effects.bountifulTurns > 0) tile.effects.bountifulTurns -= 1;
   }
+}
+
+export function activeEventSummaries(game) {
+  return (game.activeEvents || []).map((event) => {
+    const remaining = Math.max(0, Number(event.expiresTurn ?? game.turn) - Number(game.turn || 1) + 1);
+    return {
+      id: event.id || event.eventId,
+      name: event.name || event.label || event.eventId || "Event",
+      effect: event.effect || event.description || "Event effect active.",
+      duration: remaining,
+    };
+  });
 }

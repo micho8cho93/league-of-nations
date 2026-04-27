@@ -188,12 +188,15 @@ function bindActiveRoom(room) {
     onActionAccepted: (payload) => {
       ui?.handleAcceptedPlayerAction(payload);
     },
-    onActionRejected: (message) => {
-      ui?.showNotice("Action rejected", message);
+    onActionRejected: (error) => {
+      const message = error?.message || String(error || "That action was rejected by the server.");
+      if (ui?.showServerError) ui.showServerError(message);
+      else ui?.showNotice("Action rejected", message);
       showMultiplayerError(message);
     },
     onError: (message) => {
       showMultiplayerError(message);
+      if (ui?.showServerError) ui.showServerError(message);
       lobbyStatus.textContent = message;
     },
     onLeave: () => {
@@ -371,6 +374,7 @@ function createGameFromServerSnapshot(snapshot) {
     .filter((nation) => nation.controllerType === "bot" || nation.bot)
     .map((nation) => nation.id);
   localGameData.preserveNationColors = true;
+  localGameData.serverAuthoritative = true;
 
   for (const nation of Object.values(localGameData.nations)) {
     nation.isPlayer = nation.id === playerId;

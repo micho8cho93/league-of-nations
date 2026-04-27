@@ -165,9 +165,13 @@ export class GameState {
     this.wars = data.wars || {};
     this.sieges = data.sieges || {};
     this.trades = data.trades || [];
+    this.tradeProposals = data.tradeProposals || [];
     this.tradeRoutes = data.tradeRoutes || [];
     this.alliances = data.alliances || [];
+    this.warLog = data.warLog || [];
     this.events = data.events || [];
+    this.activeEvents = data.activeEvents || [];
+    this.eventHistory = data.eventHistory || [];
     this.eraReports = data.eraReports || [];
     this.pendingEraReport = data.pendingEraReport || null;
     this.globalEvents = data.globalEvents || {};
@@ -175,6 +179,7 @@ export class GameState {
     this.selectedTileId = data.selectedTileId || null;
     this.lastSummary = data.lastSummary || null;
     this.isProcessingTurn = Boolean(data.isProcessingTurn);
+    this.serverAuthoritative = Boolean(data.serverAuthoritative);
     this.listeners = new Set();
     this.rng = mulberry32((this.settings.seed || 1) + this.turn * 7919 + this.events.length * 131);
     this.eraStartSnapshot = data.eraStartSnapshot || this.createSnapshot();
@@ -298,7 +303,9 @@ export class GameState {
 
   normalizeActionStates() {
     for (const nation of Object.values(this.nations)) {
-      nation.actionsRemaining = normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN);
+      nation.maxActionPoints = normalizeMaxActionPoints(nation.maxActionPoints);
+      nation.actionPoints = normalizeActionCount(nation.actionPoints ?? nation.actionsRemaining, nation.maxActionPoints, nation.maxActionPoints);
+      nation.actionsRemaining = nation.actionPoints;
       nation.actionsUsedThisTurn = normalizeActionCount(nation.actionsUsedThisTurn, 0);
     }
   }
@@ -316,46 +323,73 @@ export class GameState {
     const nation = this.nations[nationId];
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
     const cost = Math.max(1, Math.floor(Number(amount) || 1));
-    nation.actionsRemaining = normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN);
+    if (this.serverAuthoritative) {
+      const maxActionPoints = normalizeMaxActionPoints(nation.maxActionPoints);
+      const actionPoints = normalizeActionCount(nation.actionPoints ?? nation.actionsRemaining, maxActionPoints, maxActionPoints);
+      if (actionPoints < cost) return { ok: false, reason: "Not enough action points remaining this turn." };
+      return { ok: true, cost, actionsRemaining: actionPoints, actionPoints };
+    }
+    nation.maxActionPoints = normalizeMaxActionPoints(nation.maxActionPoints);
+    nation.actionPoints = normalizeActionCount(nation.actionPoints ?? nation.actionsRemaining, nation.maxActionPoints, nation.maxActionPoints);
+    nation.actionsRemaining = nation.actionPoints;
     nation.actionsUsedThisTurn = normalizeActionCount(nation.actionsUsedThisTurn, 0);
-    if (nation.actionsRemaining < cost) return { ok: false, reason: "No actions remaining this turn." };
-    return { ok: true, cost, actionsRemaining: nation.actionsRemaining };
+    if (nation.actionPoints < cost) return { ok: false, reason: "Not enough action points remaining this turn." };
+    return { ok: true, cost, actionsRemaining: nation.actionPoints, actionPoints: nation.actionPoints };
+  }
+
+  rejectServerAuthoritativeMutation() {
+    return {
+      ok: false,
+      reason: "Multiplayer state is server-authoritative. Send an action to the server instead of mutating local state.",
+    };
+  }
+
+  canMutateLocally() {
+    return !this.serverAuthoritative;
   }
 
   spendAction(reason = "action", nationId = this.playerId, { amount = 1, free = false } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     if (free) return { ok: true, free: true, reason };
     const check = this.canSpendAction(nationId, amount);
     if (!check.ok) return check;
     const nation = this.nations[nationId];
-    nation.actionsRemaining -= check.cost;
+    nation.actionPoints -= check.cost;
+    nation.actionsRemaining = nation.actionPoints;
     nation.actionsUsedThisTurn += check.cost;
     this.emit({
       type: "action_spent",
       nationId,
       reason,
       actionsRemaining: nation.actionsRemaining,
+      actionPoints: nation.actionPoints,
       actionsUsedThisTurn: nation.actionsUsedThisTurn,
     });
     return {
       ok: true,
       reason,
       actionsRemaining: nation.actionsRemaining,
+      actionPoints: nation.actionPoints,
       actionsUsedThisTurn: nation.actionsUsedThisTurn,
     };
   }
 
   resetTurnActions(nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const nation = this.nations[nationId];
     if (!nation) return { ok: false, reason: "Nation unavailable." };
-    nation.actionsRemaining = MAX_ACTIONS_PER_TURN;
+    nation.maxActionPoints = normalizeMaxActionPoints(nation.maxActionPoints);
+    nation.actionPoints = nation.maxActionPoints;
+    nation.actionsRemaining = nation.actionPoints;
     nation.actionsUsedThisTurn = 0;
     this.emit({
       type: "actions_reset",
       nationId,
       actionsRemaining: nation.actionsRemaining,
+      actionPoints: nation.actionPoints,
       actionsUsedThisTurn: nation.actionsUsedThisTurn,
     });
-    return { ok: true, actionsRemaining: nation.actionsRemaining, actionsUsedThisTurn: nation.actionsUsedThisTurn };
+    return { ok: true, actionsRemaining: nation.actionsRemaining, actionPoints: nation.actionPoints, actionsUsedThisTurn: nation.actionsUsedThisTurn };
   }
 
   claimableTiles(nationId) {
@@ -403,6 +437,7 @@ export class GameState {
   }
 
   buildTile(tileIdValue, type, nationId = this.playerId, { silent = false } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const check = this.canBuild(tileIdValue, type, nationId);
     if (!check.ok) return check;
     const action = this.spendAction("build", nationId);
@@ -422,6 +457,7 @@ export class GameState {
   }
 
   destroyTile(tileIdValue, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const tile = this.tileById(tileIdValue);
     const nation = this.nations[nationId];
     if (!tile || tile.ownerId !== nationId) return { ok: false, reason: "You only control your own tiles." };
@@ -455,6 +491,7 @@ export class GameState {
   }
 
   assignWorkers(tileIdValue, amount, nationId = this.playerId, { silent = false } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const tile = this.tileById(tileIdValue);
     const nation = this.nations[nationId];
     if (!tile || tile.ownerId !== nationId) return { ok: false, reason: "Workers can only be assigned to owned tiles." };
@@ -491,6 +528,7 @@ export class GameState {
   }
 
   trainUnit(tileIdValue, strength, nationId = this.playerId, { silent = false, branch = "infantry" } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const tile = this.tileById(tileIdValue);
     const nation = this.nations[nationId];
     const amount = Math.max(1, Math.floor(Number(strength) || 1));
@@ -532,6 +570,7 @@ export class GameState {
   }
 
   moveOrAttackUnit(fromTileId, toTileId, nationId = this.playerId, { silent = false, path = null } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     this.cleanupSieges();
     const from = this.tileById(fromTileId);
     const to = this.tileById(toTileId);
@@ -867,6 +906,7 @@ export class GameState {
   }
 
   declareWar(targetId, nationId = this.playerId, reason = "Player declaration") {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const action = this.canSpendAction(nationId);
     if (!action.ok) return action;
     const result = declareWarHelper(this, nationId, targetId, reason);
@@ -879,6 +919,7 @@ export class GameState {
   }
 
   trade(partnerId, offer, request, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const action = this.canSpendAction(nationId);
     if (!action.ok) return action;
     const result = applyTrade(this, nationId, partnerId, offer, request);
@@ -896,6 +937,7 @@ export class GameState {
   }
 
   proposeAlliance(partnerId, allianceType = "trade", nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const action = this.canSpendAction(nationId);
     if (!action.ok) return action;
     const result = proposeAlliance(this, nationId, partnerId, allianceType);
@@ -910,6 +952,7 @@ export class GameState {
   }
 
   breakAlliance(allianceId, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const action = this.canSpendAction(nationId);
     if (!action.ok) return action;
     const result = breakAlliance(this, allianceId, nationId);
@@ -922,6 +965,7 @@ export class GameState {
   }
 
   embargo(targetId, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const action = this.canSpendAction(nationId);
     if (!action.ok) return action;
     const result = embargoNation(this, nationId, targetId);
@@ -934,6 +978,7 @@ export class GameState {
   }
 
   research(category, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const nation = this.nations[nationId];
     const check = canResearch(this, nation, category);
     if (!check.ok) return check;
@@ -949,6 +994,7 @@ export class GameState {
   }
 
   researchBranch(branch, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const nation = this.nations[nationId];
     const check = canResearchBranch(this, nation, branch);
     if (!check.ok) return check;
@@ -986,6 +1032,7 @@ export class GameState {
   }
 
   async endTurn({ onBotTurn = null } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     if (this.isProcessingTurn || this.gameOver) return;
     this.isProcessingTurn = true;
     this.phase = "ai";
@@ -1018,6 +1065,7 @@ export class GameState {
   }
 
   async missTurn(nationId = this.playerId, reason = "Turn timer expired.") {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const nation = this.nations[nationId];
     if (!nation?.active || this.isProcessingTurn || this.gameOver) return { ok: false, reason: "Turn cannot be skipped now." };
     this.addEvent(`${nation.name} missed their turn. ${reason}`, { nationId, type: "system" });
@@ -1031,6 +1079,7 @@ export class GameState {
   }
 
   processRound() {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const summary = {
       turn: this.turn,
       money: 0,
@@ -1329,6 +1378,7 @@ export class GameState {
   }
 
   submitEraReflection(text) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     if (!this.pendingEraReport) return { ok: false, reason: "No era report is pending." };
     const reflection = String(text || "").trim();
     if (reflection.length < 8) return { ok: false, reason: "Write a short reflection before continuing." };
@@ -1539,9 +1589,15 @@ function populationHappinessDelta(game, nation, context = {}) {
   return clamp(delta, -15, 8);
 }
 
-function normalizeActionCount(value, fallback) {
-  const numeric = Number.isFinite(value) ? Math.floor(value) : fallback;
-  return Math.max(0, Math.min(MAX_ACTIONS_PER_TURN, numeric));
+function normalizeActionCount(value, fallback, max = Math.max(MAX_ACTIONS_PER_TURN, fallback)) {
+  const numeric = Number.isFinite(Number(value)) ? Math.floor(Number(value)) : fallback;
+  return Math.max(0, Math.min(max, numeric));
+}
+
+function normalizeMaxActionPoints(value) {
+  const numeric = Math.floor(Number(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) return MAX_ACTIONS_PER_TURN;
+  return Math.max(1, numeric);
 }
 
 function diffSnapshots(before, after) {

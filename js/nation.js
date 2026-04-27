@@ -61,6 +61,8 @@ export function createNation({
     profile,
     personality,
     active: true,
+    actionPoints: MAX_ACTIONS_PER_TURN,
+    maxActionPoints: MAX_ACTIONS_PER_TURN,
     actionsRemaining: MAX_ACTIONS_PER_TURN,
     actionsUsedThisTurn: 0,
     capitalTileId: null,
@@ -251,18 +253,28 @@ export function serializeNation(nation) {
 
 export function restoreNation(data) {
   const nation = JSON.parse(JSON.stringify(data));
+  const maxActionPoints = normalizeMaxActionPoints(nation.maxActionPoints);
+  const actionPoints = normalizeActionCount(nation.actionPoints ?? nation.actionsRemaining, maxActionPoints, maxActionPoints);
   return {
     ...nation,
-    actionsRemaining: normalizeActionCount(nation.actionsRemaining, MAX_ACTIONS_PER_TURN),
+    actionPoints,
+    maxActionPoints,
+    actionsRemaining: actionPoints,
     actionsUsedThisTurn: normalizeActionCount(nation.actionsUsedThisTurn, 0),
     warExhaustion: normalizeWarExhaustion(nation.warExhaustion),
     mobilizationLevel: normalizeMobilizationLevel(nation.mobilizationLevel),
   };
 }
 
-function normalizeActionCount(value, fallback) {
-  const numeric = Number.isFinite(value) ? Math.floor(value) : fallback;
-  return Math.max(0, Math.min(MAX_ACTIONS_PER_TURN, numeric));
+function normalizeActionCount(value, fallback, max = Math.max(MAX_ACTIONS_PER_TURN, fallback)) {
+  const numeric = Number.isFinite(Number(value)) ? Math.floor(Number(value)) : fallback;
+  return Math.max(0, Math.min(max, numeric));
+}
+
+function normalizeMaxActionPoints(value) {
+  const numeric = Math.floor(Number(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) return MAX_ACTIONS_PER_TURN;
+  return Math.max(1, numeric);
 }
 
 function normalizeWarExhaustion(value) {

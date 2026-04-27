@@ -22,6 +22,7 @@ export function createDiplomacyRecord(a, b) {
 
 export function getDiplomacy(game, a, b) {
   const key = pairKey(a, b);
+  if (isServerAuthoritative(game) && !game.diplomacy[key]) return createDiplomacyRecord(a, b);
   if (!game.diplomacy[key]) game.diplomacy[key] = createDiplomacyRecord(a, b);
   normalizeDiplomacyRecord(game.diplomacy[key], a, b);
   return game.diplomacy[key];
@@ -73,6 +74,7 @@ export function evaluateTrade(game, fromId, toId, offer, request) {
 }
 
 export function applyTrade(game, fromId, toId, offer, request) {
+  if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   const result = evaluateTrade(game, fromId, toId, offer, request);
   const record = getDiplomacy(game, fromId, toId);
   if (!result.ok) return result;
@@ -104,6 +106,7 @@ export function applyTrade(game, fromId, toId, offer, request) {
 }
 
 export function proposeAlliance(game, fromId, toId, type = "trade") {
+  if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   const gate = canUseDiplomacy(game, fromId, toId);
   if (!gate.ok) return gate;
   const config = ALLIANCE_TYPES[type] || ALLIANCE_TYPES.trade;
@@ -143,6 +146,7 @@ export function proposeAlliance(game, fromId, toId, type = "trade") {
 }
 
 export function breakAlliance(game, allianceId, breakerId) {
+  if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   const alliance = game.alliances.find((item) => item.id === allianceId && item.active);
   if (!alliance) return { ok: false, reason: "Alliance not found." };
   alliance.active = false;
@@ -173,6 +177,7 @@ export function expireAlliances(game) {
 }
 
 export function embargoNation(game, fromId, targetId) {
+  if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   const gate = canUseDiplomacy(game, fromId, targetId);
   if (!gate.ok) return gate;
   if (fromId === targetId) return { ok: false, reason: "A nation cannot embargo itself." };
@@ -202,6 +207,7 @@ export function embargoNation(game, fromId, targetId) {
 }
 
 export function processTradeRoutes(game, summary = null) {
+  if (isServerAuthoritative(game)) return { processed: [], foodProduced: {} };
   if (!Array.isArray(game.tradeRoutes)) game.tradeRoutes = [];
   cleanupExpiredEmbargoes(game);
   const routeFoodProduced = {};
@@ -263,6 +269,7 @@ export function projectTradeRouteYield(game, nationId) {
 }
 
 export function disruptTradeRoutes(game, a, b, reason = "war") {
+  if (isServerAuthoritative(game)) return [];
   if (!Array.isArray(game.tradeRoutes)) return [];
   return game.tradeRoutes
     .filter((route) => route.status !== "removed" && route.members?.includes(a) && route.members?.includes(b))
@@ -270,6 +277,7 @@ export function disruptTradeRoutes(game, a, b, reason = "war") {
 }
 
 export function removeTradeRoutesForNation(game, nationId, reason = "inactive nation") {
+  if (isServerAuthoritative(game)) return [];
   if (!Array.isArray(game.tradeRoutes)) return [];
   return game.tradeRoutes
     .filter((route) => route.status !== "removed" && route.members?.includes(nationId))
@@ -588,4 +596,15 @@ function cleanupExpiredEmbargoes(game) {
 
 function isPairAtWar(game, a, b) {
   return Boolean(game.wars?.[pairKey(a, b)]?.active);
+}
+
+function isServerAuthoritative(game) {
+  return Boolean(game?.serverAuthoritative);
+}
+
+function serverAuthoritativeRejection() {
+  return {
+    ok: false,
+    reason: "Multiplayer state is server-authoritative. Send an action to the server instead of mutating local state.",
+  };
 }

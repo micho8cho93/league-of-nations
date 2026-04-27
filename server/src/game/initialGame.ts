@@ -13,11 +13,15 @@ export interface InitialGameSettings {
   unlimitedMode: boolean;
   happinessEnabled?: boolean;
   seed: number;
+  victory?: {
+    economicGoldThreshold?: number;
+  };
 }
 
 export interface SeatPlayer {
   sessionId: string;
-  name: string;
+  name?: string;
+  playerName?: string;
   host: boolean;
   connected: boolean;
   nationId: string;
@@ -35,11 +39,14 @@ interface Nation {
   bot: boolean;
   isBot: boolean;
   active: boolean;
+  actionPoints: number;
+  maxActionPoints: number;
   actionsRemaining: number;
   actionsUsedThisTurn: number;
   capitalTileId: string | null;
   territory: string[];
   warExhaustion: number;
+  reputation: number;
   mobilizationLevel: number;
   population: {
     total: number;
@@ -111,15 +118,19 @@ export interface ServerGameState {
   wars: Record<string, unknown>;
   sieges: Record<string, unknown>;
   trades: unknown[];
+  tradeProposals: unknown[];
   tradeRoutes: unknown[];
   alliances: unknown[];
+  warLog: unknown[];
   events: Array<Record<string, unknown>>;
+  activeEvents: Array<Record<string, unknown>>;
+  eventHistory: Array<Record<string, unknown>>;
   eraReports: unknown[];
   pendingEraReport: null;
   globalEvents: Record<string, unknown>;
-  gameOver: null;
+  gameOver: null | Record<string, unknown>;
   selectedTileId: null;
-  lastSummary: null;
+  lastSummary: null | Record<string, unknown>;
   startedAt: number;
   turnStartedAt: number;
   isProcessingTurn: boolean;
@@ -137,7 +148,7 @@ export interface SeatAssignment {
   host: boolean;
 }
 
-const MAX_ACTIONS_PER_TURN = 10;
+export const DEFAULT_ACTION_POINTS_PER_TURN = 3;
 
 const MAP_SIZES = {
   Small: { radius: 7 },
@@ -294,8 +305,10 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     wars: {},
     sieges: {},
     trades: [],
+    tradeProposals: [],
     tradeRoutes: [],
     alliances: [],
+    warLog: [],
     events: [
       {
         id: `event-${startedAt}-server-start`,
@@ -320,6 +333,8 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
         timestamp: startedAt + index + 1,
       })),
     ],
+    activeEvents: [],
+    eventHistory: [],
     eraReports: [],
     pendingEraReport: null,
     globalEvents: {},
@@ -386,9 +401,13 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
     wars: game.wars,
     sieges: game.sieges,
     trades: game.trades,
+    tradeProposals: game.tradeProposals || [],
     tradeRoutes: game.tradeRoutes,
     alliances: game.alliances,
+    warLog: game.warLog || [],
     events: game.events,
+    activeEvents: game.activeEvents || [],
+    eventHistory: game.eventHistory || [],
     eraReports: game.eraReports,
     pendingEraReport: game.pendingEraReport,
     globalEvents: game.globalEvents,
@@ -405,7 +424,7 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
 function createSeatAssignments(nationCount: number, players: SeatPlayer[], rng = Math.random): SeatAssignment[] {
   const assignments: SeatAssignment[] = [];
   const playersByNation = new Map(players.map((player) => [player.nationId, player]));
-  const humanNames = new Set(players.map((player) => player.name).filter(Boolean));
+  const humanNames = new Set(players.map((player) => player.name || player.playerName).filter(Boolean));
   const botNamePool = shuffle(NATION_NAMES.filter((name) => !humanNames.has(name)), rng);
   let fallbackNationIndex = 1;
 
@@ -425,7 +444,7 @@ function createSeatAssignments(nationCount: number, players: SeatPlayer[], rng =
       assignments.push({
         nationId,
         sessionId: player.sessionId,
-        playerName: player.name,
+        playerName: player.name || player.playerName || `Player ${index + 1}`,
         controllerType: "human",
         bot: false,
         isBot: false,
@@ -482,11 +501,14 @@ function createNation({
     bot,
     isBot: bot,
     active: true,
-    actionsRemaining: MAX_ACTIONS_PER_TURN,
+    actionPoints: DEFAULT_ACTION_POINTS_PER_TURN,
+    maxActionPoints: DEFAULT_ACTION_POINTS_PER_TURN,
+    actionsRemaining: DEFAULT_ACTION_POINTS_PER_TURN,
     actionsUsedThisTurn: 0,
     capitalTileId: null,
     territory: [],
     warExhaustion: 0,
+    reputation: 0,
     mobilizationLevel: 0,
     population: {
       total: population,

@@ -1,6 +1,25 @@
 import { TILE_TYPES } from "./utils.js";
 
 export const BALANCE = {
+  actions: {
+    defaultActionPoints: 3,
+    costs: {
+      assignWorkers: 1,
+      buildTile: 1,
+      destroyTile: 1,
+      trainUnit: 1,
+      moveOrAttackUnit: 1,
+      declareWar: 1,
+      trade: 1,
+      proposeAlliance: 1,
+      breakAlliance: 1,
+      embargo: 1,
+      researchTech: 1,
+      researchBranch: 1,
+      endTurn: 0,
+    },
+  },
+
   startingProfiles: {
     small: {
       label: "Small Nation",

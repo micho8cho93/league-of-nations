@@ -1,13 +1,27 @@
 import { Room, type Client } from "colyseus";
 import { MapSchema, Schema, type } from "@colyseus/schema";
 import { createInitialGameState } from "../game/createInitialGameState.js";
-import { applyServerPlayerAction } from "../game/actions.js";
+import {
+  SERVER_GAME_ACTION_TYPES,
+  ACTION_COSTS,
+  applyServerPlayerAction,
+  canAffordAction,
+  checkServerVictory,
+  handleAcceptTrade,
+  handleAttack,
+  handleProposeTrade,
+  handleRejectTrade,
+  normalizeServerActionType,
+  processServerRound,
+  resetActionPointsForTurn,
+} from "../game/actions.js";
 import {
   serializeGameSnapshot,
   type InitialGameSettings,
   type SeatPlayer,
   type ServerGameState,
 } from "../game/initialGame.js";
+import { maybeTriggerEvent } from "../game/events.js";
 
 type RoomStatus = "lobby" | "playing" | "finished";
 
@@ -68,7 +82,17 @@ interface PlayerActionPayload {
   allianceType?: unknown;
   offer?: unknown;
   request?: unknown;
+  proposalId?: unknown;
+  id?: unknown;
+  actionPoints?: unknown;
+  maxActionPoints?: unknown;
+  actionsRemaining?: unknown;
+  actionsUsedThisTurn?: unknown;
+  tech?: unknown;
+  cost?: unknown;
 }
+
+type ActionEnvelopeResult = { ok: true; nationId: string } | { ok: false; reason: string; code?: string; message?: string };
 
 class LobbyPlayer extends Schema {
   @type("string") sessionId = "";
@@ -163,9 +187,34 @@ export class LeagueRoom extends Room {
     playerAction: async (client: Client, payload: PlayerActionPayload = {}) => {
       await this.handlePlayerAction(client, payload);
     },
+
+    proposeTrade: async (client: Client, payload: PlayerActionPayload = {}) => {
+      await this.handleDirectGameAction(client, SERVER_GAME_ACTION_TYPES.PROPOSE_TRADE, payload);
+    },
+
+    acceptTrade: async (client: Client, payload: PlayerActionPayload = {}) => {
+      await this.handleDirectGameAction(client, SERVER_GAME_ACTION_TYPES.ACCEPT_TRADE, payload);
+    },
+
+    rejectTrade: async (client: Client, payload: PlayerActionPayload = {}) => {
+      await this.handleDirectGameAction(client, SERVER_GAME_ACTION_TYPES.REJECT_TRADE, payload);
+    },
+
+    attack: async (client: Client, payload: PlayerActionPayload = {}) => {
+      await this.handleDirectGameAction(client, SERVER_GAME_ACTION_TYPES.ATTACK, payload);
+    },
   };
 
   async onCreate(options: SettingsPayload = {}) {
+    this.onMessage("updateSettings", this.messages.updateSettings);
+    this.onMessage("playerReady", this.messages.playerReady);
+    this.onMessage("startGame", this.messages.startGame);
+    this.onMessage("playerAction", this.messages.playerAction);
+    this.onMessage("proposeTrade", this.messages.proposeTrade);
+    this.onMessage("acceptTrade", this.messages.acceptTrade);
+    this.onMessage("rejectTrade", this.messages.rejectTrade);
+    this.onMessage("attack", this.messages.attack);
+
     this.roomId = await this.generateRoomCode();
     this.state.roomCode = this.roomId;
     this.applySettings(options);
@@ -194,7 +243,7 @@ export class LeagueRoom extends Room {
     const isFirstPlayer = this.state.players.size === 0;
     const player = new LobbyPlayer();
     player.sessionId = client.sessionId;
-    player.name = this.randomAvailableNationName();
+    player.name = sanitizePlayerName(options.playerName) || this.randomAvailableNationName();
     player.nationId = assignedNationId;
     player.host = isFirstPlayer;
     player.ready = isFirstPlayer;
@@ -318,14 +367,19 @@ export class LeagueRoom extends Room {
     }
 
     const gameSnapshot = serializeGameSnapshot(this.gameState);
+    const activeNationId = this.activeTurnNationId();
     return {
       snapshotVersion: 1,
       roomCode: this.state.roomCode,
       roomId: this.roomId,
       status: this.state.status,
+      gameStatus: this.gameState.gameOver ? "gameOver" : this.state.status,
+      phase: this.gameState.gameOver ? "gameOver" : this.gameState.phase,
       hostSessionId: this.state.hostSessionId,
       settings: this.snapshotSettings(),
       players: this.snapshotPlayers(),
+      currentNationId: activeNationId,
+      currentPlayerId: this.gameState.nations[activeNationId]?.sessionId || null,
       ...gameSnapshot,
     };
   }
@@ -353,81 +407,132 @@ export class LeagueRoom extends Room {
 
     const validation = this.validateActionEnvelope(client, payload);
     if (!validation.ok) {
-      client.send("actionRejected", { message: validation.reason });
+      this.sendActionError(client, String(payload?.type || ""), validation.message || validation.reason, validation.code);
       return;
     }
 
     const { nationId } = validation;
-    const type = String(payload.type);
+    const type = normalizeServerActionType(payload.type);
+    const intentPayload = sanitizeActionIntentPayload(payload);
     let result: { ok?: boolean; reason?: string; [key: string]: unknown } = { ok: false, reason: "Unknown action." };
 
     try {
-      // The Railway-safe server snapshot supports lobby startup and active-player
-      // handoff without importing the browser rules engine.
-      if (type === "endTurn") {
+      if (type === SERVER_GAME_ACTION_TYPES.END_TURN) {
         result = await this.acceptEndTurn(nationId);
       } else {
-        result = this.applyPlayerAction(type, nationId, payload);
+        result = this.applyPlayerAction(type, nationId, intentPayload);
       }
     } catch (error) {
-      result = { ok: false, reason: error instanceof Error ? error.message : "The server could not apply that action." };
+      result = this.reject("SERVER_ERROR", error instanceof Error ? error.message : "The server could not apply that action.");
     }
 
     if (!result?.ok) {
-      client.send("actionRejected", { message: result?.reason || "That action is not legal right now." });
+      this.sendActionError(client, type, String(result?.message || result?.reason || "That action is not legal right now."), String(result?.code || ""));
       return;
     }
 
     this.broadcast("actionAccepted", {
       type,
       nationId,
-      payload,
+      payload: intentPayload,
       result,
     });
     this.finishIfGameOver();
     this.broadcastGameSnapshot();
   }
 
-  private validateActionEnvelope(client: Client, payload: PlayerActionPayload): { ok: true; nationId: string } | { ok: false; reason: string } {
+  private async handleDirectGameAction(client: Client, type: string, payload: PlayerActionPayload) {
+    if (this.expireActiveTurnIfNeeded()) {
+      this.finishIfGameOver();
+      this.broadcastGameSnapshot();
+    }
+
+    const validation = this.validateDirectActionEnvelope(client, payload, type);
+    if (!validation.ok) {
+      this.sendActionError(client, type, validation.message || validation.reason, validation.code);
+      return;
+    }
+
+    const intentPayload = sanitizeActionIntentPayload(payload);
+    const player = this.gameState?.nations[validation.nationId] || null;
+    let result: { ok?: boolean; reason?: string; [key: string]: unknown };
+
+    try {
+      if (!this.gameState) result = this.reject("GAME_UNAVAILABLE", "Game state is unavailable.");
+      else if (type === SERVER_GAME_ACTION_TYPES.PROPOSE_TRADE) result = handleProposeTrade(this.gameState, player, intentPayload);
+      else if (type === SERVER_GAME_ACTION_TYPES.ACCEPT_TRADE) result = handleAcceptTrade(this.gameState, player, intentPayload);
+      else if (type === SERVER_GAME_ACTION_TYPES.REJECT_TRADE) result = handleRejectTrade(this.gameState, player, intentPayload);
+      else if (type === SERVER_GAME_ACTION_TYPES.ATTACK) result = handleAttack(this.gameState, player, intentPayload);
+      else result = this.reject("UNSUPPORTED_ACTION", `Unsupported multiplayer action: ${type}.`);
+    } catch (error) {
+      result = this.reject("SERVER_ERROR", error instanceof Error ? error.message : "The server could not apply that action.");
+    }
+
+    if (!result?.ok) {
+      this.sendActionError(client, type, String(result?.message || result?.reason || "That action is not legal right now."), String(result?.code || ""));
+      return;
+    }
+
+    this.broadcast("actionAccepted", {
+      type,
+      nationId: validation.nationId,
+      payload: intentPayload,
+      result,
+    });
+    this.finishIfGameOver();
+    this.broadcastGameSnapshot();
+  }
+
+  private validateActionEnvelope(client: Client, payload: PlayerActionPayload): ActionEnvelopeResult {
+    if (this.gameState?.gameOver) {
+      return this.reject("GAME_FINISHED", "The game is already finished.");
+    }
+
     if (this.state.status !== "playing" || !this.gameState) {
-      return { ok: false, reason: "The game is not currently playing." };
+      return this.reject("GAME_NOT_PLAYING", "The game is not currently playing.");
     }
 
     if (this.resolvingTurn || this.gameState.isProcessingTurn || this.gameState.phase !== "player") {
-      return { ok: false, reason: "The server is resolving the turn." };
+      return this.reject("TURN_RESOLVING", "The server is resolving the turn.");
     }
 
-    if (this.gameState.gameOver) {
-      return { ok: false, reason: "The game is already finished." };
+    const type = normalizeServerActionType(payload?.type);
+    if (!type) return this.reject("INVALID_PAYLOAD", "Action type is required.");
+    if (ACTION_COSTS[type] === undefined) {
+      return this.reject("UNSUPPORTED_ACTION", `Unsupported multiplayer action: ${String(payload?.type || "")}.`);
     }
-
-    const type = String(payload?.type || "");
-    if (!type) return { ok: false, reason: "Action type is required." };
 
     if (!this.state.players.has(client.sessionId)) {
-      return { ok: false, reason: "You are not a player in this match." };
+      return this.reject("NOT_A_PLAYER", "You are not a player in this match.");
     }
 
     const nationId = String(payload.nationId || "");
     const nation = nationId ? this.gameState.nations[nationId] : null;
-    if (!nation) return { ok: false, reason: "Unknown nation." };
-    if (nation.sessionId !== client.sessionId) return { ok: false, reason: "You do not control that nation." };
-    if (nation.bot || nation.controllerType === "bot") return { ok: false, reason: "Bot nations are controlled by the server." };
-    if (!nation.active) return { ok: false, reason: "That nation is no longer active." };
+    if (!nation) return this.reject("INVALID_NATION", "Unknown nation.");
+    if (nation.sessionId !== client.sessionId) return this.reject("OWNERSHIP_MISMATCH", "You do not control that nation.");
+    if (nation.bot || nation.controllerType === "bot") return this.reject("OWNERSHIP_MISMATCH", "Bot nations are controlled by the server.");
+    if (!nation.active) return this.reject("INACTIVE_NATION", "That nation is no longer active.");
     if (this.activeTurnNationId() !== nationId) {
-      return { ok: false, reason: "It is not your turn." };
+      return this.reject("INVALID_TURN", "It is not your turn.");
     }
+
+    const actionCheck = canAffordAction(type, this.gameState, nationId);
+    if (!actionCheck.ok) return this.reject(actionCode(actionCheck.reason), actionCheck.reason);
 
     return { ok: true, nationId };
   }
 
+  private validateDirectActionEnvelope(client: Client, payload: PlayerActionPayload, type: string): ActionEnvelopeResult {
+    return this.validateActionEnvelope(client, { ...payload, type });
+  }
+
   private applyPlayerAction(type: string, nationId: string, payload: PlayerActionPayload) {
-    if (!this.gameState) return { ok: false, reason: "Game state is unavailable." };
+    if (!this.gameState) return this.reject("GAME_UNAVAILABLE", "Game state is unavailable.");
     return applyServerPlayerAction(this.gameState, type, nationId, payload);
   }
 
   private async acceptEndTurn(nationId: string) {
-    if (!this.gameState) return { ok: false, reason: "Game state is unavailable." };
+    if (!this.gameState) return this.reject("GAME_UNAVAILABLE", "Game state is unavailable.");
 
     this.resolvingTurn = true;
     this.gameState.isProcessingTurn = true;
@@ -478,6 +583,14 @@ export class LeagueRoom extends Room {
     const previousIndex = Math.max(0, Math.min(seats.length - 1, this.gameState.currentTurnIndex || 0));
     const nextIndex = this.nextPlayableSeatIndex(previousIndex);
     const wrapped = nextIndex <= previousIndex;
+
+    if (wrapped) {
+      maybeTriggerEvent(this.gameState);
+      processServerRound(this.gameState);
+      this.finishIfGameOver();
+      if (this.gameState.gameOver) return;
+    }
+
     this.gameState.currentTurnIndex = nextIndex;
     this.gameState.turnStartedAt = Date.now();
 
@@ -490,9 +603,10 @@ export class LeagueRoom extends Room {
     for (const nationId of new Set([endingNationId, nextNationId])) {
       const nation = this.gameState.nations[nationId];
       if (!nation?.active) continue;
-      nation.actionsRemaining = 10;
-      nation.actionsUsedThisTurn = 0;
+      resetActionPointsForTurn(this.gameState, nationId);
     }
+
+    checkServerVictory(this.gameState);
   }
 
   private addRuntimeEvent(message: string, { nationId = null, type = "info", tileId = null }: { nationId?: string | null; type?: string; tileId?: string | null } = {}) {
@@ -532,12 +646,29 @@ export class LeagueRoom extends Room {
   }
 
   private finishIfGameOver() {
-    if (!this.gameState?.gameOver || this.state.status === "finished") return;
+    if (!this.gameState) return;
+    checkServerVictory(this.gameState);
+    if (!this.gameState.gameOver || this.state.status === "finished") return;
     this.state.status = "finished";
     this.setMetadata({
       roomCode: this.state.roomCode,
       status: this.state.status,
     });
+  }
+
+  private sendActionError(client: Client, actionType: string, message: string, code = "") {
+    const payload = {
+      type: "ACTION_ERROR",
+      code: code || actionCode(message),
+      actionType: normalizeServerActionType(actionType),
+      message,
+    };
+    client.send("actionRejected", payload);
+    client.send("actionError", payload);
+  }
+
+  private reject(code: string, message: string) {
+    return { ok: false as const, code, message, reason: message };
   }
 
   private orderedSeatPlayers(): SeatPlayer[] {
@@ -633,6 +764,10 @@ function sanitizeNationId(value: unknown) {
   return /^nation-\d+$/.test(nationId) ? nationId : "";
 }
 
+function sanitizePlayerName(value: unknown) {
+  return String(value ?? "").trim().slice(0, 40);
+}
+
 function nationIndex(nationId: string) {
   const match = /^nation-(\d+)$/.exec(nationId);
   return match ? Number(match[1]) : 0;
@@ -652,6 +787,28 @@ function clampInteger(value: unknown, min: number, max: number, fallback: number
   const numeric = Math.floor(Number(value));
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(min, Math.min(max, numeric));
+}
+
+function sanitizeActionIntentPayload(payload: PlayerActionPayload): PlayerActionPayload {
+  const {
+    actionPoints: _actionPoints,
+    maxActionPoints: _maxActionPoints,
+    actionsRemaining: _actionsRemaining,
+    actionsUsedThisTurn: _actionsUsedThisTurn,
+    tech: _tech,
+    cost: _cost,
+    ...intent
+  } = payload as PlayerActionPayload & Record<string, unknown>;
+  return intent;
+}
+
+function actionCode(message: string) {
+  if (/action points/i.test(message)) return "INSUFFICIENT_ACTION_POINTS";
+  if (/not your turn/i.test(message)) return "INVALID_TURN";
+  if (/control|owned|participant/i.test(message)) return "OWNERSHIP_MISMATCH";
+  if (/requires|afford|money|food|materials|education|industry|population|resource/i.test(message)) return "INSUFFICIENT_RESOURCES";
+  if (/unknown|invalid|required|not found|positive|number|unsupported/i.test(message)) return "INVALID_PAYLOAD";
+  return "ACTION_REJECTED";
 }
 
 function randomSeed() {
