@@ -552,7 +552,7 @@ class GameUI {
 	    const remaining = Math.max(0, Number(player.actionPoints ?? player.actionsRemaining) || 0);
 	    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
     const nextAction = this.militarySelection
-      ? `Choose a highlighted tile to move or attack from ${this.militarySelection.sourceTileId}.`
+      ? "Choose a highlighted tile to move or attack from the selected position."
       : this.game.selectedTileId
         ? "Use tile controls, choose a military target, or inspect another tile."
         : "Select a tile or end the turn when ready.";
@@ -871,7 +871,6 @@ class GameUI {
     this.selectionPanel.innerHTML = `
       <div class="row-head">
         <strong>${escapeHtml(TILE_LABELS[tile.type] || tile.type)}${tile.isCapital ? " Capital" : ""}</strong>
-        <span class="mini-pill">${escapeHtml(tile.q)}, ${escapeHtml(tile.r)}</span>
       </div>
       <div class="metric-grid">
         ${metric("Owner", owner ? owner.name : "Unowned")}
@@ -1070,7 +1069,6 @@ class GameUI {
     this.tilePopupContent.innerHTML = `
       <h2>${escapeHtml(TILE_LABELS[tile.type] || tile.type)} ${tile.isCapital ? "Capital" : ""}</h2>
       <div class="tile-meta">
-        ${metric("Coords", `${tile.q}, ${tile.r}`)}
         ${metric("Owner", owner ? owner.name : "Unowned")}
         ${metric("Region", tile.regionId || "Sea")}
         ${metric("Biome", biomeLabel(tile))}
@@ -1173,7 +1171,7 @@ class GameUI {
       return;
     }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId]?.name : "Unowned";
-    this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(biomeLabel(tile))} · ${escapeHtml(owner)} · ${tile.q}, ${tile.r}`;
+    this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(biomeLabel(tile))} · ${escapeHtml(owner)}`;
     this.tooltip.style.left = `${event.clientX + 14}px`;
     this.tooltip.style.top = `${event.clientY + 14}px`;
     this.tooltip.hidden = false;
