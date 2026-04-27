@@ -1,5 +1,64 @@
 import { TILE_TYPES } from "./utils.js";
 
+export const GAME_MODES = Object.freeze({
+  LITE: "lite",
+  ADVANCED: "advanced",
+});
+
+export const SPECIAL_RESOURCES = Object.freeze({
+  grassland: "fruit",
+  jungle: "hardwood",
+  arctic: "iron",
+  desert: "oil",
+});
+
+export const RESOURCE_METADATA = Object.freeze({
+  fruit: {
+    label: "Fruit",
+    purpose: "Population growth",
+    terrain: "grassland",
+  },
+  hardwood: {
+    label: "Hardwood",
+    purpose: "Buildings",
+    terrain: "jungle",
+  },
+  iron: {
+    label: "Iron",
+    purpose: "Factories",
+    terrain: "arctic",
+  },
+  oil: {
+    label: "Oil",
+    purpose: "Advanced units",
+    terrain: "desert",
+  },
+});
+
+export const RESOURCE_BASE_YIELD_PER_TILE = 1;
+export const FRUIT_CONSUMPTION_PER_POPULATION = 0.08;
+export const FRUIT_SURPLUS_GROWTH_RATE = 0.18;
+export const FRUIT_DEFICIT_STABILITY_PENALTY = 3;
+
+export const BUILDING_HARDWOOD_COSTS = Object.freeze({
+  [TILE_TYPES.FARM]: 1,
+  [TILE_TYPES.FISHERY]: 1,
+  [TILE_TYPES.MINE]: 1,
+  [TILE_TYPES.MOUNTAIN_MINE]: 2,
+  [TILE_TYPES.SCHOOL]: 2,
+  [TILE_TYPES.UNIVERSITY]: 3,
+  [TILE_TYPES.MILITARY]: 2,
+});
+
+export const FACTORY_IRON_COST = 3;
+export const FACTORY_HARDWOOD_COST = 2;
+
+export const ADVANCED_UNIT_OIL_COSTS = Object.freeze({
+  tanks: 2,
+  air: 3,
+  naval: 2,
+});
+
 export const BALANCE = {
   actions: {
     defaultActionPoints: 5,

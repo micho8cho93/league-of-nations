@@ -21,7 +21,7 @@ function fakeClient(sessionId: string) {
   };
 }
 
-async function createRoom(nationCount = 3) {
+async function createRoom(nationCount = 3, overrides: Record<string, unknown> = {}) {
   const room = new LeagueRoom();
   (room as any).presence = {
     smembers: async () => [],
@@ -34,12 +34,14 @@ async function createRoom(nationCount = 3) {
   };
   (room as any).lock = () => {};
   await room.onCreate({
+    mode: "lite",
     mapSize: "Small",
     nationCount,
     maxTurns: 30,
     turnTimerMinutes: 0,
     unlimitedMode: false,
     seed: 12345,
+    ...overrides,
   });
   return room;
 }
@@ -126,6 +128,31 @@ function prepareTile(tile: any, values: Record<string, unknown>) {
     effects: { disabledTurns: 0, floodedTurns: 0, bountifulTurns: 0 },
     ...values,
   });
+}
+
+function biomeComponentSizes(gameState: any, biome: string) {
+  const tiles = gameState.map.tiles.filter((tile: any) => tile.terrain === "land" && tile.biome === biome);
+  const index = new Map(tiles.map((tile: any) => [tile.id, tile]));
+  const seen = new Set<string>();
+  const sizes: number[] = [];
+  for (const tile of tiles) {
+    if (seen.has(tile.id)) continue;
+    const queue = [tile];
+    seen.add(tile.id);
+    let size = 0;
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current) continue;
+      size += 1;
+      for (const neighbor of neighborsOf(gameState, current)) {
+        if (neighbor.terrain !== "land" || neighbor.biome !== biome || seen.has(neighbor.id) || !index.has(neighbor.id)) continue;
+        seen.add(neighbor.id);
+        queue.push(neighbor);
+      }
+    }
+    sizes.push(size);
+  }
+  return sizes.sort((a, b) => b - a);
 }
 
 function makeOwnedTile(gameState: any, nationId: string, type: string, workers = 0) {
@@ -290,6 +317,52 @@ test("room settings preserve map options, fog, and happiness toggle", async () =
   assert.equal(snapshot.gameState.settings.fogOfWarEnabled, true);
 });
 
+test("default mode is lite", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  assert.equal(gameState.settings.mode, "lite");
+});
+
+test("advanced settings preserve mode and landscape diversity", async () => {
+  const room = await createRoom(2, { mode: "advanced", landscapeDiversity: "superHigh" });
+  const creator = join(room, "creator", "Creator");
+  assert.equal(room.state.settings.mode, "advanced");
+  assert.equal(room.state.settings.landscapeDiversity, "superHigh");
+
+  const gameState = startGame(room, creator);
+  assert.equal(gameState.settings.mode, "advanced");
+  assert.equal(gameState.settings.landscapeDiversity, "superHigh");
+});
+
+test("advanced round collection adds fruit hardwood iron oil and fruit can grow population", () => {
+  const game = createInitialServerGame(
+    { mode: "advanced", mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 54321 },
+    [],
+  );
+  const nation = game.nations["nation-1"];
+  nation.resources.fruit = 0;
+  nation.resources.hardwood = 0;
+  nation.resources.iron = 0;
+  nation.resources.oil = 0;
+  nation.population.total = 20;
+  nation.population.available = 8;
+  const owned = game.map.tiles.filter((tile: any) => tile.ownerId === "nation-1").slice(0, 4);
+  owned[0].terrain = "land"; owned[0].biome = "grassland";
+  owned[1].terrain = "land"; owned[1].biome = "jungle";
+  owned[2].terrain = "land"; owned[2].biome = "arctic";
+  owned[3].terrain = "land"; owned[3].biome = "desert";
+
+  const beforePopulation = nation.population.total;
+  processServerRound(game);
+
+  assert.ok(nation.resources.hardwood >= 1);
+  assert.ok(nation.resources.iron >= 1);
+  assert.ok(nation.resources.oil >= 1);
+  assert.ok(nation.population.total >= beforePopulation);
+});
+
 test("gameplay build action is accepted for the active player", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
@@ -311,6 +384,54 @@ test("gameplay build action is accepted for the active player", async () => {
   assert.equal(gameState.nations["nation-1"].actionsRemaining, 4);
   assert.equal(creator.sent.some((message) => message.type === "actionRejected"), false);
   assert.equal((room as any).broadcasts.some((message: any) => message.type === "gameSnapshot"), true);
+});
+
+test("lite mode build flow does not require hardwood", async () => {
+  const room = await createRoom(2, { mode: "lite" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tileId = buildableTileId(gameState, "nation-1");
+  gameState.nations["nation-1"].resources.hardwood = 0;
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId,
+    buildingType: "farm",
+  });
+
+  assert.equal(gameState.map.tiles.find((tile: any) => tile.id === tileId).type, "farm");
+  assert.equal(latestRejection(creator), "");
+});
+
+test("advanced mode build flow requires hardwood", async () => {
+  const room = await createRoom(2, { mode: "advanced" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tileId = buildableTileId(gameState, "nation-1");
+  const nation = gameState.nations["nation-1"];
+  nation.resources.hardwood = 0;
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId,
+    buildingType: "farm",
+  });
+  assert.match(latestRejection(creator), /hardwood/i);
+
+  clearMessages(creator);
+  nation.resources.hardwood = 3;
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId,
+    buildingType: "farm",
+  });
+  assert.equal(gameState.map.tiles.find((tile: any) => tile.id === tileId).type, "farm");
+  assert.equal(nation.resources.hardwood, 2);
 });
 
 test("gameplay build action is rejected for the wrong player or wrong turn", async () => {
@@ -713,6 +834,49 @@ test("generated maps follow water coverage presets", () => {
   }
 });
 
+test("advanced maps include all four special resource biomes", () => {
+  const game = createInitialServerGame({
+    mode: "advanced",
+    mapSize: "Medium",
+    landscapeDiversity: "high",
+    nationCount: 5,
+    maxTurns: 30,
+    turnTimerMinutes: 0,
+    unlimitedMode: false,
+    seed: 24680,
+  }, []);
+  const landBiomes = new Set(game.map.tiles.filter((tile: any) => tile.terrain === "land").map((tile: any) => tile.biome));
+  for (const biome of ["grassland", "jungle", "arctic", "desert"]) {
+    assert.ok(landBiomes.has(biome), `expected advanced map to include ${biome}`);
+  }
+});
+
+test("advanced superHigh creates smaller biome patches than high", () => {
+  const high = createInitialServerGame({
+    mode: "advanced",
+    mapSize: "Large",
+    landscapeDiversity: "high",
+    nationCount: 6,
+    maxTurns: 30,
+    turnTimerMinutes: 0,
+    unlimitedMode: false,
+    seed: 13579,
+  }, []);
+  const superHigh = createInitialServerGame({
+    mode: "advanced",
+    mapSize: "Large",
+    landscapeDiversity: "superHigh",
+    nationCount: 6,
+    maxTurns: 30,
+    turnTimerMinutes: 0,
+    unlimitedMode: false,
+    seed: 13579,
+  }, []);
+  const highLargest = Math.max(...["grassland", "jungle", "arctic", "desert"].map((biome) => biomeComponentSizes(high, biome)[0] || 0));
+  const superHighLargest = Math.max(...["grassland", "jungle", "arctic", "desert"].map((biome) => biomeComponentSizes(superHigh, biome)[0] || 0));
+  assert.ok(superHighLargest < highLargest, `expected superHigh patches (${superHighLargest}) to be smaller than high patches (${highLargest})`);
+});
+
 test("invalid worker counts are rejected", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
@@ -827,6 +991,88 @@ test("trainUnit works online", async () => {
   assert.equal(tile.unit?.strength, 3);
   assert.equal(nation.actionsRemaining, 4);
   assert.equal(latestRejection(creator), "");
+});
+
+test("advanced factories require iron and hardwood", async () => {
+  const room = await createRoom(2, { mode: "advanced" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  gameState.era = 3;
+  nation.money = 5000;
+  nation.tech.mining = 2;
+  nation.tech.education = 2;
+  nation.population.total = 60;
+  const ownedLand = gameState.map.tiles.filter((item: any) => item.ownerId === "nation-1" && item.terrain === "land" && !item.isCapital);
+  while (ownedLand.length < 5) ownedLand.push(makeOwnedTile(gameState, "nation-1", "empty", 0));
+  prepareTile(ownedLand[0], { ownerId: "nation-1", type: "mine", workers: 3 });
+  prepareTile(ownedLand[1], { ownerId: "nation-1", type: "mine", workers: 3 });
+  prepareTile(ownedLand[2], { ownerId: "nation-1", type: "mine", workers: 3 });
+  prepareTile(ownedLand[3], { ownerId: "nation-1", type: "school", workers: 3 });
+  prepareTile(ownedLand[4], { ownerId: "nation-1", type: "school", workers: 3 });
+  const tile = gameState.map.tiles.find((item: any) => item.terrain === "land" && !item.isCapital && !ownedLand.slice(0, 5).includes(item));
+  assert.ok(tile, "expected a separate factory tile");
+  prepareTile(tile, { ownerId: "nation-1", type: "empty", workers: 0 });
+  if (!nation.territory.includes(tile.id)) nation.territory.push(tile.id);
+
+  nation.resources.hardwood = 0;
+  nation.resources.iron = 0;
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "factory",
+  });
+  assert.match(latestRejection(creator), /hardwood|iron/i);
+
+  clearMessages(creator);
+  nation.resources.hardwood = 4;
+  nation.resources.iron = 4;
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "factory",
+  });
+  assert.equal(tile.type, "factory");
+  assert.equal(nation.resources.hardwood, 2);
+  assert.equal(nation.resources.iron, 1);
+});
+
+test("advanced units require oil", async () => {
+  const room = await createRoom(2, { mode: "advanced" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tile = makeOwnedTile(gameState, "nation-1", "military", 4);
+  const nation = gameState.nations["nation-1"];
+  gameState.era = 4;
+  nation.money = 5000;
+  nation.population.available = 40;
+  nation.tech.branches.tanks = 1;
+  setResources(nation, { materials: 200, education: 200, industry: 200, oil: 0 });
+
+  await room.messages.playerAction(creator.client, {
+    type: "trainUnit",
+    nationId: "nation-1",
+    tileId: tile.id,
+    strength: 8,
+    branch: "tanks",
+  });
+  assert.match(latestRejection(creator), /oil/i);
+
+  clearMessages(creator);
+  nation.resources.oil = 3;
+  await room.messages.playerAction(creator.client, {
+    type: "trainUnit",
+    nationId: "nation-1",
+    tileId: tile.id,
+    strength: 8,
+    branch: "tanks",
+  });
+  assert.equal(tile.unit?.branch, "tanks");
+  assert.equal(nation.resources.oil, 1);
 });
 
 test("moveOrAttackUnit movement works online", async () => {

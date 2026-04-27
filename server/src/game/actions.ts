@@ -1,5 +1,17 @@
 import { DEFAULT_ACTION_POINTS_PER_TURN, type ServerGameState } from "./initialGame.js";
 import {
+  ADVANCED_RESOURCE_KEYS,
+  FRUIT_DEFICIT_STABILITY_PENALTY,
+  FRUIT_SURPLUS_GROWTH_RATE,
+  advancedFruitDemand,
+  collectAdvancedResourcesForNation,
+  hardwoodCostForBuilding,
+  ironCostForFactory,
+  isAdvancedMode,
+  normalizeAdvancedResources,
+  oilCostForBranch,
+} from "./advanced.js";
+import {
   buildingTechRequirement as validateBuildingTechRequirement,
   canResearch as validateResearchTech,
   canResearchBranch as validateResearchBranch,
@@ -514,11 +526,20 @@ export function processServerRound(game: ServerGameState) {
     materials: 0,
     education: 0,
     industry: 0,
+    fruit: 0,
+    hardwood: 0,
+    iron: 0,
+    oil: 0,
+    population: 0,
     notes: [] as string[],
   };
 
   for (const nation of Object.values(game.nations)) {
     if (!nation.active) continue;
+    if (isAdvancedMode(game)) {
+      const resourceCollection = collectAdvancedResourcesForNation(game, nation.id);
+      for (const resource of ADVANCED_RESOURCE_KEYS) summary[resource] += resourceCollection.gained[resource];
+    }
     for (const tile of game.map.tiles) {
       if (tile.ownerId !== nation.id || !isTileActive(tile)) continue;
       const production = PRODUCTION[tile.type];
@@ -540,6 +561,7 @@ export function processServerRound(game: ServerGameState) {
         summary.money += money;
       }
     }
+    if (isAdvancedMode(game)) applyAdvancedFruitEffects(game, nation, summary);
   }
 
   game.lastSummary = summary;
@@ -706,6 +728,8 @@ function buildTile(game: ServerGameState, tileId: string, type: string, nationId
   const tile = tileById(game, tileId);
   if (!nation || !tile) return { ok: false, reason: "Build target is unavailable." };
   if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
+  if (check.advancedCost?.hardwood) nation.resources.hardwood = resourceCount(nation, "hardwood") - check.advancedCost.hardwood;
+  if (check.advancedCost?.iron) nation.resources.iron = resourceCount(nation, "iron") - check.advancedCost.iron;
 
   tile.ownerId = nationId;
   tile.type = type;
@@ -719,7 +743,7 @@ function buildTile(game: ServerGameState, tileId: string, type: string, nationId
     tileId: tile.id,
   });
 
-  return { ok: true, cost: check.cost };
+  return { ok: true, cost: check.cost, advancedCost: check.advancedCost || null };
 }
 
 function destroyTile(game: ServerGameState, tileId: string, nationId: string): ActionResult {
@@ -838,6 +862,11 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
     const required = cost[resource] || 0;
     if (required && resourceCount(nation, resource) < required) return { ok: false, reason: `Requires ${required} ${resource}.` };
   }
+  const oilCost = isAdvancedMode(game) && branch !== "infantry" ? oilCostForBranch(branch) : 0;
+  if (oilCost > 0) {
+    normalizeAdvancedResources(nation);
+    if (resourceCount(nation, "oil") < oilCost) return { ok: false, reason: `Requires ${oilCost} oil.` };
+  }
 
   const action = spendAction(game, nationId, SERVER_GAME_ACTION_TYPES.TRAIN_UNIT);
   if (!action.ok) return action;
@@ -847,6 +876,7 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
   for (const resource of ["materials", "education", "industry"] as const) {
     nation.resources[resource] = resourceCount(nation, resource) - (cost[resource] || 0);
   }
+  if (oilCost) nation.resources.oil = resourceCount(nation, "oil") - oilCost;
   nation.workers.soldiers = workerCount(nation, WORKER_ROLES.SOLDIERS) + cost.people;
   nation.military.unitsTrained = numberValue(nation.military.unitsTrained) + strength;
   tile.unit = tile.unit || { nationId, strength: 0, branch, movedTurn: 0, branches: {} };
@@ -858,7 +888,7 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
     tileId: tile.id,
   });
 
-  return { ok: true, cost };
+  return { ok: true, cost, advancedCost: oilCost ? { oil: oilCost } : null };
 }
 
 function moveOrAttackUnit(
@@ -1122,7 +1152,7 @@ function canBuild(
   tileId: string,
   type: string,
   nationId: string,
-): { ok: true; cost: number } | { ok: false; reason: string } {
+): { ok: true; cost: number; advancedCost?: { hardwood: number; iron: number } } | { ok: false; reason: string } {
   const nation = game.nations[nationId];
   const tile = tileById(game, tileId);
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
@@ -1155,6 +1185,14 @@ function canBuild(
 
   const cost = buildingCost(type, game.era);
   if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+  if (isAdvancedMode(game)) {
+    normalizeAdvancedResources(nation);
+    const hardwoodCost = hardwoodCostForBuilding(type);
+    const ironCost = ironCostForFactory(type);
+    if (hardwoodCost > 0 && resourceCount(nation, "hardwood") < hardwoodCost) return { ok: false, reason: `Requires ${hardwoodCost} hardwood.` };
+    if (ironCost > 0 && resourceCount(nation, "iron") < ironCost) return { ok: false, reason: `Requires ${ironCost} iron.` };
+    return { ok: true, cost, advancedCost: { hardwood: hardwoodCost, iron: ironCost } };
+  }
   return { ok: true, cost };
 }
 
@@ -1197,6 +1235,28 @@ function spendAction(game: ServerGameState, nationId: string, actionType: string
 function normalizeHappiness(value: unknown) {
   const numeric = Number.isFinite(Number(value)) ? Math.round(Number(value)) : DEFAULT_HAPPINESS;
   return Math.max(0, Math.min(100, numeric));
+}
+
+function applyAdvancedFruitEffects(game: ServerGameState, nation: Nation, summary: Record<string, any>) {
+  normalizeAdvancedResources(nation);
+  const demand = advancedFruitDemand(nation);
+  if (demand <= 0) return;
+  const available = resourceCount(nation, "fruit");
+  const consumed = Math.min(available, demand);
+  nation.resources.fruit = available - consumed;
+  const stockSurplus = Math.max(0, available - demand);
+  const capacity = Math.max(0, nation.territory.length * 10);
+  const headroom = Math.max(0, capacity - nation.population.total);
+  const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * FRUIT_SURPLUS_GROWTH_RATE)) : 0;
+  if (growth > 0) {
+    addPopulation(nation, growth);
+    summary.population = numberValue(summary.population) + growth;
+    addEvent(game, `${nation.name}'s fruit surplus supported ${growth} population growth.`, { nationId: nation.id, type: "resource" });
+  }
+  if (consumed < demand) {
+    nation.population.happiness = normalizeHappiness(numberValue(nation.population.happiness, DEFAULT_HAPPINESS) - FRUIT_DEFICIT_STABILITY_PENALTY);
+    addEvent(game, `${nation.name} lacked ${demand - consumed} fruit and faced population strain.`, { nationId: nation.id, type: "resource" });
+  }
 }
 
 function happinessBand(nation: Nation) {

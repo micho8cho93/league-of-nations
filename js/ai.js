@@ -1,4 +1,5 @@
 import { TILE_TYPES, WORKER_MIN, pickWeighted, randInt } from "./utils.js";
+import { isAdvancedMode } from "./advanced.js";
 import { activeTiles, militaryPower } from "./nation.js";
 import { canResearch, canResearchBranch } from "./tech.js";
 import { getDiplomacy } from "./trade.js";
@@ -179,6 +180,12 @@ function chooseBuildTile(game, bot, type) {
   const p = bot.personality;
   const weighted = candidates.map((tile) => {
     let weight = 1;
+    if (isAdvancedMode(game)) {
+      if (tile.biome === "grassland") weight += 1.2;
+      if (tile.biome === "jungle") weight += 1;
+      if (tile.biome === "arctic") weight += type === TILE_TYPES.FACTORY || type === TILE_TYPES.MINE ? 1.5 : 0.6;
+      if (tile.biome === "desert") weight += type === TILE_TYPES.MILITARY ? 1.1 : 0.5;
+    }
     // Farms: continent tiles are more fertile — universal preference
     if (type === TILE_TYPES.FARM && tile.landform === "continent") weight += 1;
     if (type === TILE_TYPES.FISHERY && tile.landform === "sea") weight += 1;

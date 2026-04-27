@@ -265,9 +265,10 @@ function getColyseusEndpoint() {
 function readSettings(settings = {}) {
   const turnTimerMinutes = Number(settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0);
   return {
+    mode: settings.mode === "advanced" ? "advanced" : "lite",
     mapSize: settings.mapSize || "Medium",
     waterLevel: settings.waterLevel || "Balanced",
-    landscapeDiversity: settings.landscapeDiversity || "Balanced",
+    landscapeDiversity: settings.landscapeDiversity || (settings.mode === "advanced" ? "high" : "Balanced"),
     fogOfWarEnabled: Boolean(settings.fogOfWarEnabled),
     nationCount: Number(settings.nationCount || 5),
     maxTurns: Number(settings.maxTurns || 30),

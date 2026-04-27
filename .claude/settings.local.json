@@ -9,7 +9,8 @@
       "Bash(node --check js/game.js)",
       "Bash(node --check js/ui.js)",
       "Bash(node -e ' *)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

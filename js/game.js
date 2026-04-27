@@ -19,7 +19,23 @@ import {
   randomSeed,
   tileId,
 } from "./utils.js";
-import { BALANCE } from "./balance.js";
+import {
+  BALANCE,
+  FRUIT_DEFICIT_STABILITY_PENALTY,
+  FRUIT_SURPLUS_GROWTH_RATE,
+} from "./balance.js";
+import {
+  ADVANCED_RESOURCE_KEYS,
+  advancedFruitDemand,
+  collectAdvancedResourcesForNation,
+  hardwoodCostForBuilding,
+  ironCostForFactory,
+  isAdvancedMode,
+  normalizeAdvancedResources,
+  normalizeGameMode,
+  normalizeLandscapeDiversity,
+  oilCostForBranch,
+} from "./advanced.js";
 import {
   BOT_NAMES,
   addHistory,
@@ -150,6 +166,9 @@ function addUnitBranch(unit, branch, amount) {
 export class GameState {
   constructor(data) {
     this.settings = data.settings;
+    this.mode = normalizeGameMode(this.settings?.mode);
+    this.settings.mode = this.mode;
+    this.settings.landscapeDiversity = normalizeLandscapeDiversity(this.settings.landscapeDiversity, this.mode);
     this.turn = data.turn || 1;
     this.turnNumber = data.turnNumber || this.turn;
     this.currentTurnIndex = Number(data.currentTurnIndex) || 0;
@@ -189,6 +208,7 @@ export class GameState {
     this.turnStartedAt = data.turnStartedAt || Date.now();
     this.normalizeActionStates();
     this.normalizePopulationStates();
+    this.normalizeAdvancedNationStates();
     this.recomputeTerritories();
     scheduleEraEvent(this, this.era);
   }
@@ -340,6 +360,11 @@ export class GameState {
     }
   }
 
+  normalizeAdvancedNationStates() {
+    if (!isAdvancedMode(this)) return;
+    for (const nation of Object.values(this.nations)) normalizeAdvancedResources(nation);
+  }
+
   canSpendAction(nationId = this.playerId, amount = 1) {
     const nation = this.nations[nationId];
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
@@ -454,6 +479,21 @@ export class GameState {
     }
     const cost = buildingCost(type, this.era);
     if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+    if (isAdvancedMode(this)) {
+      normalizeAdvancedResources(nation);
+      const advancedCost = {};
+      const hardwoodCost = hardwoodCostForBuilding(type);
+      const ironCost = ironCostForFactory(type);
+      if (hardwoodCost > 0) {
+        if (nation.resources.hardwood < hardwoodCost) return { ok: false, reason: `Requires ${hardwoodCost} hardwood.` };
+        advancedCost.hardwood = hardwoodCost;
+      }
+      if (ironCost > 0) {
+        if (nation.resources.iron < ironCost) return { ok: false, reason: `Requires ${ironCost} iron.` };
+        advancedCost.iron = ironCost;
+      }
+      return { ok: true, cost, advancedCost };
+    }
     return { ok: true, cost };
   }
 
@@ -466,6 +506,8 @@ export class GameState {
     const nation = this.nations[nationId];
     const tile = this.tileById(tileIdValue);
     if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
+    if (check.advancedCost?.hardwood) nation.resources.hardwood -= check.advancedCost.hardwood;
+    if (check.advancedCost?.iron) nation.resources.iron -= check.advancedCost.iron;
     tile.ownerId = nationId;
     tile.type = type;
     tile.workers = 0;
@@ -474,7 +516,7 @@ export class GameState {
     this.recomputeTerritories();
     if (!silent) this.addEvent(`${nation.name} built a ${typeLabel(type)} for $${check.cost}.`, { nationId, type: "build", tileId: tile.id });
     this.changed("build");
-    return { ok: true, cost: check.cost };
+    return { ok: true, cost: check.cost, advancedCost: check.advancedCost || null };
   }
 
   destroyTile(tileIdValue, nationId = this.playerId) {
@@ -566,6 +608,11 @@ export class GameState {
     if (nation.resources.materials < cost.materials) return { ok: false, reason: `Requires ${cost.materials} materials.` };
     if (cost.education && nation.resources.education < cost.education) return { ok: false, reason: `Requires ${cost.education} education.` };
     if (cost.industry && nation.resources.industry < cost.industry) return { ok: false, reason: `Requires ${cost.industry} industry.` };
+    const oilCost = isAdvancedMode(this) && unitBranch !== "infantry" ? oilCostForBranch(unitBranch) : 0;
+    if (oilCost > 0) {
+      normalizeAdvancedResources(nation);
+      if (nation.resources.oil < oilCost) return { ok: false, reason: `Requires ${oilCost} oil.` };
+    }
     const action = this.spendAction("train", nationId);
     if (!action.ok) return action;
     nation.money -= cost.money;
@@ -573,6 +620,7 @@ export class GameState {
     nation.resources.materials -= cost.materials;
     if (cost.education) nation.resources.education -= cost.education;
     if (cost.industry) nation.resources.industry -= cost.industry;
+    if (oilCost) nation.resources.oil -= oilCost;
     nation.workers.soldiers += cost.people;
     nation.stats.moneySpent += cost.money;
     nation.military.unitsTrained += amount;
@@ -581,7 +629,7 @@ export class GameState {
     addUnitBranch(tile.unit, unitBranch, amount);
     if (!silent) this.addEvent(`${nation.name} ${unitBranch === "infantry" ? "trained" : "deployed"} ${amount} ${unitBranch} strength.`, { nationId, type: "military", tileId: tile.id });
     this.changed("train");
-    return { ok: true, cost };
+    return { ok: true, cost, advancedCost: oilCost ? { oil: oilCost } : null };
   }
 
   moveUnitToward(fromTileId, targetTileId, nationId = this.playerId, options = {}) {
@@ -1110,6 +1158,10 @@ export class GameState {
       materials: 0,
       education: 0,
       industry: 0,
+      fruit: 0,
+      hardwood: 0,
+      iron: 0,
+      oil: 0,
       population: 0,
       happiness: 0,
       deaths: 0,
@@ -1144,6 +1196,17 @@ export class GameState {
         summary.upkeep += paid;
         if (paid < populationUpkeep) happinessContexts[nation.id].unpaidUpkeep += populationUpkeep - paid;
       }
+      if (isAdvancedMode(this)) {
+        const resourceCollection = collectAdvancedResourcesForNation(this, nation.id);
+        for (const resource of ADVANCED_RESOURCE_KEYS) summary[resource] += resourceCollection.gained[resource];
+        const gainedText = ADVANCED_RESOURCE_KEYS
+          .filter((resource) => resourceCollection.gained[resource] > 0)
+          .map((resource) => `${resourceCollection.gained[resource]} ${resource}`)
+          .join(", ");
+        if (gainedText) {
+          this.addEvent(`${nation.name} gathered ${gainedText} from controlled terrain.`, { nationId: nation.id, type: "resource" });
+        }
+      }
       const foodProduced = this.produceForNation(nation, summary);
       foodProducedByNation[nation.id] = foodProduced;
     }
@@ -1153,6 +1216,7 @@ export class GameState {
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
       const routeFood = tradeResult.foodProduced[nation.id] || 0;
       this.consumeFood(nation, summary, (foodProducedByNation[nation.id] || 0) + routeFood, happinessContexts[nation.id] || {});
+      if (isAdvancedMode(this)) this.applyAdvancedFruitEffects(nation, summary);
     }
 
     for (const alliance of expireAlliances(this)) {
@@ -1282,6 +1346,16 @@ export class GameState {
       famine: false,
     });
 
+    if (isAdvancedMode(this)) {
+      if (surplus <= -3 && nation.isPlayer) {
+        this.addEvent(
+          `${nation.name}: food output (${foodProduced}) below consumption (${consumption}). Stockpile shrinking.`,
+          { nationId: nation.id, type: "resource" }
+        );
+      }
+      return;
+    }
+
     if (surplus < BALANCE.population.growth.minimumFoodSurplus) {
       // Production cannot keep up with consumption; stockpile is absorbing the gap.
       // Log a warning when the deficit is meaningful. For bot nations, only log severe
@@ -1327,6 +1401,31 @@ export class GameState {
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
+    }
+  }
+
+  applyAdvancedFruitEffects(nation, summary) {
+    normalizeAdvancedResources(nation);
+    const demand = advancedFruitDemand(nation);
+    if (demand <= 0) return;
+    const available = nation.resources.fruit;
+    const consumed = Math.min(available, demand);
+    nation.resources.fruit -= consumed;
+    const deficit = demand - consumed;
+    const capacity = nation.territory.length * BALANCE.population.capacityPerTile;
+    const headroom = Math.max(0, capacity - nation.population.total);
+    const stockSurplus = Math.max(0, available - demand);
+    const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * FRUIT_SURPLUS_GROWTH_RATE)) : 0;
+    if (growth > 0) {
+      addPopulation(nation, growth);
+      summary.population += growth;
+      this.addEvent(`${nation.name}'s fruit surplus supported ${growth} population growth.`, { nationId: nation.id, type: "resource" });
+    }
+    if (deficit > 0) {
+      const before = normalizeHappiness(nation.population.happiness);
+      nation.population.happiness = normalizeHappiness(before - FRUIT_DEFICIT_STABILITY_PENALTY);
+      summary.happiness += nation.population.happiness - before;
+      this.addEvent(`${nation.name} lacked ${deficit} fruit and faced population strain.`, { nationId: nation.id, type: "resource" });
     }
   }
 
@@ -1513,13 +1612,15 @@ function normalizeSettings(raw) {
   const nationCount = clamp(Math.floor(Number(raw.nationCount) || 5), 2, 16);
   const unlimitedMode = Boolean(raw.unlimitedMode);
   const turnTimerMinutes = clamp(Math.floor(Number(raw.turnTimerMinutes ?? raw.timeLimitMinutes) || 0), 0, 240);
+  const mode = normalizeGameMode(raw.mode);
   const mapSizes = ["Small", "Medium", "Large", "Extra Large", "Enormous"];
   const mapOptionLevels = ["Low", "Balanced", "High"];
   return {
     playerName: String(raw.playerName || "Republic of Nova").trim().slice(0, 40) || "Republic of Nova",
+    mode,
     mapSize: mapSizes.includes(raw.mapSize) ? raw.mapSize : "Medium",
     waterLevel: mapOptionLevels.includes(raw.waterLevel) ? raw.waterLevel : "Balanced",
-    landscapeDiversity: mapOptionLevels.includes(raw.landscapeDiversity) ? raw.landscapeDiversity : "Balanced",
+    landscapeDiversity: normalizeLandscapeDiversity(raw.landscapeDiversity, mode),
     fogOfWarEnabled: raw.fogOfWarEnabled === true,
     nationCount,
     maxTurns: unlimitedMode ? 0 : clamp(Math.floor(Number(raw.maxTurns) || 30), 10, 120),

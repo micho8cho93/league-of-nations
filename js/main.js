@@ -3,6 +3,10 @@ import { GameState } from "./game.js";
 import { HexMapRenderer } from "./map.js";
 import { bindUI } from "./ui.js";
 import {
+  normalizeGameMode,
+  normalizeLandscapeDiversity,
+} from "./advanced.js";
+import {
   CLOSED_GAME_MESSAGE,
   LeagueMultiplayerClient,
   bindRoomEvents,
@@ -13,8 +17,13 @@ import { setQualityLevel, detectRecommendedQuality } from "./rendering/quality.j
 import { preloadAll, exposeDebug } from "./rendering/assetLoader.js";
 import { MusicManager, isPlayerInBattle } from "./music.js";
 
+const modeScreen = document.getElementById("mode-screen");
+const modeLiteBtn = document.getElementById("mode-lite-btn");
+const modeAdvancedBtn = document.getElementById("mode-advanced-btn");
 const setupScreen = document.getElementById("setup-screen");
 const setupForm = document.getElementById("setup-form");
+const setupSubtitle = document.getElementById("setup-subtitle");
+const backToModeBtn = document.getElementById("back-to-mode-btn");
 const continueNote = document.getElementById("continue-note");
 const createMatchBtn = document.getElementById("create-match-btn");
 const enterCodeBtn = document.getElementById("enter-code-btn");
@@ -23,7 +32,7 @@ const joinRoomCodeInput = document.getElementById("join-room-code");
 const joinMatchBtn = document.getElementById("join-match-btn");
 const multiplayerError = document.getElementById("multiplayer-error");
 const lobbyScreen = document.getElementById("lobby-screen");
-const lobbyRoomCode = document.getElementById("lobby-room-code");
+const lobbySubtitle = document.getElementById("lobby-subtitle");
 const lobbyPlayerList = document.getElementById("lobby-player-list");
 const lobbyStatus = document.getElementById("lobby-status");
 const lobbyStartBtn = document.getElementById("lobby-start-btn");
@@ -69,8 +78,20 @@ let lobbyState = null;
 let multiplayerStartHandled = false;
 let syncingLobbyInputs = false;
 let musicManager = null;
+let currentSetupMode = "lite";
 
 setSessionOnlyNote();
+populateLandscapeOptions(inputs.landscapeDiversity, currentSetupMode);
+populateLandscapeOptions(lobbyInputs.landscapeDiversity, currentSetupMode);
+
+modeLiteBtn.addEventListener("click", () => openSetupMode("lite"));
+modeAdvancedBtn.addEventListener("click", () => openSetupMode("advanced"));
+backToModeBtn.addEventListener("click", () => {
+  modeScreen.hidden = false;
+  setupScreen.hidden = true;
+  lobbyScreen.hidden = true;
+  app.hidden = true;
+});
 
 inputs.unlimitedMode.addEventListener("change", () => {
   inputs.maxTurns.disabled = inputs.unlimitedMode.checked;
@@ -143,11 +164,13 @@ for (const input of Object.values(lobbyInputs)) {
 }
 
 function readSetup() {
+  const mode = normalizeGameMode(currentSetupMode);
   return {
     playerName: inputs.playerName.value,
+    mode,
     mapSize: inputs.mapSize.value,
     waterLevel: inputs.waterLevel.value,
-    landscapeDiversity: inputs.landscapeDiversity.value,
+    landscapeDiversity: normalizeLandscapeDiversity(inputs.landscapeDiversity.value, mode),
     fogOfWarEnabled: inputs.fogOfWarEnabled.checked,
     nationCount: clampInt(inputs.nationCount.value, 2, 16, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
@@ -213,6 +236,7 @@ function bindActiveRoom(room) {
 }
 
 function showLobby(room) {
+  modeScreen.hidden = true;
   setupScreen.hidden = true;
   lobbyScreen.hidden = false;
   app.hidden = true;
@@ -226,7 +250,7 @@ function renderLobby(nextLobbyState) {
   const filled = lobbyState.players.length;
   const capacity = lobbyState.settings.nationCount;
 
-  lobbyRoomCode.textContent = lobbyState.roomCode || "-----";
+  lobbySubtitle.innerHTML = `Room code <strong>${lobbyState.roomCode || "-----"}</strong> · ${lobbyState.settings.mode === "advanced" ? "Advanced" : "Lite"} mode`;
   lobbyStatus.textContent = host
     ? "You are the host. You can adjust settings and start the game."
     : "Waiting for the host to start the game.";
@@ -263,9 +287,10 @@ function renderLobby(nextLobbyState) {
 
 function syncLobbyInputs(settings, editable) {
   syncingLobbyInputs = true;
+  populateLandscapeOptions(lobbyInputs.landscapeDiversity, settings.mode || "lite");
   lobbyInputs.mapSize.value = settings.mapSize;
   lobbyInputs.waterLevel.value = settings.waterLevel || "Balanced";
-  lobbyInputs.landscapeDiversity.value = settings.landscapeDiversity || "Balanced";
+  lobbyInputs.landscapeDiversity.value = normalizeLandscapeDiversity(settings.landscapeDiversity, settings.mode || "lite");
   lobbyInputs.fogOfWarEnabled.checked = settings.fogOfWarEnabled === true;
   lobbyInputs.nationCount.value = settings.nationCount;
   lobbyInputs.maxTurns.value = settings.unlimitedMode ? 30 : settings.maxTurns;
@@ -281,10 +306,12 @@ function syncLobbyInputs(settings, editable) {
 }
 
 function readLobbySetup() {
+  const mode = normalizeGameMode(lobbyState?.settings?.mode || currentSetupMode);
   return {
+    mode,
     mapSize: lobbyInputs.mapSize.value,
     waterLevel: lobbyInputs.waterLevel.value,
-    landscapeDiversity: lobbyInputs.landscapeDiversity.value,
+    landscapeDiversity: normalizeLandscapeDiversity(lobbyInputs.landscapeDiversity.value, mode),
     fogOfWarEnabled: lobbyInputs.fogOfWarEnabled.checked,
     nationCount: clampInt(lobbyInputs.nationCount.value, 2, 16, 5),
     maxTurns: lobbyInputs.unlimitedMode.checked ? 0 : clampInt(lobbyInputs.maxTurns.value, 10, 120, 30),
@@ -347,6 +374,7 @@ function showMultiplayerError(error) {
 
 async function start(nextGame, { multiplayerSnapshot = null } = {}) {
   game = nextGame;
+  modeScreen.hidden = true;
   setupScreen.hidden = true;
   lobbyScreen.hidden = true;
   app.hidden = false;
@@ -457,4 +485,40 @@ function renderMultiplayerSnapshotDebug(snapshot, assignedNationId) {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function openSetupMode(mode) {
+  currentSetupMode = normalizeGameMode(mode);
+  configureSetupScreen(currentSetupMode);
+  modeScreen.hidden = true;
+  setupScreen.hidden = false;
+  lobbyScreen.hidden = true;
+  app.hidden = true;
+}
+
+function configureSetupScreen(mode) {
+  const advanced = normalizeGameMode(mode) === "advanced";
+  setupSubtitle.textContent = advanced
+    ? "Advanced mode: terrain resources gate growth, construction, factories, and advanced units."
+    : "Lite mode: current simple flow and current gameplay rules.";
+  populateLandscapeOptions(inputs.landscapeDiversity, mode);
+  inputs.landscapeDiversity.value = normalizeLandscapeDiversity(inputs.landscapeDiversity.value, mode);
+}
+
+function populateLandscapeOptions(select, mode) {
+  if (!select) return;
+  const advanced = normalizeGameMode(mode) === "advanced";
+  const options = advanced
+    ? [
+        { value: "high", label: "High" },
+        { value: "superHigh", label: "Super High" },
+      ]
+    : [
+        { value: "Low", label: "Low" },
+        { value: "Balanced", label: "Balanced" },
+        { value: "High", label: "High" },
+      ];
+  const nextValue = normalizeLandscapeDiversity(select.value, mode);
+  select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join("");
+  select.value = options.some((option) => option.value === nextValue) ? nextValue : options[0].value;
 }

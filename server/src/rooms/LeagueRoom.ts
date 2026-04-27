@@ -53,6 +53,7 @@ interface JoinOptions {
 }
 
 interface SettingsPayload {
+  mode?: unknown;
   mapSize?: unknown;
   waterLevel?: unknown;
   landscapeDiversity?: unknown;
@@ -105,6 +106,7 @@ class LobbyPlayer extends Schema {
 }
 
 class GameSettings extends Schema {
+  @type("string") mode = "lite";
   @type("string") mapSize = "Medium";
   @type("string") waterLevel = "Balanced";
   @type("string") landscapeDiversity = "Balanced";
@@ -301,6 +303,15 @@ export class LeagueRoom extends Room {
   }
 
   private applySettings(payload: SettingsPayload) {
+    if (payload.mode !== undefined) {
+      this.state.settings.mode = payload.mode === "advanced" ? "advanced" : "lite";
+      if (this.state.settings.mode === "advanced") {
+        this.state.settings.landscapeDiversity = this.state.settings.landscapeDiversity === "superHigh" ? "superHigh" : "high";
+      } else if (!["Low", "Balanced", "High"].includes(this.state.settings.landscapeDiversity)) {
+        this.state.settings.landscapeDiversity = "Balanced";
+      }
+    }
+
     if (payload.mapSize !== undefined) {
       this.state.settings.mapSize = sanitizeMapSize(payload.mapSize);
     }
@@ -310,7 +321,9 @@ export class LeagueRoom extends Room {
     }
 
     if (payload.landscapeDiversity !== undefined) {
-      this.state.settings.landscapeDiversity = sanitizeMapOptionLevel(payload.landscapeDiversity);
+      this.state.settings.landscapeDiversity = this.state.settings.mode === "advanced"
+        ? sanitizeAdvancedLandscapeDiversity(payload.landscapeDiversity)
+        : sanitizeMapOptionLevel(payload.landscapeDiversity);
     }
 
     if (payload.fogOfWarEnabled !== undefined) {
@@ -355,6 +368,7 @@ export class LeagueRoom extends Room {
 
   private snapshotSettings(): InitialGameSettings {
     return {
+      mode: this.state.settings.mode as InitialGameSettings["mode"],
       mapSize: this.state.settings.mapSize as InitialGameSettings["mapSize"],
       waterLevel: this.state.settings.waterLevel as InitialGameSettings["waterLevel"],
       landscapeDiversity: this.state.settings.landscapeDiversity as InitialGameSettings["landscapeDiversity"],
@@ -788,6 +802,10 @@ function sanitizeMapSize(value: unknown) {
 function sanitizeMapOptionLevel(value: unknown) {
   const level = String(value ?? "");
   return ["Low", "Balanced", "High"].includes(level) ? level : "Balanced";
+}
+
+function sanitizeAdvancedLandscapeDiversity(value: unknown) {
+  return String(value ?? "") === "superHigh" ? "superHigh" : "high";
 }
 
 function clampInteger(value: unknown, min: number, max: number, fallback: number) {

@@ -8,10 +8,32 @@
   <link rel="stylesheet" href="./css/style.css" />
 </head>
 <body>
-  <div id="setup-screen" class="setup-screen">
+  <div id="mode-screen" class="setup-screen">
+    <section class="setup-panel mode-panel" aria-labelledby="mode-title">
+      <div id="mode-title" class="setup-title">League of Nations</div>
+      <div class="setup-subtitle">Choose a ruleset before opening match settings.</div>
+      <div class="mode-grid">
+        <button id="mode-lite-btn" type="button" class="mode-card primary-btn">
+          <strong>Lite</strong>
+          <span>Current simple flow and current gameplay rules.</span>
+        </button>
+        <button id="mode-advanced-btn" type="button" class="mode-card secondary-btn">
+          <strong>Advanced</strong>
+          <span>New terrain resources, gated construction, and advanced units.</span>
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <div id="setup-screen" class="setup-screen" hidden>
     <form id="setup-form" class="setup-panel">
-      <div class="setup-title">League of Nations</div>
-      <div class="setup-subtitle">Educational turn-based strategy</div>
+      <div class="setup-head">
+        <div>
+          <div class="setup-title">League of Nations</div>
+          <div id="setup-subtitle" class="setup-subtitle">Educational turn-based strategy</div>
+        </div>
+        <button id="back-to-mode-btn" type="button" class="secondary-btn">Back</button>
+      </div>
       <div class="setup-grid">
         <label class="field">
           <span>Nation name</span>
@@ -90,7 +112,7 @@
       <div class="lobby-head">
         <div>
           <div id="lobby-title" class="setup-title">Lobby</div>
-          <div class="setup-subtitle">Room code <strong id="lobby-room-code">-----</strong></div>
+          <div id="lobby-subtitle" class="setup-subtitle">Room code <strong id="lobby-room-code">-----</strong></div>
         </div>
         <div class="lobby-head-actions">
           <button id="lobby-start-btn" type="button" class="primary-btn">Start Game</button>

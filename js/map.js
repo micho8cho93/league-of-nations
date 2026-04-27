@@ -19,6 +19,7 @@ import {
   shuffle,
   tileId,
 } from "./utils.js";
+import { normalizeGameMode } from "./advanced.js";
 import { STARTING_PROFILES, militaryPower } from "./nation.js";
 import { createRenderer, setupScene, setupCamera } from "./rendering/renderer.js";
 import { getTileMaterial, colorFromHex } from "./rendering/config.js";
@@ -63,6 +64,7 @@ export function createMapData(settings) {
   const seed = Number(settings.seed || 1);
   const coords = hexMapCoords(radius);
   const rng = mulberry32(seed);
+  const mode = normalizeGameMode(settings.mode);
   const nationCount = Math.max(2, Math.floor(Number(settings.nationCount) || 5));
   const waterRatio = targetWaterRatio(coords.length, nationCount, settings.waterLevel);
   const initialWaterRatio = Math.max(0.16, waterRatio - 0.045);
@@ -174,7 +176,8 @@ export function createMapData(settings) {
   });
 
   carveWaterFeatures(tiles, radius, seed, Math.round(scored.length * targetLandRatio));
-  assignBiomes(tiles, radius, seed, settings.landscapeDiversity);
+  if (mode === "advanced") assignAdvancedBiomes(tiles, radius, seed, settings.landscapeDiversity);
+  else assignBiomes(tiles, radius, seed, settings.landscapeDiversity);
   addMountainRanges(tiles, radius, seed, nationCount);
 
   const map = {
@@ -239,7 +242,20 @@ function assignBiomes(tiles, radius, seed, landscapeDiversity = "Balanced") {
     Balanced: { scale: 5.5, spread: 1, passes: 1 },
     High: { scale: 3.3, spread: 1.22, passes: 1 },
   }[landscapeDiversity] || { scale: 5.5, spread: 1, passes: 1 };
+  assignBiomesWithConfig(tiles, radius, seed, config);
+}
 
+function assignAdvancedBiomes(tiles, radius, seed, landscapeDiversity = "high") {
+  const config = landscapeDiversity === "superHigh"
+    ? { scale: 2.4, spread: 1.36, passes: 0, patchCount: 4, patchRadius: 1.75, fillChance: 0.72, minimumRatio: 0.07, mergePasses: 0 }
+    : { scale: 4.1, spread: 1.18, passes: 1, patchCount: 2, patchRadius: 3.35, fillChance: 0.9, minimumRatio: 0.09, mergePasses: 2 };
+  assignBiomesWithConfig(tiles, radius, seed, config);
+  stampAdvancedBiomePatches(tiles, radius, seed, config);
+  ensureAdvancedBiomeMinimums(tiles, radius, seed, config);
+  smoothBiomeClusters(tiles, config.mergePasses || 0, config.patchCount > 2 ? 4 : 3);
+}
+
+function assignBiomesWithConfig(tiles, radius, seed, config) {
   for (const tile of tiles) {
     if (tile.terrain !== "land") {
       tile.biome = "water";
@@ -248,8 +264,84 @@ function assignBiomes(tiles, radius, seed, landscapeDiversity = "Balanced") {
     tile.biome = biomeForTile(tile, radius, seed, config);
   }
 
+  smoothBiomeClusters(tiles, config.passes || 0, 4);
+}
+
+function biomeForTile(tile, radius, seed, config) {
+  const { temperature, moisture } = biomeClimate(tile, radius, seed, config);
+
+  if (temperature < 0.28) return "arctic";
+  if (moisture < 0.26 && temperature > 0.42) return "desert";
+  if (moisture > 0.68 && temperature > 0.52) return "jungle";
+  if (moisture > 0.48) return "woods";
+  return "grassland";
+}
+
+function biomeClimate(tile, radius, seed, config) {
+  const y = (tile.r + tile.q * 0.5) / Math.max(1, radius);
+  const latitudeTemp = 1 - Math.min(1, Math.abs(y));
+  let temperature = latitudeTemp * 0.78 + smoothNoise(tile.q, tile.r, config.scale * 1.35, seed + 7001) * 0.38;
+  let moisture = smoothNoise(tile.q + 29, tile.r - 17, config.scale, seed + 7101);
+  const local = smoothNoise(tile.q - 11, tile.r + 23, config.scale * 0.58, seed + 7201);
+  temperature = clamp(0.5 + (temperature - 0.5) * config.spread, 0, 1);
+  moisture = clamp(0.5 + (moisture * 0.8 + local * 0.2 - 0.5) * config.spread, 0, 1);
+  return { temperature, moisture };
+}
+
+function stampAdvancedBiomePatches(tiles, radius, seed, config) {
+  const landTiles = tiles.filter((tile) => tile.terrain === "land");
+  const usedCenters = new Set();
+  for (const biome of ["grassland", "jungle", "arctic", "desert"]) {
+    for (let patchIndex = 0; patchIndex < config.patchCount; patchIndex += 1) {
+      const center = pickAdvancedBiomeCenter(landTiles, radius, seed, biome, patchIndex, usedCenters, config);
+      if (!center) continue;
+      usedCenters.add(center.id);
+      for (const tile of landTiles) {
+        const dist = hexDistance(tile, center);
+        if (dist > config.patchRadius + hash2d(center.q * 7 + tile.q, center.r * 11 + tile.r, seed + patchIndex * 97) * 1.1) continue;
+        const fillRoll = hash2d(tile.q * 13 + patchIndex * 17, tile.r * 19 - patchIndex * 23, seed + biomeSeedOffset(biome));
+        if (fillRoll <= config.fillChance) tile.biome = biome;
+      }
+    }
+  }
+}
+
+function pickAdvancedBiomeCenter(landTiles, radius, seed, biome, patchIndex, usedCenters, config) {
+  return landTiles
+    .filter((tile) => !usedCenters.has(tile.id))
+    .map((tile) => {
+      const climate = biomeClimate(tile, radius, seed, config);
+      const affinity = advancedBiomeAffinity(tile, climate, biome);
+      const noise = hash2d(tile.q * 29 + patchIndex * 13, tile.r * 31 - patchIndex * 17, seed + biomeSeedOffset(biome) + 41);
+      return { tile, score: affinity + noise * 0.12 };
+    })
+    .sort((a, b) => b.score - a.score)[0]?.tile || null;
+}
+
+function ensureAdvancedBiomeMinimums(tiles, radius, seed, config) {
+  const landTiles = tiles.filter((tile) => tile.terrain === "land");
+  const minimumCount = Math.max(6, Math.round(landTiles.length * config.minimumRatio));
+  for (const biome of ["grassland", "jungle", "arctic", "desert"]) {
+    const currentCount = landTiles.filter((tile) => tile.biome === biome).length;
+    if (currentCount >= minimumCount) continue;
+    const needed = minimumCount - currentCount;
+    const candidates = landTiles
+      .filter((tile) => tile.biome !== biome)
+      .map((tile) => {
+        const climate = biomeClimate(tile, radius, seed, config);
+        const affinity = advancedBiomeAffinity(tile, climate, biome);
+        return { tile, score: affinity + hash2d(tile.q * 5 - 7, tile.r * 7 + 11, seed + biomeSeedOffset(biome) + 101) * 0.04 };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, needed);
+    for (const entry of candidates) entry.tile.biome = biome;
+  }
+}
+
+function smoothBiomeClusters(tiles, passes, dominantThreshold = 4) {
+  if (!passes) return;
   const index = buildTileIndex(tiles);
-  for (let pass = 0; pass < config.passes; pass += 1) {
+  for (let pass = 0; pass < passes; pass += 1) {
     const next = new Map();
     for (const tile of tiles) {
       if (tile.terrain !== "land") continue;
@@ -261,27 +353,28 @@ function assignBiomes(tiles, radius, seed, landscapeDiversity = "Balanced") {
       }
       const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
       const currentCount = counts[tile.biome] || 0;
-      if (dominant && dominant[1] >= 4 && currentCount <= 1) next.set(tile.id, dominant[0]);
-      else if (dominant && dominant[1] >= 3 && currentCount === 0) next.set(tile.id, dominant[0]);
+      if (dominant && dominant[1] >= dominantThreshold && currentCount <= 1) next.set(tile.id, dominant[0]);
+      else if (dominant && dominant[1] >= dominantThreshold - 1 && currentCount === 0) next.set(tile.id, dominant[0]);
     }
     for (const [id, biome] of next) index.get(id).biome = biome;
   }
 }
 
-function biomeForTile(tile, radius, seed, config) {
-  const y = (tile.r + tile.q * 0.5) / Math.max(1, radius);
-  const latitudeTemp = 1 - Math.min(1, Math.abs(y));
-  let temperature = latitudeTemp * 0.78 + smoothNoise(tile.q, tile.r, config.scale * 1.35, seed + 7001) * 0.38;
-  let moisture = smoothNoise(tile.q + 29, tile.r - 17, config.scale, seed + 7101);
-  const local = smoothNoise(tile.q - 11, tile.r + 23, config.scale * 0.58, seed + 7201);
-  temperature = clamp(0.5 + (temperature - 0.5) * config.spread, 0, 1);
-  moisture = clamp(0.5 + (moisture * 0.8 + local * 0.2 - 0.5) * config.spread, 0, 1);
+function advancedBiomeAffinity(tile, climate, biome) {
+  const edge = Math.max(Math.abs(tile.q), Math.abs(tile.r), Math.abs(tile.q + tile.r));
+  if (biome === "arctic") return (1 - climate.temperature) * 1.4 + edge * 0.015;
+  if (biome === "desert") return (1 - climate.moisture) * 1.2 + climate.temperature * 0.6;
+  if (biome === "jungle") return climate.moisture * 1.25 + climate.temperature * 0.55;
+  return (1 - Math.abs(climate.moisture - 0.52)) + climate.temperature * 0.2;
+}
 
-  if (temperature < 0.28) return "arctic";
-  if (moisture < 0.26 && temperature > 0.42) return "desert";
-  if (moisture > 0.68 && temperature > 0.52) return "jungle";
-  if (moisture > 0.48) return "woods";
-  return "grassland";
+function biomeSeedOffset(biome) {
+  return {
+    grassland: 101,
+    jungle: 211,
+    arctic: 307,
+    desert: 401,
+  }[biome] || 0;
 }
 
 function smoothNoise(q, r, scale, seed) {
