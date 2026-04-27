@@ -148,7 +148,7 @@ export interface SeatAssignment {
   host: boolean;
 }
 
-export const DEFAULT_ACTION_POINTS_PER_TURN = 3;
+export const DEFAULT_ACTION_POINTS_PER_TURN = 5;
 
 const MAP_SIZES = {
   Small: { radius: 7 },

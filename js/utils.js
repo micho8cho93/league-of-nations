@@ -1,4 +1,4 @@
-export const MAX_ACTIONS_PER_TURN = 3;
+export const MAX_ACTIONS_PER_TURN = 5;
 
 export const MAP_SIZES = {
   Small: { label: "Small", radius: 7 },

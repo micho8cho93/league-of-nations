@@ -2,7 +2,7 @@ import { TILE_TYPES } from "./utils.js";
 
 export const BALANCE = {
   actions: {
-    defaultActionPoints: 3,
+    defaultActionPoints: 5,
     costs: {
       assignWorkers: 1,
       buildTile: 1,

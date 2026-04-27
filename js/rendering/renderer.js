@@ -66,7 +66,7 @@ export function setupScene(scene, renderer, THREE = window.THREE) {
 
   // Add fog for depth perception (quality-aware)
   const qualitySettings = getQualitySettings();
-  if (SCENE_CONFIG.fog.enabled && qualitySettings.fogEnabled) {
+  if (SCENE_CONFIG.fog) {
     scene.fog = new THREE.Fog(
       SCENE_CONFIG.fog.color,
       SCENE_CONFIG.fog.near,

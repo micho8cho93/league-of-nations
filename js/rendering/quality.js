@@ -6,6 +6,8 @@
  * Can be overridden with custom settings for fine-tuning.
  */
 
+import { SCENE_CONFIG } from "./config.js";
+
 /**
  * Quality preset definitions.
  * Each preset controls different rendering parameters.
@@ -47,6 +49,10 @@ export const QUALITY_PRESETS = {
 let currentQuality = { ...QUALITY_PRESETS.medium };
 let currentQualityLevel = "medium";
 
+function forceFogEnabled(settings) {
+  return { ...settings, fogEnabled: true };
+}
+
 /**
  * Set the quality level by preset name.
  * @param {string} level - 'low', 'medium', or 'high'
@@ -58,7 +64,7 @@ export function setQualityLevel(level = "medium", overrides = {}) {
     level = "medium";
   }
   currentQualityLevel = level;
-  currentQuality = { ...QUALITY_PRESETS[level], ...overrides };
+  currentQuality = forceFogEnabled({ ...QUALITY_PRESETS[level], ...overrides });
   console.log(`Quality level set to: ${level}`, currentQuality);
 }
 
@@ -67,7 +73,7 @@ export function setQualityLevel(level = "medium", overrides = {}) {
  * @returns {Object} Current quality configuration
  */
 export function getQualitySettings() {
-  return { ...currentQuality };
+  return forceFogEnabled(currentQuality);
 }
 
 /**
@@ -84,7 +90,8 @@ export function getQualityLevel() {
  * @param {*} value - New value
  */
 export function updateQualitySetting(key, value) {
-  currentQuality[key] = value;
+  currentQuality[key] = key === "fogEnabled" ? true : value;
+  if (key === "fogEnabled") currentQuality.fogEnabled = true;
   console.log(`Quality setting updated: ${key} = ${value}`);
 }
 
@@ -133,15 +140,13 @@ export function applyQualitySettings(renderer, scene, keyLight, THREE) {
   }
 
   // Apply fog
-  if (scene.fog) {
-    scene.fog = settings.fogEnabled
-      ? new THREE.Fog(0x1a3a4d, 8, 140)
-      : null;
+  if (SCENE_CONFIG.fog) {
+    scene.fog = new THREE.Fog(0x1a3a4d, 8, 140);
   }
 
   console.log(
     `Quality settings applied: pixelRatio=${actualPixelRatio}, ` +
-    `shadows=${settings.shadowsEnabled}, fog=${settings.fogEnabled}`
+    `shadows=${settings.shadowsEnabled}, fog=true`
   );
 }
 
