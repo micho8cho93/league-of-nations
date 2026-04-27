@@ -11,6 +11,7 @@ import {
 } from "./multiplayer/client.js";
 import { setQualityLevel, detectRecommendedQuality } from "./rendering/quality.js";
 import { preloadAll, exposeDebug } from "./rendering/assetLoader.js";
+import { MusicManager, isPlayerInBattle } from "./music.js";
 
 const setupScreen = document.getElementById("setup-screen");
 const setupForm = document.getElementById("setup-form");
@@ -67,6 +68,7 @@ let multiplayer = new LeagueMultiplayerClient();
 let lobbyState = null;
 let multiplayerStartHandled = false;
 let syncingLobbyInputs = false;
+let musicManager = null;
 
 setSessionOnlyNote();
 
@@ -367,6 +369,31 @@ async function start(nextGame, { multiplayerSnapshot = null } = {}) {
   if (multiplayerSnapshot) renderMultiplayerSnapshotDebug(multiplayerSnapshot, game.playerId);
   window.__leagueOfNations = { game, renderer, ui, multiplayer, multiplayerSnapshot };
 
+  // Initialize music manager
+  if (!musicManager) {
+    musicManager = new MusicManager();
+  }
+  musicManager.startBackgroundMusic();
+
+  // Set up music state tracking
+  const originalChanged = game.changed.bind(game);
+  game.changed = function(source) {
+    originalChanged(source);
+    // Update music based on battle state
+    if (source === "battle" || source === "war" || source === "turn_end") {
+      updateMusicState();
+    }
+  };
+
+  function updateMusicState() {
+    const playerInBattle = isPlayerInBattle(game, game.playerId);
+    if (playerInBattle && !musicManager.isInBattle) {
+      musicManager.startBattleMusic();
+    } else if (!playerInBattle && musicManager.isInBattle) {
+      musicManager.stopBattleMusic();
+    }
+  }
+
   // Expose quality controls to console for debugging
   window.__quality = { setQualityLevel, detectRecommendedQuality };
 }
@@ -381,6 +408,16 @@ function handleAuthoritativeSnapshot(snapshot) {
   ui.setGame(game);
   renderMultiplayerSnapshotDebug(snapshot, game.playerId);
   window.__leagueOfNations = { game, renderer, ui, multiplayer, multiplayerSnapshot: snapshot };
+
+  // Update music state based on new game state
+  if (musicManager) {
+    const playerInBattle = isPlayerInBattle(game, game.playerId);
+    if (playerInBattle && !musicManager.isInBattle) {
+      musicManager.startBattleMusic();
+    } else if (!playerInBattle && musicManager.isInBattle) {
+      musicManager.stopBattleMusic();
+    }
+  }
 }
 
 function createGameFromServerSnapshot(snapshot) {
