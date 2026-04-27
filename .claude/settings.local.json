@@ -8,7 +8,8 @@
       "Bash(node --check js/bot.js)",
       "Bash(node --check js/game.js)",
       "Bash(node --check js/ui.js)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(git add:*)"
     ]
   }
 }

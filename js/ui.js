@@ -561,6 +561,7 @@ class GameUI {
     const flows = this.projectResourceFlows(player);
     const foodClass = flows.food < 0 || player.resources.food + flows.food < 0 ? "bad" : "good";
     const happinessEnabled = this.game.settings.happinessEnabled !== false;
+    document.querySelectorAll(".ui-tooltip[data-floating-tooltip='true']").forEach((tooltip) => tooltip.remove());
     this.resourcePanel.innerHTML = `
       ${resourceRow({
         id: "money",
@@ -1449,20 +1450,55 @@ export function createTooltip(element, content) {
   const tooltip = document.createElement("div");
   tooltip.id = id;
   tooltip.className = "ui-tooltip";
+  tooltip.dataset.floatingTooltip = "true";
   tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
   tooltip.textContent = content;
-  element.append(tooltip);
+  document.body.append(tooltip);
 
-  const close = () => element.classList.remove("tooltip-open");
+  const place = () => {
+    const rect = element.getBoundingClientRect();
+    const margin = 10;
+    const width = Math.min(280, window.innerWidth - margin * 2);
+    tooltip.style.width = `${width}px`;
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const left = Math.min(window.innerWidth - tooltipRect.width - margin, Math.max(margin, rect.right - tooltipRect.width));
+    const below = rect.bottom + 7;
+    const above = rect.top - tooltipRect.height - 7;
+    const top = below + tooltipRect.height + margin <= window.innerHeight ? below : Math.max(margin, above);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  };
+  const open = () => {
+    document.querySelectorAll(".tooltip-open").forEach((item) => {
+      if (item !== element) item.classList.remove("tooltip-open");
+    });
+    document.querySelectorAll(".ui-tooltip.is-visible").forEach((item) => {
+      if (item !== tooltip) {
+        item.classList.remove("is-visible");
+        item.hidden = true;
+      }
+    });
+    tooltip.hidden = false;
+    element.classList.add("tooltip-open");
+    place();
+    tooltip.classList.add("is-visible");
+  };
+  const close = () => {
+    element.classList.remove("tooltip-open");
+    tooltip.classList.remove("is-visible");
+    tooltip.hidden = true;
+  };
+  element.addEventListener("pointerenter", open);
+  element.addEventListener("pointermove", place);
+  element.addEventListener("pointerleave", close);
+  element.addEventListener("focus", open);
   element.addEventListener("blur", close);
   element.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });
   element.addEventListener("click", () => {
-    const wasOpen = element.classList.contains("tooltip-open");
-    document.querySelectorAll(".tooltip-open").forEach((item) => item.classList.remove("tooltip-open"));
-    if (wasOpen) return;
-    element.classList.add("tooltip-open");
+    open();
     window.setTimeout(() => {
       document.addEventListener("pointerdown", (event) => {
         if (!element.contains(event.target)) close();

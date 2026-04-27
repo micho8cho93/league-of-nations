@@ -410,6 +410,13 @@ button:disabled {
   background: #2d3b4f;
 }
 
+.tool-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  fill: currentColor;
+}
+
 .action-counter {
   border-color: #557064;
   background: #183328;
@@ -778,10 +785,8 @@ button:disabled {
 }
 
 .ui-tooltip {
-  position: absolute;
-  right: 8px;
-  top: calc(100% + 7px);
-  z-index: 12;
+  position: fixed;
+  z-index: 50;
   width: min(280px, calc(100vw - 40px));
   border: 1px solid #4a6073;
   border-radius: 7px;
@@ -800,7 +805,8 @@ button:disabled {
 .has-tooltip:hover .ui-tooltip,
 .has-tooltip:focus-visible .ui-tooltip,
 .has-tooltip:focus-within .ui-tooltip,
-.has-tooltip.tooltip-open .ui-tooltip {
+.has-tooltip.tooltip-open .ui-tooltip,
+.ui-tooltip.is-visible {
   opacity: 1;
   transform: translateY(0);
 }

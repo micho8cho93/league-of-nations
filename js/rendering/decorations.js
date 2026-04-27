@@ -2,15 +2,42 @@
  * Decoration and visual element builders for the game map.
  * Extracted from HexMapRenderer to improve code organization.
  *
+ * OPTIMIZATION: This module uses material pooling (materialPool.js) to reuse materials.
+ * Instead of creating new materials for every decoration, we cache and reuse them.
+ * This significantly reduces memory usage and garbage collection pressure.
+ *
  * Functions here are pure geometry builders that create Three.js meshes and groups.
  * They take a `renderer` parameter to register animations with the HexMapRenderer.
  */
 
 import { hash2d } from "../utils.js";
-import { getMaterialPreset } from "./config.js";
+import { getMaterialPreset as getPresetConfig } from "./config.js";
+import { getMaterialPreset, getColoredMaterial } from "./materialPool.js";
+import { getDecorationDensity } from "./quality.js";
 import { createLowPolyInfantry, createLowPolyTank, createLowPolyAircraft, createLowPolyShip } from "./assets.js";
+import { getModelSync, hasGLB } from "./assetLoader.js";
 
 const TAU = Math.PI * 2;
+
+// ============================================================================
+// HELPER: Quality-Aware Decoration Skipping
+// ============================================================================
+
+/**
+ * Check if a decoration should be rendered based on quality settings.
+ * Uses tile coordinates for deterministic pseudo-random behavior.
+ *
+ * @param {Object} tile - Tile with q, r coordinates
+ * @param {number} salt - Variation salt (e.g., tile.id * 13)
+ * @returns {boolean} True if decoration should be rendered
+ */
+export function shouldRenderDecoration(tile, salt = 0) {
+  const density = getDecorationDensity();
+  if (density >= 1.0) return true;
+  // Use tile hash for deterministic decisions (same tile always same decision)
+  const threshold = hash2d(tile.q * 7 + salt, tile.r * 11 - salt, 9999) * (1 - density);
+  return threshold > density;
+}
 
 // ============================================================================
 // HELPER: Animation Registration
@@ -47,18 +74,20 @@ export function getPhaseForTile(renderer, tile, salt = 0) {
 
 /**
  * Add a crate (box) to a group.
+ * Uses material pooling to reuse materials across all crates.
+ *
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {number} x, y, z - Position
- * @param {number} color - Hex color value
+ * @param {number} color - Hex color value (cached per-color)
  * @returns {THREE.Mesh}
  */
 export function addCrate(renderer, group, x, y, z, color = 0xb88755) {
   const THREE = window.THREE;
-  const crate = new THREE.Mesh(
-    new THREE.BoxGeometry(0.14, 0.12, 0.14),
+  const crateMaterial = getColoredMaterial(`crate`, color, () =>
     new THREE.MeshStandardMaterial({ color, roughness: 0.82 })
   );
+  const crate = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.14), crateMaterial);
   crate.position.set(x, y, z);
   group.add(crate);
   return crate;
@@ -177,24 +206,32 @@ export function addWaterNature(renderer, group, tile) {
 
 /**
  * Add a tiny tree (trunk + cone crown).
+ * Uses material pooling; crown color variations are cached separately.
+ *
+ * OPTIMIZATION: Repeated trees share materials. Crown colors are cached by value.
+ *
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {number} x, y, z - Position
  * @param {number} scale - Scale factor
- * @param {number} crownColor - Crown color
+ * @param {number} crownColor - Crown color (cached per-color)
  */
 export function addTinyTree(renderer, group, x, y, z, scale = 1, crownColor = 0x2f8a55) {
   const THREE = window.THREE;
+  const trunkMaterial = getMaterialPreset("wood", THREE, 0x6f4a2d);
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.025 * scale, 0.032 * scale, 0.16 * scale, 5),
-    new THREE.MeshStandardMaterial({ color: 0x6f4a2d, roughness: 0.86 })
+    trunkMaterial
   );
   trunk.position.set(x, y + 0.08 * scale, z);
   group.add(trunk);
 
+  const crownMaterial = getColoredMaterial("treeGreen", crownColor, () =>
+    new THREE.MeshStandardMaterial({ color: crownColor, roughness: 0.9 })
+  );
   const crown = new THREE.Mesh(
     new THREE.ConeGeometry(0.12 * scale, 0.24 * scale, 6),
-    new THREE.MeshStandardMaterial({ color: crownColor, roughness: 0.9 })
+    crownMaterial
   );
   crown.position.set(x, y + 0.25 * scale, z);
   group.add(crown);
@@ -202,17 +239,22 @@ export function addTinyTree(renderer, group, x, y, z, scale = 1, crownColor = 0x
 
 /**
  * Add grass tuft (cone).
+ * Uses material pooling; color variations are cached separately.
+ *
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {number} x, y, z - Position
  * @param {number} scale - Scale factor
- * @param {number} color - Color
+ * @param {number} color - Color (cached per-color)
  */
 export function addGrassTuft(renderer, group, x, y, z, scale = 1, color = 0x5aa65a) {
   const THREE = window.THREE;
+  const grassMaterial = getColoredMaterial("grass", color, () =>
+    new THREE.MeshStandardMaterial({ color, roughness: 0.94 })
+  );
   const tuft = new THREE.Mesh(
     new THREE.ConeGeometry(0.055 * scale, 0.15 * scale, 5),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.94 })
+    grassMaterial
   );
   tuft.position.set(x, y + 0.07 * scale, z);
   tuft.rotation.z = 0.18;
@@ -221,6 +263,8 @@ export function addGrassTuft(renderer, group, x, y, z, scale = 1, color = 0x5aa6
 
 /**
  * Add cactus (stem + arm).
+ * Uses material pooling to share cactus material across all instances.
+ *
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {number} x, y, z - Position
@@ -228,13 +272,19 @@ export function addGrassTuft(renderer, group, x, y, z, scale = 1, color = 0x5aa6
  */
 export function addCactus(renderer, group, x, y, z, scale = 1) {
   const THREE = window.THREE;
-  const mat = new THREE.MeshStandardMaterial({ color: 0x4f8f55, roughness: 0.88 });
+  const cactusMat = getMaterialPreset("jungleGreen", THREE);
 
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025 * scale, 0.035 * scale, 0.22 * scale, 6), mat);
+  const stem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025 * scale, 0.035 * scale, 0.22 * scale, 6),
+    cactusMat
+  );
   stem.position.set(x, y + 0.11 * scale, z);
   group.add(stem);
 
-  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.014 * scale, 0.018 * scale, 0.12 * scale, 6), mat);
+  const arm = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.014 * scale, 0.018 * scale, 0.12 * scale, 6),
+    cactusMat
+  );
   arm.position.set(x + 0.055 * scale, y + 0.13 * scale, z);
   arm.rotation.z = Math.PI / 2;
   group.add(arm);
@@ -242,17 +292,22 @@ export function addCactus(renderer, group, x, y, z, scale = 1) {
 
 /**
  * Add pebble (dodecahedron).
+ * Uses material pooling; color variations are cached separately.
+ *
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {number} x, y, z - Position
  * @param {number} scale - Scale factor
- * @param {number} color - Color
+ * @param {number} color - Color (cached per-color)
  */
 export function addPebble(renderer, group, x, y, z, scale = 1, color = 0x8b8578) {
   const THREE = window.THREE;
+  const pebbleMaterial = getColoredMaterial("pebble", color, () =>
+    new THREE.MeshStandardMaterial({ color, roughness: 0.96 })
+  );
   const pebble = new THREE.Mesh(
     new THREE.DodecahedronGeometry(0.055 * scale, 0),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.96 })
+    pebbleMaterial
   );
   pebble.position.set(x, y + 0.035 * scale, z);
   pebble.scale.y = 0.48;
@@ -261,15 +316,22 @@ export function addPebble(renderer, group, x, y, z, scale = 1, color = 0x8b8578)
 
 /**
  * Add reeds (3 thin cylinders).
+ * Uses material pooling to share reed material across all instances.
+ *
+ * OPTIMIZATION: All reeds share the same pooled material.
+ *
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {number} x, y, z - Position
  */
 export function addReeds(renderer, group, x, y, z) {
   const THREE = window.THREE;
-  const mat = new THREE.MeshStandardMaterial({ color: 0x7ea65b, roughness: 0.9 });
+  const reedMat = getMaterialPreset("reeds", THREE);
   for (let i = 0; i < 3; i += 1) {
-    const reed = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, 0.16 + i * 0.035, 5), mat);
+    const reed = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.008, 0.012, 0.16 + i * 0.035, 5),
+      reedMat
+    );
     reed.position.set(x + (i - 1) * 0.028, y + 0.08 + i * 0.015, z + (i % 2) * 0.025);
     reed.rotation.z = (i - 1) * 0.12;
     group.add(reed);
@@ -401,17 +463,22 @@ export function addLowPolyPerson(renderer, group, {
 
 /**
  * Add tank unit.
+ * Uses a GLB model if assets/models/tank.glb is present; falls back to procedural.
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addTankUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0x53664f, phase = 0 } = {}) {
-  const unit = createLowPolyTank({ color, scale });
+  // getModelSync returns a GLB clone when available, procedural model otherwise.
+  const unit = getModelSync("tank", { color, scale });
+  if (!unit) return;
+
   unit.position.set(x, y, z);
   group.add(unit);
   registerAnimation(renderer, group, unit, "patrol", { phase, duration: 11 });
 
-  // Find turret for scan animation
+  // Turret scan: procedural model marks the turret with rotationalAxis; GLB authors
+  // should name the turret child "turret" or set userData.rotationalAxis = "y".
   const turret = unit.children.find(c => c.userData?.rotationalAxis === "y");
   if (turret) {
     registerAnimation(renderer, group, turret, "turretScan", { phase: phase + 1.1, duration: 9.5, amplitude: 0.75 });
@@ -420,12 +487,15 @@ export function addTankUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, c
 
 /**
  * Add plane unit.
+ * Uses a GLB model if assets/models/plane.glb is present; falls back to procedural.
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addPlaneUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0xb8c6d8, phase = 0 } = {}) {
-  const unit = createLowPolyAircraft({ color, scale });
+  const unit = getModelSync("plane", { color, scale });
+  if (!unit) return;
+
   unit.position.set(x, y, z);
   group.add(unit);
   registerAnimation(renderer, group, unit, "fly", { phase, duration: 12 });
@@ -433,12 +503,15 @@ export function addPlaneUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, 
 
 /**
  * Add ship unit.
+ * Uses a GLB model if assets/models/ship.glb is present; falls back to procedural.
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addShipUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0x3f6f82, phase = 0 } = {}) {
-  const unit = createLowPolyShip({ color, scale });
+  const unit = getModelSync("ship", { color, scale });
+  if (!unit) return;
+
   unit.position.set(x, y, z);
   group.add(unit);
   registerAnimation(renderer, group, unit, "sail", { phase, duration: 10.5 });
@@ -446,18 +519,31 @@ export function addShipUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, c
 }
 
 /**
- * Add infantry unit (squad of 3 soldiers).
+ * Add infantry unit.
+ * When assets/models/infantry.glb is present, uses the GLB (single model placed as-is).
+ * Without a GLB, falls back to the procedural 3-soldier squad formation.
  * @param {HexMapRenderer} renderer - The renderer instance
  * @param {THREE.Group} group - Parent group
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addInfantryUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0xe2dcc8, phase = 0 } = {}) {
+  // GLB override: a single infantry.glb replaces the whole squad.
+  if (hasGLB("infantry")) {
+    const unit = getModelSync("infantry", { color, scale, ownerColor: color });
+    if (unit) {
+      unit.position.set(x, y, z);
+      group.add(unit);
+      registerAnimation(renderer, group, unit, "drillMarch", { phase, duration: 8.5 });
+      return;
+    }
+  }
+
+  // Procedural fallback: 3 soldiers in formation with staggered animation phases.
   const THREE = window.THREE;
   const squad = new THREE.Group();
   squad.position.set(x, y, z);
   squad.scale.setScalar(scale);
 
-  // Create 3 soldiers in formation
   const offsets = [
     [-0.12, -0.08],
     [0.08, -0.02],

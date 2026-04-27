@@ -23,6 +23,8 @@ import { STARTING_PROFILES, militaryPower } from "./nation.js";
 import { createRenderer, setupScene, setupCamera } from "./rendering/renderer.js";
 import { getTileMaterial, colorFromHex } from "./rendering/config.js";
 import * as decorations from "./rendering/decorations.js";
+import { preloadCommonMaterials } from "./rendering/materialPool.js";
+import { getModelSync, hasGLB } from "./rendering/assetLoader.js";
 
 const HEX_SIZE = 1.18;
 const HEX_HEIGHT = 0.36;
@@ -30,6 +32,27 @@ const HEX_GAP = 0.045;
 const LABEL_HIDE_RADIUS = 10;
 const LABEL_FULL_RADIUS = 14;
 const TAU = Math.PI * 2;
+
+const UNIT_MODEL_KEYS = Object.freeze({
+  infantry: "infantry",
+  tanks: "tank",
+  air: "plane",
+  naval: "ship",
+});
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
+}
+
+function easeOutCubic(t) {
+  return 1 - (1 - t) ** 3;
+}
+
+function easeOutBack(t) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
+}
 
 
 export function createMapData(settings) {
@@ -433,11 +456,6 @@ function terrainColor(tile) {
   return TILE_COLORS[tile.type] || TILE_COLORS[TILE_TYPES.EMPTY];
 }
 
-function colorFromHex(hex) {
-  const value = String(hex || "#ffffff").replace("#", "");
-  return Number.parseInt(value, 16);
-}
-
 function visualTierForTile(tile, nations) {
   const tech = nations[tile.ownerId]?.tech;
   if (!tech) return 0;
@@ -538,15 +556,10 @@ class MilitaryAnimationManager {
   playMove(action) {
     const path = this.mapRenderer._tilePathToVectors(action.path || [action.fromTileId, action.targetTileId], action.unitType);
     if (path.length < 2) return;
-    const mesh = this.mapRenderer._createUnitEffectMesh(action.unitType, action.nationId);
-    mesh.position.copy(path[0]);
-    this.mapRenderer.effectGroup.add(mesh);
-    this.mapRenderer.effects.push({
-      type: "unitMove",
-      mesh,
-      unitType: action.unitType || "infantry",
+    const unitVisual = this.mapRenderer._spawnTransientUnitVisual(action.unitType || "infantry", action.nationId, path[0]);
+    if (!unitVisual) return;
+    this.mapRenderer.playUnitMove(unitVisual, action.fromTileId, action.targetTileId, {
       path,
-      start: performance.now(),
       duration: this.durationFor(action.unitType, path.length, false),
       targetTileId: action.targetTileId,
     });
@@ -556,34 +569,35 @@ class MilitaryAnimationManager {
     const path = this.mapRenderer._tilePathToVectors(action.path || [action.fromTileId, action.targetTileId], action.unitType);
     if (!path.length) return;
     const unitType = action.unitType || "infantry";
-    if (unitType === "air") {
-      const mesh = this.mapRenderer._createUnitEffectMesh(unitType, action.attackerId || action.nationId);
-      mesh.position.copy(path[0]);
-      this.mapRenderer.effectGroup.add(mesh);
-      this.mapRenderer.effects.push({
-        type: "unitMove",
-        mesh,
-        unitType,
-        path,
-        start: performance.now(),
-        duration: this.durationFor(unitType, path.length, true),
+    const attackerVisual = this.mapRenderer._spawnTransientUnitVisual(unitType, action.attackerId || action.nationId, path[0]);
+    if (attackerVisual) {
+      this.mapRenderer.playUnitAttack(attackerVisual, this.mapRenderer._getPrimaryUnitVisual(action.targetTileId), {
         targetTileId: action.targetTileId,
-        explodeAtEnd: true,
+        path,
+        unitType,
+        disposeOnFinish: unitType !== "air",
       });
+    }
+    if (unitType === "air") {
+      if (attackerVisual) {
+        this.mapRenderer.playUnitMove(attackerVisual, action.fromTileId, action.targetTileId, {
+          path,
+          duration: this.durationFor(unitType, path.length, true),
+          targetTileId: action.targetTileId,
+          explodeAtEnd: true,
+          delay: 170,
+        });
+      }
       return;
     }
 
-    const projectile = this.mapRenderer._createProjectileMesh(unitType, action.attackerId || action.nationId);
-    projectile.position.copy(path[0]);
-    this.mapRenderer.effectGroup.add(projectile);
-    this.mapRenderer.effects.push({
-      type: "projectile",
-      mesh: projectile,
+    this.mapRenderer.playProjectileTravel({
       unitType,
+      nationId: action.attackerId || action.nationId,
       path,
-      start: performance.now(),
       duration: this.durationFor(unitType, path.length, true),
       targetTileId: action.targetTileId,
+      delay: 170,
     });
   }
 
@@ -607,6 +621,11 @@ export class HexMapRenderer {
     this.nationLabelSignature = "";
     this.animated = [];
     this.effects = [];
+    this.unitVisualsByTile = new Map();
+    this.transientUnitVisuals = new Set();
+    this.activeMixers = new Set();
+    this.lastRenderTileState = new Map();
+    this.lastAnimationFrameAt = 0;
     this.animationManager = new MilitaryAnimationManager(this);
     this.selectedTileId = null;
     this.militaryHighlights = normalizeMilitaryHighlights();
@@ -626,8 +645,11 @@ export class HexMapRenderer {
 
     // Initialize rendering system using new modules
     const { renderer, scene, camera } = createRenderer(this.canvas, THREE);
-    setupScene(scene, THREE);
+    setupScene(scene, renderer, THREE);
     setupCamera(camera, THREE);
+
+    // Preload common materials to avoid creation stalls during gameplay
+    preloadCommonMaterials(THREE);
 
     this.renderer = renderer;
     this.scene = scene;
@@ -691,10 +713,12 @@ export class HexMapRenderer {
     this.nations = nations || {};
     this.selectedTileId = selectedTileId;
     this.militaryHighlights = normalizeMilitaryHighlights(militaryHighlights);
+    this._queueStateDrivenPresentation(map);
     for (const tile of map.tiles) {
       this._updateTileMesh(tile);
       this._updateDecoration(tile);
     }
+    this.lastRenderTileState = this._snapshotTilePresentationState(map.tiles);
     this._renderTerritoryBorders();
     this._renderTransportOverlay();
     this._renderNationLabels();
@@ -1226,6 +1250,7 @@ export class HexMapRenderer {
     this.decorationSignatures.set(tile.id, signature);
     const existing = this.decorations.get(tile.id);
     if (existing) {
+      this._clearTileUnitVisuals(tile.id);
       this.decorationGroup.remove(existing);
       this.decorations.delete(tile.id);
       existing.traverse((obj) => {
@@ -1297,13 +1322,16 @@ export class HexMapRenderer {
         this._addWaterNature(group, tile);
       }
       if (tile.type === TILE_TYPES.FISHERY) {
-        const dock = new THREE.Mesh(
-          new THREE.BoxGeometry(0.62, 0.055, 0.16),
-          new THREE.MeshStandardMaterial({ color: 0x8b6240, roughness: 0.72 })
-        );
-        dock.position.set(-0.08, 0.08, 0.1);
-        dock.rotation.y = -0.35;
-        group.add(dock);
+        // Try port.glb for the dock structure; fishing boat is always added.
+        if (!this._tryBuildingModel(group, "port", { scale: 1 })) {
+          const dock = new THREE.Mesh(
+            new THREE.BoxGeometry(0.62, 0.055, 0.16),
+            new THREE.MeshStandardMaterial({ color: 0x8b6240, roughness: 0.72 })
+          );
+          dock.position.set(-0.08, 0.08, 0.1);
+          dock.rotation.y = -0.35;
+          group.add(dock);
+        }
         this._addShipUnit(group, { x: 0.28, y: 0.16, z: -0.16, scale: 0.62, color: 0xc58b57, phase: this._phaseForTile(tile, 80) });
       }
       this._addUnitFigure(group, tile, ownerColor, { x: 0, y: 0.2, z: 0, scale: 1.08 });
@@ -1325,7 +1353,7 @@ export class HexMapRenderer {
     const branch = strongestBranchForTile(tile, this.nations);
     const scale = 1 + visualTier * 0.055;
 
-    if (tile.type === TILE_TYPES.FARM) {
+    if (tile.type === TILE_TYPES.FARM && !this._tryBuildingModel(group, "farm", { scale, ownerColor })) {
       const plotCount = 4 + Math.min(2, Math.floor(visualTier / 2));
       for (let i = 0; i < plotCount; i += 1) {
         const plot = new THREE.Mesh(
@@ -1378,7 +1406,7 @@ export class HexMapRenderer {
       }
     }
 
-    if (tile.type === TILE_TYPES.MINE || tile.type === TILE_TYPES.MOUNTAIN_MINE) {
+    if ((tile.type === TILE_TYPES.MINE || tile.type === TILE_TYPES.MOUNTAIN_MINE) && !this._tryBuildingModel(group, "mine", { scale })) {
       const rock = new THREE.Mesh(
         new THREE.ConeGeometry(0.42 * scale, 0.52 + visualTier * 0.08, 5),
         new THREE.MeshStandardMaterial({ color: 0x4f4037, roughness: 0.9 })
@@ -1450,7 +1478,7 @@ export class HexMapRenderer {
       }
     }
 
-    if (tile.type === TILE_TYPES.SCHOOL || tile.type === TILE_TYPES.UNIVERSITY) {
+    if ((tile.type === TILE_TYPES.SCHOOL || tile.type === TILE_TYPES.UNIVERSITY) && !this._tryBuildingModel(group, "university", { scale })) {
       const building = new THREE.Mesh(
         new THREE.BoxGeometry(0.66 + visualTier * 0.05, 0.38 + visualTier * 0.06, 0.46 + visualTier * 0.025),
         new THREE.MeshStandardMaterial({ color: 0x7aa2d8 })
@@ -1526,28 +1554,37 @@ export class HexMapRenderer {
     }
 
     if ([TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.HIGHWAY, TILE_TYPES.AIRPORT].includes(tile.type)) {
-      const pathMat = new THREE.MeshStandardMaterial({
-        color: tile.type === TILE_TYPES.HIGHWAY ? 0x303942 : 0x5d4e42,
-        roughness: 0.82,
-      });
-      const path = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.035, 0.2), pathMat);
-      path.position.set(0, 0.055, 0);
-      path.rotation.y = Math.PI / 6;
-      group.add(path);
-      if (tile.type === TILE_TYPES.RAILROAD || tile.type === TILE_TYPES.AIRPORT) {
-        for (const zOffset of [-0.06, 0.06]) {
-          const rail = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.02, 0.018), new THREE.MeshStandardMaterial({ color: 0x2a2826 }));
-          rail.position.set(0, 0.088, zOffset);
-          rail.rotation.y = Math.PI / 6;
-          group.add(rail);
+      // Choose the registry key for the tile's infrastructure type.
+      const _infraKey = tile.type === TILE_TYPES.RAILROAD ? "rail"
+        : tile.type === TILE_TYPES.AIRPORT ? "airport"
+        : "road"; // covers ROAD and HIGHWAY
+
+      if (!this._tryBuildingModel(group, _infraKey, { scale })) {
+        // Procedural fallback: flat path + optional rail tracks.
+        const pathMat = new THREE.MeshStandardMaterial({
+          color: tile.type === TILE_TYPES.HIGHWAY ? 0x303942 : 0x5d4e42,
+          roughness: 0.82,
+        });
+        const path = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.035, 0.2), pathMat);
+        path.position.set(0, 0.055, 0);
+        path.rotation.y = Math.PI / 6;
+        group.add(path);
+        if (tile.type === TILE_TYPES.RAILROAD || tile.type === TILE_TYPES.AIRPORT) {
+          for (const zOffset of [-0.06, 0.06]) {
+            const rail = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.02, 0.018), new THREE.MeshStandardMaterial({ color: 0x2a2826 }));
+            rail.position.set(0, 0.088, zOffset);
+            rail.rotation.y = Math.PI / 6;
+            group.add(rail);
+          }
         }
       }
+      // Parked plane is always shown for airport tiles, regardless of GLB.
       if (tile.type === TILE_TYPES.AIRPORT) {
         this._addPlaneUnit(group, { x: 0.24, y: 0.22, z: 0.22, scale: 0.62, color: 0xc6d1dc, phase: this._phaseForTile(tile, 84) });
       }
     }
 
-    if (tile.type === TILE_TYPES.FACTORY) {
+    if (tile.type === TILE_TYPES.FACTORY && !this._tryBuildingModel(group, "factory", { scale })) {
       const body = new THREE.Mesh(
         new THREE.BoxGeometry(0.8 + visualTier * 0.055, 0.4 + visualTier * 0.06, 0.52 + visualTier * 0.035),
         new THREE.MeshStandardMaterial({ color: 0x383d46, roughness: 0.7 })
@@ -1609,25 +1646,29 @@ export class HexMapRenderer {
     }
 
     if (tile.type === TILE_TYPES.MILITARY) {
-      const base = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.5 * scale, 0.56 * scale, 0.16 + visualTier * 0.02, 6),
-        new THREE.MeshStandardMaterial({ color: 0x733838 })
-      );
-      base.position.set(0, 0.1, 0);
-      group.add(base);
-      const tower = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.2, 0.48 + visualTier * 0.08, 6),
-        new THREE.MeshStandardMaterial({ color: 0xb55151 })
-      );
-      tower.position.set(0, 0.42 + visualTier * 0.04, 0);
-      group.add(tower);
-      if (branch.level > 0 || visualTier >= 3) {
-        const hangar = new THREE.Mesh(
-          new THREE.BoxGeometry(0.38, 0.2, 0.28),
-          new THREE.MeshStandardMaterial({ color: 0x5f3437, roughness: 0.7 })
+      // Try city.glb for the main structure (base, tower, hangar).
+      // Flag, garrisoned units, and drill soldiers always render on top.
+      if (!this._tryBuildingModel(group, "city", { scale, ownerColor })) {
+        const base = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.5 * scale, 0.56 * scale, 0.16 + visualTier * 0.02, 6),
+          new THREE.MeshStandardMaterial({ color: 0x733838 })
         );
-        hangar.position.set(-0.34, 0.17, -0.16);
-        group.add(hangar);
+        base.position.set(0, 0.1, 0);
+        group.add(base);
+        const tower = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.15, 0.2, 0.48 + visualTier * 0.08, 6),
+          new THREE.MeshStandardMaterial({ color: 0xb55151 })
+        );
+        tower.position.set(0, 0.42 + visualTier * 0.04, 0);
+        group.add(tower);
+        if (branch.level > 0 || visualTier >= 3) {
+          const hangar = new THREE.Mesh(
+            new THREE.BoxGeometry(0.38, 0.2, 0.28),
+            new THREE.MeshStandardMaterial({ color: 0x5f3437, roughness: 0.7 })
+          );
+          hangar.position.set(-0.34, 0.17, -0.16);
+          group.add(hangar);
+        }
       }
       this._addFlag(group, { x: -0.42, y: 0.08, z: 0.3, color: ownerColor, phase: this._phaseForTile(tile, 70), scale: 0.92 });
       if (branch.branch === "tanks" && branch.level > 0) {
@@ -1680,6 +1721,119 @@ export class HexMapRenderer {
   _phaseForTile(tile, salt = 0) {
     const seed = (this.map?.seed || 1) + salt * 997;
     return hash2d(tile.q * 17 + salt * 11, tile.r * 19 - salt * 13, seed) * TAU;
+  }
+
+  _snapshotTilePresentationState(tiles = []) {
+    const snapshot = new Map();
+    for (const tile of tiles) {
+      snapshot.set(tile.id, {
+        ownerId: tile.ownerId || null,
+        unitStrength: tile.unit?.strength || 0,
+        unitType: visualBranchesForUnit(tile.unit)[0]?.branch || tile.unit?.branch || "infantry",
+      });
+    }
+    return snapshot;
+  }
+
+  _queueStateDrivenPresentation(map) {
+    if (!this.lastRenderTileState.size) return;
+    for (const tile of map.tiles) {
+      const previous = this.lastRenderTileState.get(tile.id);
+      if (!previous) continue;
+      const nextOwnerId = tile.ownerId || null;
+      const nextUnitStrength = tile.unit?.strength || 0;
+      if (previous.ownerId !== nextOwnerId && nextOwnerId) this.playCaptureEffect(tile.id);
+      if (previous.unitStrength > 0 && nextUnitStrength <= 0) {
+        const deathVisual = this._spawnTransientUnitVisual(previous.unitType, previous.ownerId, this._tileCenterVector(tile.id, previous.unitType), { autoIdle: false });
+        if (deathVisual) this.playUnitDespawn(deathVisual, { tileId: tile.id });
+      }
+    }
+  }
+
+  _tileCenterVector(tileIdValue, unitType = "infantry") {
+    return this._tilePathToVectors([tileIdValue], unitType)[0] || null;
+  }
+
+  _clearTileUnitVisuals(tileIdValue) {
+    const visuals = this.unitVisualsByTile.get(tileIdValue);
+    if (!visuals) return;
+    for (const visual of visuals) this._detachUnitVisual(visual);
+    this.unitVisualsByTile.delete(tileIdValue);
+  }
+
+  _attachUnitVisual(tileIdValue, root, unitType, nationId) {
+    if (!tileIdValue || !root) return null;
+    const visual = this._createUnitVisual(root, unitType, nationId, { tileId: tileIdValue, autoIdle: true });
+    if (!visual) return null;
+    if (!this.unitVisualsByTile.has(tileIdValue)) this.unitVisualsByTile.set(tileIdValue, []);
+    this.unitVisualsByTile.get(tileIdValue).push(visual);
+    return visual;
+  }
+
+  _getPrimaryUnitVisual(tileIdValue) {
+    return this.unitVisualsByTile.get(tileIdValue)?.[0] || null;
+  }
+
+  _createUnitVisual(root, unitType = "infantry", nationId = null, { tileId = null, transient = false, autoIdle = true } = {}) {
+    if (!root) return null;
+    const THREE = window.THREE;
+    if (transient) this._ensureUniqueMaterials(root);
+    const visual = {
+      root,
+      unitType,
+      nationId,
+      tileId,
+      transient,
+      state: "idle",
+      mixer: null,
+      clips: new Map(),
+      action: null,
+      basePosition: root.position.clone(),
+      baseRotation: new THREE.Vector3(root.rotation.x, root.rotation.y, root.rotation.z),
+      baseScale: root.scale.clone(),
+    };
+    const animations = root.userData?.animations || [];
+    if (animations.length && THREE?.AnimationMixer) {
+      visual.mixer = new THREE.AnimationMixer(root);
+      animations.forEach((clip) => visual.clips.set(clip.name, clip));
+      this.activeMixers.add(visual);
+    }
+    if (transient) this.transientUnitVisuals.add(visual);
+    if (autoIdle) this.playUnitIdle(visual);
+    return visual;
+  }
+
+  _ensureUniqueMaterials(object) {
+    object.traverse?.((child) => {
+      if (!child.material) return;
+      if (Array.isArray(child.material)) child.material = child.material.map((material) => material.clone());
+      else child.material = child.material.clone();
+    });
+  }
+
+  _detachUnitVisual(visual) {
+    if (!visual) return;
+    if (visual.mixer) {
+      visual.mixer.stopAllAction();
+      visual.mixer.uncacheRoot(visual.root);
+      this.activeMixers.delete(visual);
+    }
+    this.transientUnitVisuals.delete(visual);
+  }
+
+  _playVisualClip(visual, clipName, { loop = true, timeScale = 1, clampWhenFinished = false } = {}) {
+    if (!visual?.mixer || !visual.clips.has(clipName)) return false;
+    const THREE = window.THREE;
+    visual.action?.fadeOut?.(0.14);
+    const action = visual.mixer.clipAction(visual.clips.get(clipName));
+    action.reset();
+    action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    action.clampWhenFinished = clampWhenFinished;
+    action.enabled = true;
+    action.timeScale = timeScale;
+    action.fadeIn(0.12).play();
+    visual.action = action;
+    return true;
   }
 
   _registerAnimation(root, object, kind, options = {}) {
@@ -1782,29 +1936,33 @@ export class HexMapRenderer {
     goldRing.position.set(0, 0.12, 0);
     group.add(goldRing);
 
-    const plinth = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.26 * scale, 0.36 * scale, 0.24 * scale, 6),
-      new THREE.MeshStandardMaterial({
-        color: owner.lerp(capitalColor, 0.32),
-        metalness: 0.18,
-        roughness: 0.42,
-        emissive: new THREE.Color(ownerColor).multiplyScalar(0.22),
-      })
-    );
-    plinth.position.set(0, 0.25 * scale, 0);
-    group.add(plinth);
+    // Try capital.glb for the central structure (plinth + crown).
+    // Glow rings and flag always render on top regardless of GLB.
+    if (!this._tryBuildingModel(group, "capital", { scale, ownerColor })) {
+      const plinth = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.26 * scale, 0.36 * scale, 0.24 * scale, 6),
+        new THREE.MeshStandardMaterial({
+          color: owner.lerp(capitalColor, 0.32),
+          metalness: 0.18,
+          roughness: 0.42,
+          emissive: new THREE.Color(ownerColor).multiplyScalar(0.22),
+        })
+      );
+      plinth.position.set(0, 0.25 * scale, 0);
+      group.add(plinth);
 
-    const crown = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.17 * scale, 0.3 * scale, 0.28 * scale, 5),
-      new THREE.MeshStandardMaterial({
-        color: 0xffd166,
-        metalness: 0.5,
-        roughness: 0.28,
-        emissive: new THREE.Color(0xffd166).multiplyScalar(0.36),
-      })
-    );
-    crown.position.set(0, 0.58 * scale, 0);
-    group.add(crown);
+      const crown = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.17 * scale, 0.3 * scale, 0.28 * scale, 5),
+        new THREE.MeshStandardMaterial({
+          color: 0xffd166,
+          metalness: 0.5,
+          roughness: 0.28,
+          emissive: new THREE.Color(0xffd166).multiplyScalar(0.36),
+        })
+      );
+      crown.position.set(0, 0.58 * scale, 0);
+      group.add(crown);
+    }
     this._addFlag(group, { x: 0.34 * scale, y: 0.18 * scale, z: -0.28 * scale, color: ownerColor, phase: this._phaseForTile(tile, 91), scale: 0.72 * scale });
   }
 
@@ -1827,6 +1985,8 @@ export class HexMapRenderer {
         z: position.z + zOffset,
         scale: (position.scale || 1) * strengthScale,
         phase: this._phaseForTile(tile, 80 + branches.indexOf(entry)),
+        tileId: tile.id,
+        nationId: tile.ownerId,
       };
       if (entry.branch === "tanks") {
         this._addTankUnit(group, { ...options, color: 0x53664f });
@@ -1841,19 +2001,61 @@ export class HexMapRenderer {
   }
 
   _addTankUnit(group, options = {}) {
-    return decorations.addTankUnit(this, group, options);
+    const before = group.children.length;
+    const result = decorations.addTankUnit(this, group, options);
+    this._registerAddedUnitVisuals(group, before, "tanks", options);
+    return result;
   }
 
   _addPlaneUnit(group, options = {}) {
-    return decorations.addPlaneUnit(this, group, options);
+    const before = group.children.length;
+    const result = decorations.addPlaneUnit(this, group, options);
+    this._registerAddedUnitVisuals(group, before, "air", options);
+    return result;
   }
 
   _addShipUnit(group, options = {}) {
-    return decorations.addShipUnit(this, group, options);
+    const before = group.children.length;
+    const result = decorations.addShipUnit(this, group, options);
+    this._registerAddedUnitVisuals(group, before, "naval", options);
+    return result;
   }
 
   _addInfantryUnit(group, options = {}) {
-    return decorations.addInfantryUnit(this, group, options);
+    const before = group.children.length;
+    const result = decorations.addInfantryUnit(this, group, options);
+    this._registerAddedUnitVisuals(group, before, "infantry", options);
+    return result;
+  }
+
+  _registerAddedUnitVisuals(group, beforeCount, unitType, options = {}) {
+    if (!options.tileId) return;
+    for (const child of group.children.slice(beforeCount)) {
+      this._attachUnitVisual(options.tileId, child, unitType, options.nationId || null);
+    }
+  }
+
+  /**
+   * Attempt to place a registered GLB model for a building/infrastructure tile.
+   * Returns true when a GLB was placed (caller should skip inline procedural rendering).
+   * Returns false when no GLB is loaded for this key (caller runs its own rendering).
+   *
+   * Usage in _buildTileDecoration:
+   *   if (!this._tryBuildingModel(group, 'farm', { scale, ownerColor })) {
+   *     // inline procedural farm code — only runs when farm.glb is absent
+   *   }
+   *
+   * @param {THREE.Group} group   - Parent group to add the model to.
+   * @param {string}      key     - Registry key (e.g. "farm", "mine", "city").
+   * @param {Object}      options - Forwarded to getModelSync (scale, ownerColor, etc.).
+   * @returns {boolean}
+   */
+  _tryBuildingModel(group, key, options = {}) {
+    if (!hasGLB(key)) return false;
+    const model = getModelSync(key, options);
+    if (!model) return false;
+    group.add(model);
+    return true;
   }
 
   _bindInput() {
@@ -2022,6 +2224,10 @@ export class HexMapRenderer {
 	  }
 
   _clearGroups() {
+    for (const visuals of this.unitVisualsByTile.values()) {
+      for (const visual of visuals) this._detachUnitVisual(visual);
+    }
+    for (const visual of this.transientUnitVisuals) this._detachUnitVisual(visual);
     const groups = [this.tileGroup, this.territoryBorderGroup, this.transportGroup, this.highlightGroup, this.decorationGroup, this.effectGroup];
     for (const group of groups) {
       while (group.children.length) {
@@ -2044,11 +2250,18 @@ export class HexMapRenderer {
     this.nationLabels.clear();
     this.animated = [];
     this.effects = [];
+    this.unitVisualsByTile.clear();
+    this.transientUnitVisuals.clear();
+    this.activeMixers.clear();
+    this.lastRenderTileState.clear();
+    this.lastAnimationFrameAt = 0;
   }
 
   _animate(now) {
     requestAnimationFrame(this._animate);
     const time = now * 0.001;
+    const deltaSeconds = this.lastAnimationFrameAt ? Math.min(0.05, Math.max(0, (now - this.lastAnimationFrameAt) * 0.001)) : 0.016;
+    this.lastAnimationFrameAt = now;
     for (let i = this.animated.length - 1; i >= 0; i -= 1) {
       const item = this.animated[i];
       if (!item.object.parent || (item.root && !item.root.parent)) {
@@ -2191,6 +2404,13 @@ export class HexMapRenderer {
         item.object.position.z = Math.sin(angle) * radius;
       }
     }
+    for (const visual of [...this.activeMixers]) {
+      if (!visual.root?.parent) {
+        this._detachUnitVisual(visual);
+        continue;
+      }
+      visual.mixer?.update(deltaSeconds);
+    }
     this._updateEffects(now);
     this._updateNationLabels();
     this.renderer.render(this.scene, this.camera);
@@ -2214,74 +2434,15 @@ export class HexMapRenderer {
   _updateEffects(now) {
     for (let i = this.effects.length - 1; i >= 0; i -= 1) {
       const effect = this.effects[i];
-      if (effect.type === "move") {
-        const t = clamp((now - effect.start) / effect.duration, 0, 1);
-        const segmentCount = Math.max(1, effect.path.length - 1);
-        const exact = t * segmentCount;
-        const index = Math.min(segmentCount - 1, Math.floor(exact));
-        const local = exact - index;
-        const from = effect.path[index];
-        const to = effect.path[Math.min(effect.path.length - 1, index + 1)];
-        effect.mesh.position.lerpVectors(from, to, local);
-        effect.mesh.position.y += Math.sin(t * Math.PI) * 0.35;
-        if (t >= 1) {
-          this.effectGroup.remove(effect.mesh);
-          effect.mesh.geometry.dispose();
-          effect.mesh.material.dispose();
-          this.effects.splice(i, 1);
-          this._flashTile(effect.targetTileId);
-        }
-      } else if (effect.type === "unitMove" || effect.type === "projectile") {
-        const t = clamp((now - effect.start) / effect.duration, 0, 1);
-        const segmentCount = Math.max(1, effect.path.length - 1);
-        const exact = t * segmentCount;
-        const index = Math.min(segmentCount - 1, Math.floor(exact));
-        const local = exact - index;
-        const from = effect.path[index];
-        const to = effect.path[Math.min(effect.path.length - 1, index + 1)];
-        effect.mesh.position.lerpVectors(from, to, local);
-        const arcHeight = effect.unitType === "air" ? 1.35 : effect.type === "projectile" ? 0.72 : effect.unitType === "infantry" ? 0.14 : 0.22;
-        effect.mesh.position.y += Math.sin(t * Math.PI) * arcHeight;
-        if (effect.unitType === "infantry") {
-          effect.mesh.position.x += Math.sin(t * Math.PI * 8) * 0.035;
-          effect.mesh.rotation.y += effect.type === "projectile" ? 0.02 : 0.08;
-        }
-        if (effect.unitType === "tanks") {
-          effect.mesh.rotation.z = Math.sin(t * Math.PI * 8) * 0.08;
-          if (effect.type === "projectile") effect.mesh.rotation.y += 0.05;
-        }
-        if (effect.unitType === "naval") {
-          effect.mesh.rotation.z = Math.sin(t * Math.PI * 4) * 0.08;
-          effect.mesh.position.y += Math.sin(t * Math.PI * 5) * 0.04;
-          if (effect.type === "projectile") effect.mesh.rotation.y += 0.04;
-        }
-        if (effect.unitType === "air") {
-          effect.mesh.rotation.z = -0.42 + Math.sin(t * Math.PI * 2) * 0.12;
-        }
-        if (t >= 1) {
-          this._disposeEffectMesh(effect.mesh);
-          this.effects.splice(i, 1);
-          if (effect.explodeAtEnd || effect.type === "projectile") this._explodeTile(effect.targetTileId, effect.unitType);
-          else this._flashTile(effect.targetTileId);
-        }
-      } else if (effect.type === "flash") {
-        const t = clamp((now - effect.start) / effect.duration, 0, 1);
-        effect.mesh.material.opacity = 1 - t;
-        effect.mesh.scale.setScalar(1 + t * 0.8);
-        if (t >= 1) {
-          this._disposeEffectMesh(effect.mesh);
-          this.effects.splice(i, 1);
-        }
-      } else if (effect.type === "explosion") {
-        const t = clamp((now - effect.start) / effect.duration, 0, 1);
-        effect.mesh.children.forEach((child, index) => {
-          child.material.opacity = Math.max(0, 1 - t);
-          child.scale.setScalar(1 + t * (1.2 + index * 0.2));
-        });
-        if (t >= 1) {
-          this._disposeEffectMesh(effect.mesh);
-          this.effects.splice(i, 1);
-        }
+      const start = effect.start + (effect.delay || 0);
+      if (now < start) continue;
+      const t = clamp((now - start) / Math.max(1, effect.duration || 1), 0, 1);
+      effect.update?.(effect, t, now);
+      if (t < 1) continue;
+      try {
+        effect.finish?.(effect);
+      } finally {
+        this.effects.splice(i, 1);
       }
     }
   }
@@ -2298,7 +2459,7 @@ export class HexMapRenderer {
       });
   }
 
-  _createUnitEffectMesh(unitType = "infantry", nationId = null) {
+  _createProceduralUnitEffectMesh(unitType = "infantry", nationId = null) {
     const THREE = window.THREE;
     const color = colorFromHex(this.nations[nationId]?.color || OWNER_COLORS[0]);
     const group = new THREE.Group();
@@ -2349,6 +2510,219 @@ export class HexMapRenderer {
     return group;
   }
 
+  _createUnitEffectMesh(unitType = "infantry", nationId = null) {
+    const modelKey = UNIT_MODEL_KEYS[unitType];
+    const ownerColor = this.nations[nationId]?.color || OWNER_COLORS[0];
+    if (modelKey && hasGLB(modelKey)) {
+      const model = getModelSync(modelKey, {
+        color: colorFromHex(ownerColor),
+        ownerColor: colorFromHex(ownerColor),
+      });
+      if (model) return model;
+    }
+    return this._createProceduralUnitEffectMesh(unitType, nationId);
+  }
+
+  _createTimedEffect(effect) {
+    this.effects.push({ start: performance.now(), duration: 300, delay: 0, ...effect });
+    return this.effects[this.effects.length - 1];
+  }
+
+  _spawnTransientUnitVisual(unitType = "infantry", nationId = null, position = null, { autoIdle = true } = {}) {
+    const root = this._createUnitEffectMesh(unitType, nationId);
+    if (!root) return null;
+    if (position) root.position.copy(position);
+    this.effectGroup.add(root);
+    return this._createUnitVisual(root, unitType, nationId, { transient: true, autoIdle });
+  }
+
+  playUnitIdle(unitVisual) {
+    if (!unitVisual?.root) return;
+    unitVisual.state = "idle";
+    unitVisual.root.position.copy(unitVisual.basePosition);
+    unitVisual.root.rotation.set(unitVisual.baseRotation.x, unitVisual.baseRotation.y, unitVisual.baseRotation.z);
+    unitVisual.root.scale.copy(unitVisual.baseScale);
+    this._setObjectOpacity(unitVisual.root, 1);
+    this._playVisualClip(unitVisual, "Idle");
+  }
+
+  playUnitMove(unitVisual, _fromTile, _toTile, { path = [], duration = 700, targetTileId = null, explodeAtEnd = false, delay = 0 } = {}) {
+    if (!unitVisual?.root || path.length < 2) return;
+    this._playVisualClip(unitVisual, "Move");
+    this._createTimedEffect({
+      type: "unitMove",
+      unitVisual,
+      path,
+      duration,
+      delay,
+      unitType: unitVisual.unitType,
+      targetTileId,
+      explodeAtEnd,
+      update: (effect, t) => {
+        const eased = easeInOutCubic(t);
+        const segmentCount = Math.max(1, effect.path.length - 1);
+        const exact = eased * segmentCount;
+        const index = Math.min(segmentCount - 1, Math.floor(exact));
+        const local = exact - index;
+        const from = effect.path[index];
+        const to = effect.path[Math.min(effect.path.length - 1, index + 1)];
+        effect.unitVisual.root.position.lerpVectors(from, to, local);
+        const arcHeight = effect.unitType === "air" ? 1.35 : effect.unitType === "infantry" ? 0.14 : effect.unitType === "naval" ? 0.2 : 0.18;
+        effect.unitVisual.root.position.y += Math.sin(eased * Math.PI) * arcHeight;
+        this._orientVisualAlongPath(effect.unitVisual.root, from, to, effect.unitType);
+      },
+      finish: (effect) => {
+        if (effect.unitVisual.transient) this._disposeUnitVisual(effect.unitVisual);
+        if (effect.explodeAtEnd) this._explodeTile(effect.targetTileId, effect.unitType);
+        else this._flashTile(effect.targetTileId);
+      },
+    });
+  }
+
+  playUnitAttack(attackerVisual, targetVisual, { targetTileId = null, path = [], unitType = "infantry", disposeOnFinish = false } = {}) {
+    if (!attackerVisual?.root) return;
+    const anchor = attackerVisual.root.position.clone();
+    const target = path[1] || this._tileCenterVector(targetTileId, unitType) || anchor.clone();
+    const direction = target.clone().sub(anchor);
+    this._orientVisualAlongPath(attackerVisual.root, anchor, target, unitType);
+    this._playVisualClip(attackerVisual, "Attack", { loop: false, clampWhenFinished: true, timeScale: 1.2 });
+    this._createTimedEffect({
+      type: "attackWindup",
+      unitVisual: attackerVisual,
+      duration: 220,
+      update: (effect, t) => {
+        const anticipation = t < 0.45 ? -easeOutCubic(t / 0.45) : easeOutBack((t - 0.45) / 0.55);
+        effect.unitVisual.root.position.copy(anchor);
+        if (direction.lengthSq() > 0) effect.unitVisual.root.position.addScaledVector(direction.clone().normalize(), anticipation * 0.18);
+        effect.unitVisual.root.position.y += Math.sin(t * Math.PI) * (unitType === "air" ? 0.1 : 0.04);
+      },
+      finish: () => {
+        if (targetVisual) this.playHitReaction(targetVisual);
+        if (disposeOnFinish && attackerVisual.transient) this._disposeUnitVisual(attackerVisual);
+      },
+    });
+  }
+
+  playProjectileTravel({ unitType = "infantry", nationId = null, path = [], duration = 700, targetTileId = null, delay = 0 } = {}) {
+    if (path.length < 2) return;
+    const projectile = this._createProjectileMesh(unitType, nationId);
+    projectile.position.copy(path[0]);
+    this.effectGroup.add(projectile);
+    this._createTimedEffect({
+      type: "projectile",
+      mesh: projectile,
+      path,
+      duration,
+      delay,
+      unitType,
+      targetTileId,
+      update: (effect, t) => {
+        const eased = easeOutCubic(t);
+        const segmentCount = Math.max(1, effect.path.length - 1);
+        const exact = eased * segmentCount;
+        const index = Math.min(segmentCount - 1, Math.floor(exact));
+        const local = exact - index;
+        const from = effect.path[index];
+        const to = effect.path[Math.min(effect.path.length - 1, index + 1)];
+        effect.mesh.position.lerpVectors(from, to, local);
+        effect.mesh.position.y += Math.sin(eased * Math.PI) * 0.72;
+        this._orientVisualAlongPath(effect.mesh, from, to, unitType);
+      },
+      finish: (effect) => {
+        this._disposeEffectMesh(effect.mesh);
+        this.playHitEffect(effect.targetTileId, { unitType: effect.unitType });
+      },
+    });
+  }
+
+  playHitReaction(unitVisual) {
+    if (!unitVisual?.root) return;
+    const baseScale = unitVisual.baseScale.clone();
+    const basePosition = unitVisual.basePosition.clone();
+    this._playVisualClip(unitVisual, "Hit", { loop: false, clampWhenFinished: true, timeScale: 1.35 });
+    this._createTimedEffect({
+      type: "hitReaction",
+      unitVisual,
+      duration: 180,
+      update: (effect, t) => {
+        const kick = Math.sin(t * Math.PI);
+        effect.unitVisual.root.scale.set(
+          baseScale.x * (1 + kick * 0.08),
+          baseScale.y * (1 - kick * 0.16),
+          baseScale.z * (1 + kick * 0.08)
+        );
+        effect.unitVisual.root.position.y = basePosition.y + kick * 0.05;
+      },
+      finish: (effect) => this.playUnitIdle(effect.unitVisual),
+    });
+  }
+
+  playHitEffect(tileIdValue, { unitType = "infantry" } = {}) {
+    this._explodeTile(tileIdValue, unitType);
+  }
+
+  playUnitDespawn(unitVisual, { tileId = null } = {}) {
+    if (!unitVisual?.root) return;
+    this._playVisualClip(unitVisual, "Death", { loop: false, clampWhenFinished: true, timeScale: 1.1 });
+    this._createTimedEffect({
+      type: "death",
+      unitVisual,
+      duration: 320,
+      update: (effect, t) => {
+        const fade = 1 - easeOutCubic(t);
+        effect.unitVisual.root.position.y = effect.unitVisual.basePosition.y - t * 0.3;
+        effect.unitVisual.root.rotation.z = effect.unitVisual.baseRotation.z + t * 0.6;
+        effect.unitVisual.root.scale.setScalar(Math.max(0.01, 1 - t * 0.22));
+        this._setObjectOpacity(effect.unitVisual.root, fade);
+      },
+      finish: (effect) => {
+        this._disposeUnitVisual(effect.unitVisual);
+        if (tileId) this.playHitEffect(tileId, { unitType: effect.unitVisual.unitType });
+      },
+    });
+  }
+
+  playCaptureEffect(tileIdValue) {
+    if (!tileIdValue || !this.map) return;
+    const THREE = window.THREE;
+    const tile = this.map.tiles.find((item) => item.id === tileIdValue);
+    if (!tile) return;
+    const ownerColor = colorFromHex(this.nations[tile.ownerId]?.color || "#ffd166");
+    const { x, z } = axialToWorld(tile.q, tile.r, HEX_SIZE);
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.76, 0.05, 8, 48),
+      new THREE.MeshBasicMaterial({ color: ownerColor, transparent: true, opacity: 0.92, depthWrite: false })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(x, isWaterLike(tile) ? 0.34 : 0.78, z);
+    this.effectGroup.add(ring);
+    this._createTimedEffect({
+      type: "capture",
+      mesh: ring,
+      duration: 420,
+      update: (effect, t) => {
+        effect.mesh.material.opacity = 0.92 * (1 - t);
+        effect.mesh.scale.setScalar(0.85 + easeOutBack(t) * 0.9);
+      },
+      finish: (effect) => this._disposeEffectMesh(effect.mesh),
+    });
+  }
+
+  _orientVisualAlongPath(object, from, to, unitType = "infantry") {
+    if (!object || !from || !to) return;
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    if (dx || dz) object.rotation.y = -Math.atan2(dz, dx);
+    if (unitType === "air") object.rotation.z = -0.35;
+    if (unitType === "naval") object.rotation.z = Math.sin(performance.now() * 0.01) * 0.04;
+  }
+
+  _disposeUnitVisual(unitVisual) {
+    if (!unitVisual?.root) return;
+    this._detachUnitVisual(unitVisual);
+    this._disposeEffectMesh(unitVisual.root);
+  }
+
   _createProjectileMesh(unitType = "infantry", nationId = null) {
     const THREE = window.THREE;
     const group = new THREE.Group();
@@ -2391,7 +2765,18 @@ export class HexMapRenderer {
       group.add(burst);
     });
     this.effectGroup.add(group);
-    this.effects.push({ type: "explosion", mesh: group, start: performance.now(), duration: unitType === "infantry" ? 360 : 560 });
+    this._createTimedEffect({
+      type: "explosion",
+      mesh: group,
+      duration: unitType === "infantry" ? 320 : 480,
+      update: (effect, t) => {
+        effect.mesh.children.forEach((child, index) => {
+          child.material.opacity = Math.max(0, 1 - t);
+          child.scale.setScalar(1 + easeOutBack(t) * (1.1 + index * 0.18));
+        });
+      },
+      finish: (effect) => this._disposeEffectMesh(effect.mesh),
+    });
   }
 
   _disposeEffectMesh(mesh) {
@@ -2399,7 +2784,8 @@ export class HexMapRenderer {
     this.effectGroup.remove(mesh);
     mesh.traverse?.((obj) => {
       if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) obj.material.dispose();
+      if (Array.isArray(obj.material)) obj.material.forEach((material) => material.dispose());
+      else if (obj.material) obj.material.dispose();
     });
   }
 
@@ -2416,6 +2802,15 @@ export class HexMapRenderer {
     ring.rotation.x = Math.PI / 2;
     ring.position.set(x, 0.72, z);
     this.effectGroup.add(ring);
-    this.effects.push({ type: "flash", mesh: ring, start: performance.now(), duration: 520 });
+    this._createTimedEffect({
+      type: "flash",
+      mesh: ring,
+      duration: 340,
+      update: (effect, t) => {
+        effect.mesh.material.opacity = 1 - t;
+        effect.mesh.scale.setScalar(1 + easeOutBack(t) * 0.65);
+      },
+      finish: (effect) => this._disposeEffectMesh(effect.mesh),
+    });
   }
 }

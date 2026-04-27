@@ -1,6 +1,11 @@
 /**
  * Centralized visual configuration for the Three.js rendering system.
  * Consolidates material presets, lighting setup, color palettes, and renderer settings.
+ *
+ * OPTIMIZATION NOTES:
+ * - Material presets should be retrieved via materialPool.js for reuse
+ * - Quality settings should be applied via quality.js to control renderer performance
+ * - New materials and presets should follow the naming convention for consistency
  */
 
 import { BIOME_COLORS, TILE_COLORS, TILE_TYPES, isWaterLike } from "../utils.js";
@@ -226,7 +231,7 @@ export function colorToHex(color) {
 }
 
 // ============================================================================
-// EXPORT SUMMARY
+// EXPORT SUMMARY & INITIALIZATION
 // ============================================================================
 
 /**
@@ -240,3 +245,14 @@ export const RENDERING_PRESETS = {
   camera: CAMERA_CONFIG,
   materials: MATERIAL_PRESETS,
 };
+
+/**
+ * Make getMaterialPreset globally available for material pool caching.
+ * Called during renderer initialization.
+ */
+export function initializeConfigGlobals() {
+  window.__renderingConfig = {
+    getMaterialPreset,
+    MATERIAL_PRESETS,
+  };
+}

@@ -168,10 +168,18 @@
 	          <div id="status-strip" class="status-strip"></div>
 	          <div class="tool-dock" aria-label="Game tools">
 	            <button id="action-counter" class="tool-circle action-counter" type="button" aria-label="Action points left" title="Action points left">3</button>
-	            <button id="tech-tree-btn" class="tool-circle" type="button" aria-label="Tech tree" title="Tech Tree">T</button>
+	            <button id="tech-tree-btn" class="tool-circle" type="button" aria-label="Tech tree" title="Tech Tree">
+	              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+	                <path d="M12 3.5 7 9.25h2.5L5.5 14h4L7 18h4v3h2v-3h4l-2.5-4h4l-4-4.75H17L12 3.5Z" />
+	              </svg>
+	            </button>
 	            <button id="replay-tutorial-btn" class="tool-circle" type="button" aria-label="Tutorial" title="Tutorial">?</button>
 	            <button id="leaderboard-btn" class="tool-circle" type="button" aria-label="Leaderboard" title="Leaderboard">#</button>
-	            <button id="board-diplomacy-btn" class="tool-circle" type="button" aria-label="Diplomacy" title="Diplomacy">D</button>
+	            <button id="board-diplomacy-btn" class="tool-circle" type="button" aria-label="Diplomacy" title="Diplomacy">
+	              <svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+	                <path d="M12 2.5a9.5 9.5 0 1 0 0 19 9.5 9.5 0 0 0 0-19Zm0 2c.78 0 1.6 1.05 2.15 2.8h-4.3C10.4 5.55 11.22 4.5 12 4.5Zm-3.08 0.9a11.42 11.42 0 0 0-1.14 1.9H6.42a7.57 7.57 0 0 1 2.5-1.9Zm6.16 0a7.57 7.57 0 0 1 2.5 1.9h-1.36a11.42 11.42 0 0 0-1.14-1.9ZM5.36 9.3h1.79A13.7 13.7 0 0 0 7 12c0 .95.1 1.86.28 2.7H5.36a7.5 7.5 0 0 1 0-5.4Zm3.84 0h5.6c.2.82.3 1.74.3 2.7s-.1 1.88-.3 2.7H9.2A11.6 11.6 0 0 1 8.9 12c0-.96.1-1.88.3-2.7Zm7.65 0h1.79a7.5 7.5 0 0 1 0 5.4h-1.92c.18-.84.28-1.75.28-2.7 0-.95-.05-1.86-.15-2.7ZM6.42 16.7h1.36c.32.73.7 1.37 1.14 1.9a7.57 7.57 0 0 1-2.5-1.9Zm3.43 0h4.3c-.55 1.75-1.37 2.8-2.15 2.8s-1.6-1.05-2.15-2.8Zm6.37 0h1.36a7.57 7.57 0 0 1-2.5 1.9c.44-.53.82-1.17 1.14-1.9Z" />
+	              </svg>
+	            </button>
 	            <button id="board-trade-btn" class="tool-circle" type="button" aria-label="Trade" title="Trade">$</button>
 	          </div>
 	          <div class="top-actions">
@@ -201,6 +209,11 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- GLTFLoader attaches to window.THREE.GLTFLoader; required for the GLB asset pipeline. -->
+  <!-- Safe to remove if you never use GLB models — procedural fallbacks work without it. -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <!-- SkeletonUtils enables safe cloning for future animated/skinned GLB assets. -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/SkeletonUtils.js"></script>
   <script src="https://unpkg.com/@colyseus/sdk@^0.17.0/dist/colyseus.js"></script>
   <script>
     // Local uses ws://localhost:2567; production uses wss://league-of-nations-production.up.railway.app.

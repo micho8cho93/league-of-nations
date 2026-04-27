@@ -9,6 +9,8 @@ import {
   readLobbyState,
   normalizeRoomCode,
 } from "./multiplayer/client.js";
+import { setQualityLevel, detectRecommendedQuality } from "./rendering/quality.js";
+import { preloadAll, exposeDebug } from "./rendering/assetLoader.js";
 
 const setupScreen = document.getElementById("setup-screen");
 const setupForm = document.getElementById("setup-form");
@@ -336,16 +338,32 @@ function showMultiplayerError(error) {
   }
 }
 
-function start(nextGame, { multiplayerSnapshot = null } = {}) {
+async function start(nextGame, { multiplayerSnapshot = null } = {}) {
   game = nextGame;
   setupScreen.hidden = true;
   lobbyScreen.hidden = true;
   app.hidden = false;
+
+  // Initialize rendering quality based on device capabilities
+  // Can be overridden via console: window.__quality.setQualityLevel('high')
+  const recommendedQuality = detectRecommendedQuality();
+  setQualityLevel(recommendedQuality);
+
+  // Preload all registered GLB models before the first render.
+  // With no .glb files present, every attempt 404s silently and resolves
+  // immediately — no perceptible delay.  When GLBs exist, they are guaranteed
+  // to be cached by the time setMap() builds the scene.
+  await preloadAll();
+  exposeDebug(); // window.__assetLoader for console inspection
+
   renderer = new HexMapRenderer(canvas);
   renderer.setMap(game.map);
   ui = bindUI(game, renderer, { multiplayerClient: multiplayerSnapshot ? multiplayer : null });
   if (multiplayerSnapshot) renderMultiplayerSnapshotDebug(multiplayerSnapshot, game.playerId);
   window.__leagueOfNations = { game, renderer, ui, multiplayer, multiplayerSnapshot };
+
+  // Expose quality controls to console for debugging
+  window.__quality = { setQualityLevel, detectRecommendedQuality };
 }
 
 function handleAuthoritativeSnapshot(snapshot) {

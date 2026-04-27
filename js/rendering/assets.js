@@ -17,15 +17,16 @@ const TAU = Math.PI * 2;
 
 function createMaterial(color, { roughness = 0.7, metalness = 0, emissive = null, transparent = false, opacity = 1 } = {}) {
   const THREE = window.THREE;
-  const mat = new THREE.MeshStandardMaterial({
+  const materialOptions = {
     color,
     roughness,
     metalness,
-    emissive: emissive ? new THREE.Color(emissive) : undefined,
     transparent,
     opacity,
     flatShading: false,
-  });
+  };
+  if (emissive != null) materialOptions.emissive = new THREE.Color(emissive);
+  const mat = new THREE.MeshStandardMaterial(materialOptions);
   return mat;
 }
 
