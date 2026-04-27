@@ -56,6 +56,7 @@ interface SettingsPayload {
   mapSize?: unknown;
   waterLevel?: unknown;
   landscapeDiversity?: unknown;
+  fogOfWarEnabled?: unknown;
   nationCount?: unknown;
   maxTurns?: unknown;
   turnTimerMinutes?: unknown;
@@ -107,6 +108,7 @@ class GameSettings extends Schema {
   @type("string") mapSize = "Medium";
   @type("string") waterLevel = "Balanced";
   @type("string") landscapeDiversity = "Balanced";
+  @type("boolean") fogOfWarEnabled = false;
   @type("uint8") nationCount = 5;
   @type("uint16") maxTurns = 30;
   @type("uint16") turnTimerMinutes = 0;
@@ -311,6 +313,10 @@ export class LeagueRoom extends Room {
       this.state.settings.landscapeDiversity = sanitizeMapOptionLevel(payload.landscapeDiversity);
     }
 
+    if (payload.fogOfWarEnabled !== undefined) {
+      this.state.settings.fogOfWarEnabled = Boolean(payload.fogOfWarEnabled);
+    }
+
     if (payload.nationCount !== undefined) {
       const minimumNations = Math.max(2, this.state.players.size, this.highestClaimedNationIndex());
       this.state.settings.nationCount = clampInteger(payload.nationCount, minimumNations, 16, this.state.settings.nationCount);
@@ -352,6 +358,7 @@ export class LeagueRoom extends Room {
       mapSize: this.state.settings.mapSize as InitialGameSettings["mapSize"],
       waterLevel: this.state.settings.waterLevel as InitialGameSettings["waterLevel"],
       landscapeDiversity: this.state.settings.landscapeDiversity as InitialGameSettings["landscapeDiversity"],
+      fogOfWarEnabled: this.state.settings.fogOfWarEnabled,
       nationCount: this.state.settings.nationCount,
       maxTurns: this.state.settings.maxTurns,
       turnTimerMinutes: this.state.settings.turnTimerMinutes,

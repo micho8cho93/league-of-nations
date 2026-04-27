@@ -260,18 +260,20 @@ test("room settings use turnTimerMinutes and accept legacy timeLimitMinutes", as
   assert.equal(room.state.settings.turnTimerMinutes, 7);
 });
 
-test("room settings preserve map options and happiness toggle", async () => {
+test("room settings preserve map options, fog, and happiness toggle", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
 
   room.messages.updateSettings(creator.client, {
     waterLevel: "High",
     landscapeDiversity: "Low",
+    fogOfWarEnabled: true,
     happinessEnabled: false,
   });
 
   assert.equal(room.state.settings.waterLevel, "High");
   assert.equal(room.state.settings.landscapeDiversity, "Low");
+  assert.equal(room.state.settings.fogOfWarEnabled, true);
   assert.equal(room.state.settings.happinessEnabled, false);
 
   const gameState = startGame(room, creator);
@@ -279,10 +281,13 @@ test("room settings preserve map options and happiness toggle", async () => {
 
   assert.equal(gameState.settings.waterLevel, "High");
   assert.equal(gameState.settings.landscapeDiversity, "Low");
+  assert.equal(gameState.settings.fogOfWarEnabled, true);
   assert.equal(gameState.settings.happinessEnabled, false);
   assert.equal(snapshot.settings.waterLevel, "High");
   assert.equal(snapshot.settings.landscapeDiversity, "Low");
+  assert.equal(snapshot.settings.fogOfWarEnabled, true);
   assert.equal(snapshot.settings.happinessEnabled, false);
+  assert.equal(snapshot.gameState.settings.fogOfWarEnabled, true);
 });
 
 test("gameplay build action is accepted for the active player", async () => {

@@ -32,6 +32,8 @@ const HEX_GAP = 0.045;
 const LABEL_HIDE_RADIUS = 10;
 const LABEL_FULL_RADIUS = 14;
 const TAU = Math.PI * 2;
+const FOG_COLOR = 0x13202a;
+const FOG_EMISSIVE = 0x081018;
 
 const UNIT_MODEL_KEYS = Object.freeze({
   infantry: "infantry",
@@ -625,16 +627,18 @@ export class HexMapRenderer {
     this.transientUnitVisuals = new Set();
     this.activeMixers = new Set();
     this.lastRenderTileState = new Map();
+    this.lastRenderVisibleTileIds = null;
     this.lastAnimationFrameAt = 0;
     this.animationManager = new MilitaryAnimationManager(this);
     this.selectedTileId = null;
     this.militaryHighlights = normalizeMilitaryHighlights();
     this.hoveredTileId = null;
-	    this.map = null;
-	    this.nations = {};
-	    this.minCamRadius = 8.5;
-	    this.maxCamRadius = 78;
-	    this._initThree();
+    this.visibility = null;
+    this.map = null;
+    this.nations = {};
+    this.minCamRadius = 8.5;
+    this.maxCamRadius = 78;
+    this._initThree();
     this._bindInput();
     this._animate = this._animate.bind(this);
     requestAnimationFrame(this._animate);
@@ -685,13 +689,15 @@ export class HexMapRenderer {
     window.addEventListener("resize", () => this._resize());
   }
 
-	  setMap(map) {
-	    this.map = map;
-	    this.target.set(0, 0, 0);
-	    this._setZoomBoundsForMap(map);
-	    this.camRadius = this.maxCamRadius;
-	    this._updateCamera();
-	    this._clearGroups();
+  setMap(map) {
+    this.map = map;
+    this.visibility = null;
+    this.hoveredTileId = null;
+    this.target.set(0, 0, 0);
+    this._setZoomBoundsForMap(map);
+    this.camRadius = this.maxCamRadius;
+    this._updateCamera();
+    this._clearGroups();
 
     const THREE = window.THREE;
     for (const tile of map.tiles) {
@@ -708,17 +714,19 @@ export class HexMapRenderer {
     }
   }
 
-  renderState(map, nations, selectedTileId = null, militaryHighlights = null) {
+  renderState(map, nations, selectedTileId = null, militaryHighlights = null, visibility = null) {
     this.map = map;
     this.nations = nations || {};
     this.selectedTileId = selectedTileId;
     this.militaryHighlights = normalizeMilitaryHighlights(militaryHighlights);
+    this.visibility = visibility?.enabled ? visibility : null;
     this._queueStateDrivenPresentation(map);
     for (const tile of map.tiles) {
       this._updateTileMesh(tile);
       this._updateDecoration(tile);
     }
     this.lastRenderTileState = this._snapshotTilePresentationState(map.tiles);
+    this.lastRenderVisibleTileIds = this.visibility?.enabled ? new Set(this.visibility.visibleTileIds || []) : null;
     this._renderTerritoryBorders();
     this._renderTransportOverlay();
     this._renderNationLabels();
@@ -728,7 +736,7 @@ export class HexMapRenderer {
   focusTile(tileIdValue) {
     if (!this.map) return;
     const tile = this.map.tiles.find((item) => item.id === tileIdValue);
-    if (!tile) return;
+    if (!tile || !this._isTileVisible(tile.id)) return;
     const { x, z } = axialToWorld(tile.q, tile.r, HEX_SIZE);
     this.target.set(x, 0, z);
     this._updateCamera();
@@ -819,14 +827,33 @@ export class HexMapRenderer {
     const THREE = window.THREE;
     const mesh = this.tileMeshes.get(tile.id);
     if (!mesh) return;
+    const highlight = this._highlightKind(tile.id);
+    const isWaterTile = isWaterLike(tile);
+    mesh.scale.y = isWaterTile ? 0.34 : 1;
+    const baseY = isWaterTile ? -0.1 : HEX_HEIGHT / 2;
+    if (!this._isTileVisible(tile.id)) {
+      mesh.material.color.setHex(FOG_COLOR);
+      mesh.material.emissive.setHex(FOG_EMISSIVE);
+      mesh.material.roughness = 1;
+      mesh.material.metalness = 0;
+      mesh.material.transparent = false;
+      mesh.material.opacity = 1;
+      mesh.material.needsUpdate = true;
+      mesh.position.y = baseY;
+      return;
+    }
+
     const base = new THREE.Color(terrainColor(tile));
     if (tile.ownerId && this.nations[tile.ownerId]) {
       base.lerp(new THREE.Color(this.nations[tile.ownerId].color), 0.42);
     }
     if (tile.effects?.floodedTurns > 0) base.lerp(new THREE.Color(0x3d9dcc), 0.5);
-    mesh.material.color = base;
-    const emissive = new THREE.Color(terrainColor(tile)).multiplyScalar(isWaterLike(tile) ? 0.14 : 0.05);
-    const highlight = this._highlightKind(tile.id);
+    mesh.material.color.copy(base);
+    mesh.material.roughness = isWaterTile ? 0.45 : 0.86;
+    mesh.material.metalness = isWaterTile ? 0.12 : 0.04;
+    mesh.material.transparent = false;
+    mesh.material.opacity = 1;
+    const emissive = new THREE.Color(terrainColor(tile)).multiplyScalar(isWaterTile ? 0.14 : 0.05);
     if (highlight === "move") emissive.add(new THREE.Color(0x39d9a3).multiplyScalar(0.42));
     if (highlight === "attack") emissive.add(new THREE.Color(0xff7142).multiplyScalar(0.5));
     if (highlight === "source") emissive.add(new THREE.Color(0xffdf7a).multiplyScalar(0.58));
@@ -834,14 +861,19 @@ export class HexMapRenderer {
     if (tile.id === this.hoveredTileId) emissive.add(new THREE.Color(0xffffff).multiplyScalar(0.12));
     if (tile.ownerId && this.nations[tile.ownerId]) emissive.add(new THREE.Color(this.nations[tile.ownerId].color).multiplyScalar(0.18));
     if (tile.isCapital) emissive.add(new THREE.Color(0xffd700).multiplyScalar(0.28));
-    mesh.material.emissive = emissive;
+    mesh.material.emissive.copy(emissive);
     mesh.material.needsUpdate = true;
 
-    const isWaterTile = isWaterLike(tile);
-    mesh.scale.y = isWaterTile ? 0.34 : 1;
     const selectedLift = highlight ? 0.09 : tile.id === this.selectedTileId ? 0.08 : tile.id === this.hoveredTileId ? 0.05 : 0;
-    const baseY = isWaterTile ? -0.1 : HEX_HEIGHT / 2;
     mesh.position.y = baseY + selectedLift;
+  }
+
+  _isTileVisible(tileIdValue) {
+    return !this.visibility?.enabled || this.visibility.visibleTileIds?.has(tileIdValue);
+  }
+
+  _visibilitySignature() {
+    return this.visibility?.enabled ? this.visibility.signature || "" : "all";
   }
 
   _highlightKind(tileIdValue) {
@@ -854,13 +886,17 @@ export class HexMapRenderer {
   _renderMilitaryHighlights() {
     this._clearHighlightGroup();
     if (!this.map) return;
-    const source = this.militaryHighlights.sourceTileId ? this.map.tiles.find((tile) => tile.id === this.militaryHighlights.sourceTileId) : null;
+    const source = this.militaryHighlights.sourceTileId && this._isTileVisible(this.militaryHighlights.sourceTileId)
+      ? this.map.tiles.find((tile) => tile.id === this.militaryHighlights.sourceTileId)
+      : null;
     if (source) this._addHighlightRing(source, 0xffd166, { radius: 0.96, tube: 0.046, opacity: 0.96, yOffset: 0.12 });
     for (const tileIdValue of this.militaryHighlights.moveTargetIds) {
+      if (!this._isTileVisible(tileIdValue)) continue;
       const tile = this.map.tiles.find((item) => item.id === tileIdValue);
       if (tile) this._addHighlightRing(tile, 0x3ce0aa, { radius: 0.86, tube: 0.04, opacity: 0.78, yOffset: 0.1 });
     }
     for (const tileIdValue of this.militaryHighlights.attackTargetIds) {
+      if (!this._isTileVisible(tileIdValue)) continue;
       const tile = this.map.tiles.find((item) => item.id === tileIdValue);
       if (tile) this._addHighlightRing(tile, 0xff6a38, { radius: 0.88, tube: 0.052, opacity: 0.88, yOffset: 0.13 });
     }
@@ -868,11 +904,14 @@ export class HexMapRenderer {
 
   _renderTerritoryBorders() {
     if (!this.map) return;
-    const signature = this.map.tiles
-      .filter((tile) => tile.ownerId)
-      .map((tile) => `${tile.id}:${tile.ownerId}`)
-      .sort()
-      .join("|");
+    const signature = [
+      this._visibilitySignature(),
+      this.map.tiles
+        .filter((tile) => tile.ownerId && this._isTileVisible(tile.id))
+        .map((tile) => `${tile.id}:${tile.ownerId}`)
+        .sort()
+        .join("|"),
+    ].join("::");
     if (signature === this.territoryBorderSignature) return;
     this.territoryBorderSignature = signature;
     this._clearObjectGroup(this.territoryBorderGroup);
@@ -880,7 +919,7 @@ export class HexMapRenderer {
     const THREE = window.THREE;
     const index = buildTileIndex(this.map.tiles);
     for (const tile of this.map.tiles) {
-      if (!tile.ownerId || !this.nations[tile.ownerId]) continue;
+      if (!tile.ownerId || !this.nations[tile.ownerId] || !this._isTileVisible(tile.id)) continue;
       const ownerColor = colorFromHex(this.nations[tile.ownerId].color);
       const corners = hexCorners(tile);
       for (const direction of HEX_DIRECTIONS) {
@@ -918,8 +957,9 @@ export class HexMapRenderer {
     if (!this.map) return;
     const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false && (nation.tech?.infrastructure || 0) > 0);
     const signature = [
+      this._visibilitySignature(),
       activeNations.map((nation) => `${nation.id}:${nation.tech?.infrastructure || 0}:${nation.capitalTileId || ""}:${nation.color}`).sort().join("|"),
-      this.map.tiles.filter((tile) => tile.ownerId).map((tile) => `${tile.id}:${tile.ownerId}`).sort().join("|"),
+      this.map.tiles.filter((tile) => tile.ownerId && this._isTileVisible(tile.id)).map((tile) => `${tile.id}:${tile.ownerId}`).sort().join("|"),
     ].join("::");
     if (signature === this.transportSignature) return;
     this.transportSignature = signature;
@@ -956,13 +996,13 @@ export class HexMapRenderer {
     const index = buildTileIndex(this.map.tiles);
     const segmentsByNation = new Map();
     for (const tile of this.map.tiles) {
-      if (!tile.ownerId || !isLand(tile)) continue;
+      if (!tile.ownerId || !isLand(tile) || !this._isTileVisible(tile.id)) continue;
       const nation = this.nations[tile.ownerId];
       if (!nation || (nation.tech?.infrastructure || 0) <= 0) continue;
       const corners = hexCorners(tile);
       for (const direction of HEX_DIRECTIONS) {
         const neighbor = index.get(tileId(tile.q + direction.q, tile.r + direction.r));
-        if (!neighbor || neighbor.ownerId !== tile.ownerId || !isLand(neighbor) || tile.id > neighbor.id) continue;
+        if (!neighbor || neighbor.ownerId !== tile.ownerId || !isLand(neighbor) || tile.id > neighbor.id || !this._isTileVisible(neighbor.id)) continue;
         const [fromIndex, toIndex] = edgeCornersForDirection(direction);
         const from = corners[fromIndex];
         const to = corners[toIndex];
@@ -1080,7 +1120,7 @@ export class HexMapRenderer {
 
   _addAirportOverlay(nation) {
     const capital = this.map?.tiles.find((tile) => tile.id === nation.capitalTileId || (tile.ownerId === nation.id && tile.isCapital));
-    if (!capital) return;
+    if (!capital || !this._isTileVisible(capital.id)) return;
     const THREE = window.THREE;
     const { x, z } = axialToWorld(capital.q, capital.r, HEX_SIZE);
     const group = new THREE.Group();
@@ -1154,16 +1194,18 @@ export class HexMapRenderer {
     if (!nation || !this.map) return null;
     const owned = this.map.tiles.filter((tile) => tile.ownerId === nation.id);
     if (!owned.length) return null;
-    const capital = owned.find((tile) => tile.id === nation.capitalTileId || tile.isCapital);
+    const visibleOwned = owned.filter((tile) => this._isTileVisible(tile.id));
+    if (!visibleOwned.length) return null;
+    const capital = visibleOwned.find((tile) => tile.id === nation.capitalTileId || tile.isCapital);
     if (capital) return capital;
-    const center = owned.reduce((sum, tile) => ({ q: sum.q + tile.q, r: sum.r + tile.r }), { q: 0, r: 0 });
-    center.q /= owned.length;
-    center.r /= owned.length;
-    return owned.reduce((best, tile) => {
+    const center = visibleOwned.reduce((sum, tile) => ({ q: sum.q + tile.q, r: sum.r + tile.r }), { q: 0, r: 0 });
+    center.q /= visibleOwned.length;
+    center.r /= visibleOwned.length;
+    return visibleOwned.reduce((best, tile) => {
       const bestDistance = Math.hypot(best.q - center.q, best.r - center.r);
       const tileDistance = Math.hypot(tile.q - center.q, tile.r - center.r);
       return tileDistance < bestDistance ? tile : best;
-    }, owned[0]);
+    }, visibleOwned[0]);
   }
 
   _nationLabelVisibility() {
@@ -1230,6 +1272,20 @@ export class HexMapRenderer {
   }
 
   _updateDecoration(tile) {
+    if (!this._isTileVisible(tile.id)) {
+      const existing = this.decorations.get(tile.id);
+      if (existing) {
+        this._clearTileUnitVisuals(tile.id);
+        this.decorationGroup.remove(existing);
+        this.decorations.delete(tile.id);
+        existing.traverse((obj) => {
+          if (obj.geometry) obj.geometry.dispose();
+          if (obj.material) obj.material.dispose();
+        });
+      }
+      this.decorationSignatures.set(tile.id, `fog:${this._visibilitySignature()}`);
+      return;
+    }
     const visualTier = visualTierForTile(tile, this.nations);
     const branch = strongestBranchForTile(tile, this.nations);
     const signature = JSON.stringify({
@@ -1737,7 +1793,11 @@ export class HexMapRenderer {
 
   _queueStateDrivenPresentation(map) {
     if (!this.lastRenderTileState.size) return;
+    const currentVisibleIds = this.visibility?.enabled ? this.visibility.visibleTileIds : null;
+    const previousVisibleIds = this.lastRenderVisibleTileIds;
     for (const tile of map.tiles) {
+      if (!this._isTileVisible(tile.id)) continue;
+      if (currentVisibleIds && (!previousVisibleIds || !previousVisibleIds.has(tile.id))) continue;
       const previous = this.lastRenderTileState.get(tile.id);
       if (!previous) continue;
       const nextOwnerId = tile.ownerId || null;
@@ -2131,7 +2191,12 @@ export class HexMapRenderer {
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects(this.tileGroup.children, false);
-    return hits[0]?.object?.userData?.tileId || null;
+    for (const hit of hits) {
+      const tileIdValue = hit?.object?.userData?.tileId || null;
+      if (!tileIdValue || !this._isTileVisible(tileIdValue)) continue;
+      return tileIdValue;
+    }
+    return null;
   }
 
 	  _resize() {
@@ -2254,6 +2319,7 @@ export class HexMapRenderer {
     this.transientUnitVisuals.clear();
     this.activeMixers.clear();
     this.lastRenderTileState.clear();
+    this.lastRenderVisibleTileIds = null;
     this.lastAnimationFrameAt = 0;
   }
 

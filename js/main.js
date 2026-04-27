@@ -35,6 +35,7 @@ const inputs = {
   mapSize: document.getElementById("setup-map-size"),
   waterLevel: document.getElementById("setup-water-level"),
   landscapeDiversity: document.getElementById("setup-landscape-diversity"),
+  fogOfWarEnabled: document.getElementById("setup-fog-of-war"),
   nationCount: document.getElementById("setup-nation-count"),
   maxTurns: document.getElementById("setup-max-turns"),
   turnTimerMinutes: document.getElementById("setup-turn-timer"),
@@ -46,6 +47,7 @@ const lobbyInputs = {
   mapSize: document.getElementById("lobby-map-size"),
   waterLevel: document.getElementById("lobby-water-level"),
   landscapeDiversity: document.getElementById("lobby-landscape-diversity"),
+  fogOfWarEnabled: document.getElementById("lobby-fog-of-war"),
   nationCount: document.getElementById("lobby-nation-count"),
   maxTurns: document.getElementById("lobby-max-turns"),
   turnTimerMinutes: document.getElementById("lobby-turn-timer"),
@@ -144,6 +146,7 @@ function readSetup() {
     mapSize: inputs.mapSize.value,
     waterLevel: inputs.waterLevel.value,
     landscapeDiversity: inputs.landscapeDiversity.value,
+    fogOfWarEnabled: inputs.fogOfWarEnabled.checked,
     nationCount: clampInt(inputs.nationCount.value, 2, 16, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
@@ -261,6 +264,7 @@ function syncLobbyInputs(settings, editable) {
   lobbyInputs.mapSize.value = settings.mapSize;
   lobbyInputs.waterLevel.value = settings.waterLevel || "Balanced";
   lobbyInputs.landscapeDiversity.value = settings.landscapeDiversity || "Balanced";
+  lobbyInputs.fogOfWarEnabled.checked = settings.fogOfWarEnabled === true;
   lobbyInputs.nationCount.value = settings.nationCount;
   lobbyInputs.maxTurns.value = settings.unlimitedMode ? 30 : settings.maxTurns;
   lobbyInputs.turnTimerMinutes.value = settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0;
@@ -279,6 +283,7 @@ function readLobbySetup() {
     mapSize: lobbyInputs.mapSize.value,
     waterLevel: lobbyInputs.waterLevel.value,
     landscapeDiversity: lobbyInputs.landscapeDiversity.value,
+    fogOfWarEnabled: lobbyInputs.fogOfWarEnabled.checked,
     nationCount: clampInt(lobbyInputs.nationCount.value, 2, 16, 5),
     maxTurns: lobbyInputs.unlimitedMode.checked ? 0 : clampInt(lobbyInputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(lobbyInputs.turnTimerMinutes.value, 0, 240, 0),

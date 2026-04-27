@@ -268,6 +268,7 @@ function readSettings(settings = {}) {
     mapSize: settings.mapSize || "Medium",
     waterLevel: settings.waterLevel || "Balanced",
     landscapeDiversity: settings.landscapeDiversity || "Balanced",
+    fogOfWarEnabled: Boolean(settings.fogOfWarEnabled),
     nationCount: Number(settings.nationCount || 5),
     maxTurns: Number(settings.maxTurns || 30),
     turnTimerMinutes,

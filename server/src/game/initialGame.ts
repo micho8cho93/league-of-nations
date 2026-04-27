@@ -6,6 +6,7 @@ export interface InitialGameSettings {
   mapSize: "Small" | "Medium" | "Large" | "Extra Large" | "Enormous";
   waterLevel?: MapOptionLevel;
   landscapeDiversity?: MapOptionLevel;
+  fogOfWarEnabled?: boolean;
   nationCount: number;
   maxTurns: number;
   turnTimerMinutes: number;
@@ -354,6 +355,7 @@ function normalizeInitialGameSettings(settings: InitialGameSettings): InitialGam
     ...settings,
     waterLevel: sanitizeMapOptionLevel(settings.waterLevel),
     landscapeDiversity: sanitizeMapOptionLevel(settings.landscapeDiversity),
+    fogOfWarEnabled: settings.fogOfWarEnabled === true,
     happinessEnabled: settings.happinessEnabled !== false,
   };
 }

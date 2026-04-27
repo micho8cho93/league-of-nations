@@ -152,6 +152,8 @@ export const HEX_DIRECTIONS = [
   { q: -1, r: 1 },
 ];
 
+export const FOG_OF_WAR_RADIUS = 3;
+
 export function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -185,6 +187,40 @@ export function hexDistance(a, b) {
     Math.abs(a.q + a.r - b.q - b.r) +
     Math.abs(a.r - b.r)
   ) / 2;
+}
+
+export function computeFogOfWarVisibility(tiles, territoryIds = [], radius = FOG_OF_WAR_RADIUS) {
+  const index = new Map((tiles || []).map((tile) => [tile.id, tile]));
+  const visibleTileIds = new Set();
+  const seen = new Set();
+  const queue = [];
+  const maxRadius = Math.max(0, Math.floor(Number(radius) || 0));
+
+  for (const territoryId of new Set((territoryIds || []).filter(Boolean))) {
+    const tile = index.get(territoryId);
+    if (!tile || seen.has(tile.id)) continue;
+    seen.add(tile.id);
+    visibleTileIds.add(tile.id);
+    queue.push({ tile, distance: 0 });
+  }
+
+  for (let i = 0; i < queue.length; i += 1) {
+    const current = queue[i];
+    if (current.distance >= maxRadius) continue;
+    for (const neighbor of axialNeighbors(current.tile.q, current.tile.r)) {
+      const next = index.get(tileId(neighbor.q, neighbor.r));
+      if (!next || seen.has(next.id)) continue;
+      seen.add(next.id);
+      visibleTileIds.add(next.id);
+      queue.push({ tile: next, distance: current.distance + 1 });
+    }
+  }
+
+  return {
+    radius: maxRadius,
+    visibleTileIds,
+    signature: [...visibleTileIds].sort().join("|"),
+  };
 }
 
 export function hexMapCoords(radius) {

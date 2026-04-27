@@ -1,9 +1,11 @@
 import {
   BUILDING_TYPES,
+  FOG_OF_WAR_RADIUS,
   MAX_ACTIONS_PER_TURN,
   TILE_TYPES,
   WORKER_MIN,
   WORKER_ROLE_BY_TILE,
+  computeFogOfWarVisibility,
   axialNeighbors,
   clamp,
   deepClone,
@@ -296,7 +298,26 @@ export class GameState {
       .filter(Boolean);
   }
 
+  fogOfWarVisibilityFor(nationId = this.playerId) {
+    if (!this.settings.fogOfWarEnabled) return null;
+    const nation = this.nations[nationId];
+    const territoryIds = Array.isArray(nation?.territory) && nation.territory.length
+      ? nation.territory
+      : this.tiles.filter((tile) => tile.ownerId === nationId).map((tile) => tile.id);
+    const visibility = computeFogOfWarVisibility(this.tiles, territoryIds, FOG_OF_WAR_RADIUS);
+    return {
+      enabled: true,
+      ...visibility,
+    };
+  }
+
+  isTileVisible(tileIdValue, nationId = this.playerId) {
+    const visibility = this.fogOfWarVisibilityFor(nationId);
+    return !visibility || visibility.visibleTileIds.has(tileIdValue);
+  }
+
   selectTile(id) {
+    if (id && !this.isTileVisible(id)) id = null;
     this.selectedTileId = id;
     this.emit({ type: "selection_changed", tileId: id });
   }
@@ -1499,6 +1520,7 @@ function normalizeSettings(raw) {
     mapSize: mapSizes.includes(raw.mapSize) ? raw.mapSize : "Medium",
     waterLevel: mapOptionLevels.includes(raw.waterLevel) ? raw.waterLevel : "Balanced",
     landscapeDiversity: mapOptionLevels.includes(raw.landscapeDiversity) ? raw.landscapeDiversity : "Balanced",
+    fogOfWarEnabled: raw.fogOfWarEnabled === true,
     nationCount,
     maxTurns: unlimitedMode ? 0 : clamp(Math.floor(Number(raw.maxTurns) || 30), 10, 120),
     turnTimerMinutes,

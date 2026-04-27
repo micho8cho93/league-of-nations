@@ -189,8 +189,9 @@ class GameUI {
   scheduleMapResize() {
     for (const delay of [0, 120, 260]) {
       window.setTimeout(() => {
+        const visibility = this.getFogVisibility();
         window.dispatchEvent(new Event("resize"));
-        this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights());
+        this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights(visibility), visibility);
       }, delay);
     }
   }
@@ -198,10 +199,12 @@ class GameUI {
   handleGameEvent(event) {
     if (event.type === "state_changed" && event.source !== "selection") this.refreshMilitarySelection();
     if (event.type === "action_spent" && event.nationId === this.game.playerId) this.flashActionCounter();
-    if (event.type === "unit_animation") this.renderer.playMilitaryAction(event);
+    if (event.type === "unit_animation" && this.isVisibleActionEvent(event)) this.renderer.playMilitaryAction(event);
     if (event.type === "battle_report") {
-      this.renderer.playBattle(event.report);
-      this.renderer.showBattleDelta(event.report);
+      if (this.isVisibleActionEvent(event.report)) {
+        this.renderer.playBattle(event.report);
+        this.renderer.showBattleDelta(event.report);
+      }
     }
     if (event.type === "game_over") this.showVictory();
     this.render();
@@ -292,7 +295,8 @@ class GameUI {
 
   prepareTutorialStep(step) {
     if (step.prepare !== "selectPlayerTile") return;
-    const tile = this.game.tiles.find((item) => item.ownerId === this.game.playerId && isLand(item));
+    const visibility = this.getFogVisibility();
+    const tile = this.game.tiles.find((item) => item.ownerId === this.game.playerId && isLand(item) && this.isTileVisible(item.id, visibility));
     if (!tile) return;
     this.game.selectTile(tile.id);
     this.renderer.focusTile(tile.id);
@@ -314,17 +318,28 @@ class GameUI {
 	  }
 
 	  render() {
+	    const visibility = this.getFogVisibility();
+	    if (this.renderer?.hoveredTileId && !this.isTileVisible(this.renderer.hoveredTileId, visibility)) {
+	      this.renderer.hoveredTileId = null;
+	      this.tooltip.hidden = true;
+	    }
+	    if (this.game.selectedTileId && !this.isTileVisible(this.game.selectedTileId, visibility)) {
+	      this.game.selectedTileId = null;
+	      this.clearMilitarySelection();
+	    }
 	    this.renderStatus();
 	    this.renderResources();
 	    this.refreshBoardDialogs();
 	    this.refreshTechDialog();
-	    this.renderTilePopup();
-	    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights());
+	    this.renderTilePopup(visibility);
+	    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights(visibility), visibility);
     if (this.game.gameOver) this.showVictory();
   }
 
   handleMapSelect(tileId) {
     if (this.game.isProcessingTurn || this.game.gameOver) return;
+    const visibility = this.getFogVisibility();
+    if (tileId && !this.isTileVisible(tileId, visibility)) return;
 
     const currentAction = tileId ? this.militarySelection?.targetActions.get(tileId) : null;
     if (currentAction) {
@@ -361,16 +376,16 @@ class GameUI {
       return;
     }
 
-    const nextMilitarySelection = this.createMilitarySelection(tileId);
+    const nextMilitarySelection = this.createMilitarySelection(tileId, visibility);
     this.militarySelection = nextMilitarySelection;
     this.game.selectTile(tileId);
     if (tileId) this.renderer.focusTile(tileId);
   }
 
-  createMilitarySelection(tileId) {
-    if (!tileId) return null;
-    const actions = this.game.getValidMilitaryActionsFromTile(tileId, this.game.playerId);
-    if (!actions.actions.length) return null;
+  createMilitarySelection(tileId, visibility = this.getFogVisibility()) {
+    if (!tileId || !this.isTileVisible(tileId, visibility)) return null;
+    const actions = this.filterMilitaryActions(this.game.getValidMilitaryActionsFromTile(tileId, this.game.playerId), visibility);
+    if (!actions?.actions.length) return null;
     return {
       sourceTileId: tileId,
       actions,
@@ -387,13 +402,42 @@ class GameUI {
     this.militarySelection = null;
   }
 
-  currentMilitaryHighlights() {
-    if (!this.militarySelection) return null;
+  currentMilitaryHighlights(visibility = this.getFogVisibility()) {
+    if (!this.militarySelection || !this.isTileVisible(this.militarySelection.sourceTileId, visibility)) return null;
     return {
       sourceTileId: this.militarySelection.sourceTileId,
-      moveTargets: this.militarySelection.actions.moveTargets,
-      attackTargets: this.militarySelection.actions.attackTargets,
+      moveTargets: this.militarySelection.actions.moveTargets.filter((entry) => this.isTileVisible(entry.toTileId, visibility)),
+      attackTargets: this.militarySelection.actions.attackTargets.filter((entry) => this.isTileVisible(entry.toTileId, visibility)),
     };
+  }
+
+  getFogVisibility() {
+    return this.game.fogOfWarVisibilityFor(this.game.playerId);
+  }
+
+  isTileVisible(tileId, visibility = this.getFogVisibility()) {
+    return !visibility || visibility.visibleTileIds.has(tileId);
+  }
+
+  isVisibleActionEvent(event, visibility = this.getFogVisibility()) {
+    const tileIds = [event?.fromTileId, event?.targetTileId, event?.tileId].filter(Boolean);
+    if (!tileIds.length) return true;
+    return tileIds.every((tileId) => this.isTileVisible(tileId, visibility));
+  }
+
+  filterMilitaryActions(actions, visibility = this.getFogVisibility()) {
+    if (!actions) return null;
+    const sourceVisible = this.isTileVisible(actions.fromTileId, visibility);
+    if (!sourceVisible) return null;
+    const moveTargets = actions.moveTargets.filter((entry) => this.isTileVisible(entry.toTileId, visibility));
+    const attackTargets = actions.attackTargets.filter((entry) => this.isTileVisible(entry.toTileId, visibility));
+    const filtered = {
+      ...actions,
+      moveTargets,
+      attackTargets,
+      actions: actions.actions.filter((entry) => this.isTileVisible(entry.toTileId, visibility)),
+    };
+    return filtered.actions.length ? filtered : null;
   }
 
   isServerAuthoritative() {
@@ -426,6 +470,7 @@ class GameUI {
       pill(player.name),
       pill(eraLabel(this.game.era)),
       pill(`Turn ${turnLimit}`),
+      pill(this.game.settings.fogOfWarEnabled ? "Fog On" : "Fog Off"),
       pill(`Money $${formatNumber(player.money)}`),
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
       pill(`Happy ${formatNumber(populationHappiness(player))} ${happinessBand(player).label}`),
@@ -724,18 +769,19 @@ class GameUI {
     }).join("");
   }
 
-  renderSelectionPanel() {
+  renderSelectionPanel(visibility = this.getFogVisibility()) {
+    if (!this.selectionPanel) return;
     const tile = this.game.selectedTileId ? this.game.tileById(this.game.selectedTileId) : null;
-    if (!tile) {
+    if (!tile || !this.isTileVisible(tile.id, visibility)) {
       this.selectionPanel.innerHTML = `<p class="muted">No tile selected.</p>`;
       return;
     }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId] : null;
     const active = isTileActive(tile);
     const isPlayerTile = tile.ownerId === this.game.playerId;
-    const validActions = this.game.getValidMilitaryActionsFromTile(tile.id, this.game.playerId);
+    const validActions = this.filterMilitaryActions(this.game.getValidMilitaryActionsFromTile(tile.id, this.game.playerId), visibility);
     const actionContext = this.militarySelection?.sourceTileId === tile.id
-      ? `${validActions.moveTargets.length} move targets · ${validActions.attackTargets.length} attack targets`
+      ? `${validActions?.moveTargets.length || 0} move targets · ${validActions?.attackTargets.length || 0} attack targets`
       : isPlayerTile
         ? "Player tile"
         : owner
@@ -909,9 +955,9 @@ class GameUI {
     this.dialogBody.innerHTML = this.renderTechTreeHtml();
   }
 
-  renderTilePopup() {
+  renderTilePopup(visibility = this.getFogVisibility()) {
     const tile = this.game.selectedTileId ? this.game.tileById(this.game.selectedTileId) : null;
-    if (!tile) {
+    if (!tile || !this.isTileVisible(tile.id, visibility)) {
       this.tilePopup.hidden = true;
       this.tilePopup.classList.remove("military-targeting");
       return;
@@ -995,13 +1041,14 @@ class GameUI {
   renderMilitaryControls(tile) {
     if (tile.type !== TILE_TYPES.MILITARY && !tile.unit?.strength) return "";
     const player = this.game.player;
+    const visibility = this.getFogVisibility();
     const train = tile.type === TILE_TYPES.MILITARY
       ? trainingOptionsForNation(player, this.game.era).map((option) => {
           const cost = formatCost(option.cost);
           return `<div>${this.actionPreview("trainUnit", { ok: true }, cost)}<button class="secondary-btn" data-tile-action="train" data-amount="${option.strength}" data-branch="${option.branch}" ${this.actionDisabledAttribute("trainUnit")} title="${escapeHtml(option.description)}">${escapeHtml(option.label)} (${cost})</button></div>`;
         }).join("")
       : "";
-    const actions = this.game.getValidMilitaryActionsFromTile(tile.id, this.game.playerId);
+    const actions = this.filterMilitaryActions(this.game.getValidMilitaryActionsFromTile(tile.id, this.game.playerId), visibility) || { moveTargets: [], attackTargets: [] };
     const moveCount = actions.moveTargets.length;
     const attackCount = actions.attackTargets.length;
     const targetSummary = tile.unit?.strength
@@ -1027,7 +1074,7 @@ class GameUI {
       return;
     }
     const tile = this.game.tileById(tileId);
-    if (!tile) {
+    if (!tile || !this.isTileVisible(tile.id)) {
       this.tooltip.hidden = true;
       return;
     }
@@ -1082,7 +1129,10 @@ class GameUI {
 
   openTileDetailDialog(tileId) {
     const tile = tileId ? this.game.tileById(tileId) : null;
-    if (!tile) return;
+    if (!tile || !this.isTileVisible(tile.id)) {
+      this.showNotice("Tile hidden", "That tile is hidden by fog of war.");
+      return;
+    }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId] : null;
     const production = owner ? productionForTile(owner, tile, this.game.era) : null;
     const resourceText = production
@@ -1118,19 +1168,24 @@ class GameUI {
       this.showActionDeltas("train", payload.tileId, null, result, { amount: payload.strength ?? payload.amount });
     } else if (actionType === "moveOrAttackUnit" || actionType === "attack") {
       const targetTileId = result.targetTileId || payload.toTileId;
-      if (isOwnAction && result.cost) this.showResourceDeltas(targetTileId, [{ resource: "money", delta: -result.cost }]);
+      const targetVisible = this.isTileVisible(targetTileId);
+      if (isOwnAction && result.cost && targetVisible) this.showResourceDeltas(targetTileId, [{ resource: "money", delta: -result.cost }]);
       if (result.action === "battle" && result.report) {
-        this.renderer.playBattle(result.report);
-        this.renderer.showBattleDelta(result.report);
+        if (this.isVisibleActionEvent(result.report)) {
+          this.renderer.playBattle(result.report);
+          this.renderer.showBattleDelta(result.report);
+        }
       } else {
-        this.renderer.playMilitaryAction({
-          action: "move",
-          nationId: message.nationId,
-          unitType: result.unitType,
-          fromTileId: result.fromTileId || payload.fromTileId,
-          targetTileId,
-          path: result.path,
-        });
+        if (this.isVisibleActionEvent({ fromTileId: result.fromTileId || payload.fromTileId, targetTileId })) {
+          this.renderer.playMilitaryAction({
+            action: "move",
+            nationId: message.nationId,
+            unitType: result.unitType,
+            fromTileId: result.fromTileId || payload.fromTileId,
+            targetTileId,
+            path: result.path,
+          });
+        }
       }
     }
   }
