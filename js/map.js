@@ -20,6 +20,9 @@ import {
   tileId,
 } from "./utils.js";
 import { STARTING_PROFILES, militaryPower } from "./nation.js";
+import { createRenderer, setupScene, setupCamera } from "./rendering/renderer.js";
+import { getTileMaterial, colorFromHex } from "./rendering/config.js";
+import * as decorations from "./rendering/decorations.js";
 
 const HEX_SIZE = 1.18;
 const HEX_HEIGHT = 0.36;
@@ -620,25 +623,21 @@ export class HexMapRenderer {
 
   _initThree() {
     const THREE = window.THREE;
-    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.scene = new THREE.Scene();
-	    this.scene.background = new THREE.Color(0x102333);
 
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
+    // Initialize rendering system using new modules
+    const { renderer, scene, camera } = createRenderer(this.canvas, THREE);
+    setupScene(scene, THREE);
+    setupCamera(camera, THREE);
+
+    this.renderer = renderer;
+    this.scene = scene;
+    this.camera = camera;
+
     this.target = new THREE.Vector3(0, 0, 0);
     this.camRadius = 24;
     this.camAzimuth = Math.PI / 4;
     this.camPolar = Math.PI / 3.1;
     this._updateCamera();
-
-    const key = new THREE.DirectionalLight(0xfff1cc, 1.05);
-    key.position.set(10, 18, 12);
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0x8bb7ff, 0.42);
-    fill.position.set(-10, 8, -8);
-    this.scene.add(fill);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.36));
 
     this.tileGroup = new THREE.Group();
     this.territoryBorderGroup = new THREE.Group();
@@ -676,12 +675,7 @@ export class HexMapRenderer {
     for (const tile of map.tiles) {
       const { x, z } = axialToWorld(tile.q, tile.r, HEX_SIZE);
       const isWaterTile = isWaterLike(tile);
-      const material = new THREE.MeshStandardMaterial({
-        color: terrainColor(tile),
-        roughness: isWaterTile ? 0.45 : 0.86,
-        metalness: isWaterTile ? 0.12 : 0.04,
-        emissive: new THREE.Color(terrainColor(tile)).multiplyScalar(isWaterTile ? 0.14 : 0.04),
-      });
+      const material = getTileMaterial(tile, THREE);
       const mesh = new THREE.Mesh(this.hexGeometry, material);
       const heightScale = isWaterTile ? 0.34 : 1;
       mesh.scale.y = heightScale;
@@ -1715,244 +1709,53 @@ export class HexMapRenderer {
     });
   }
 
-  _addLowPolyPerson(group, {
-    x = 0,
-    y = 0,
-    z = 0,
-    scale = 1,
-    color = 0xe8c9a7,
-    shirt = 0xeadfbd,
-    accent = 0x3d342b,
-    tool = null,
-    kind = "idlePerson",
-    phase = 0,
-    duration = 9,
-  } = {}) {
-    const THREE = window.THREE;
-    const person = new THREE.Group();
-    person.position.set(x, y, z);
-    person.scale.setScalar(scale);
-
-    const skinMat = new THREE.MeshStandardMaterial({ color, roughness: 0.72 });
-    const shirtMat = new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.78 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.82 });
-
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.058, 0.18, 6), shirtMat);
-    body.position.y = 0.18;
-    person.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.046, 8, 6), skinMat);
-    head.position.y = 0.31;
-    person.add(head);
-
-    for (const xOffset of [-0.028, 0.028]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.13, 5), darkMat);
-      leg.position.set(xOffset, 0.065, 0);
-      person.add(leg);
-    }
-
-    const leftArm = new THREE.Group();
-    leftArm.position.set(-0.055, 0.23, 0);
-    const leftArmMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, 0.16, 5), skinMat);
-    leftArmMesh.position.y = -0.075;
-    leftArm.add(leftArmMesh);
-    leftArm.rotation.z = 0.42;
-    person.add(leftArm);
-
-    const rightArm = new THREE.Group();
-    rightArm.position.set(0.055, 0.23, 0);
-    const rightArmMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, 0.16, 5), skinMat);
-    rightArmMesh.position.y = -0.075;
-    rightArm.add(rightArmMesh);
-    rightArm.rotation.z = -0.42;
-    person.add(rightArm);
-
-    if (tool === "pickaxe" || tool === "shovel") {
-      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.22, 0.015), darkMat);
-      handle.position.set(0.025, -0.16, 0);
-      handle.rotation.z = -0.15;
-      rightArm.add(handle);
-      const headWidth = tool === "pickaxe" ? 0.17 : 0.08;
-      const head = new THREE.Mesh(
-        new THREE.BoxGeometry(headWidth, 0.024, 0.024),
-        new THREE.MeshStandardMaterial({ color: tool === "pickaxe" ? 0xc8c2b8 : 0xb7b0a5, roughness: 0.48, metalness: 0.18 })
-      );
-      head.position.set(0.025, -0.27, 0);
-      head.rotation.z = tool === "pickaxe" ? 0.1 : 0.75;
-      rightArm.add(head);
-    }
-
-    if (tool === "book") {
-      const book = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.018, 0.09), new THREE.MeshStandardMaterial({ color: 0xf1d27b, roughness: 0.7 }));
-      book.position.set(0, -0.12, 0.035);
-      rightArm.add(book);
-    }
-
-    person.userData.parts = { body, head, leftArm, rightArm };
-    group.add(person);
-    this._registerAnimation(group, person, kind, { phase, duration });
-    return person;
+  _addLowPolyPerson(group, options = {}) {
+    return decorations.addLowPolyPerson(this, group, options);
   }
 
+  // Wrapper methods that delegate to the decoration module
   _addCrate(group, x, y, z, color = 0xb88755) {
-    const THREE = window.THREE;
-    const crate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.14, 0.12, 0.14),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.82 })
-    );
-    crate.position.set(x, y, z);
-    group.add(crate);
-    return crate;
+    return decorations.addCrate(this, group, x, y, z, color);
   }
 
-  _addFlag(group, { x = 0, y = 0, z = 0, color = 0xffd166, phase = 0, scale = 1 } = {}) {
-    const THREE = window.THREE;
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012 * scale, 0.012 * scale, 0.58 * scale, 6),
-      new THREE.MeshStandardMaterial({ color: 0x3b3328, roughness: 0.65 })
-    );
-    pole.position.set(x, y + 0.3 * scale, z);
-    group.add(pole);
-    const flag = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22 * scale, 0.13 * scale, 0.012 * scale),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.58, emissive: new THREE.Color(color).multiplyScalar(0.08) })
-    );
-    flag.position.set(x + 0.12 * scale, y + 0.48 * scale, z);
-    group.add(flag);
-    this._registerAnimation(group, flag, "flag", { phase, duration: 7.5, amplitude: 0.8 });
-    return flag;
+  _addFlag(group, options = {}) {
+    return decorations.addFlag(this, group, options);
   }
 
-  _addWave(group, { x = 0, y = 0.03, z = 0, radius = 0.26, color = 0x79cce7, phase = 0 } = {}) {
-    const THREE = window.THREE;
-    const wave = new THREE.Mesh(
-      new THREE.TorusGeometry(radius, 0.009, 5, 18),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.42, depthWrite: false })
-    );
-    wave.rotation.x = Math.PI / 2;
-    wave.position.set(x, y, z);
-    group.add(wave);
-    this._registerAnimation(group, wave, "wave", { phase, duration: 11 });
-    return wave;
+  _addWave(group, options = {}) {
+    return decorations.addWave(this, group, options);
   }
 
-  _addSmokePuff(group, { x = 0, y = 0, z = 0, color = 0xb9bec4, phase = 0, scale = 1 } = {}) {
-    const THREE = window.THREE;
-    const puff = new THREE.Mesh(
-      new THREE.SphereGeometry(0.065 * scale, 8, 6),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.36, depthWrite: false })
-    );
-    puff.position.set(x, y, z);
-    group.add(puff);
-    this._registerAnimation(group, puff, "smoke", { phase, duration: 8 + scale * 2, amplitude: scale });
-    return puff;
+  _addSmokePuff(group, options = {}) {
+    return decorations.addSmokePuff(this, group, options);
   }
 
   _addLandNature(group, tile) {
-    const seed = this.map?.seed || 1;
-    const density = hash2d(tile.q * 29 + 5, tile.r * 31 - 7, seed + 5151);
-    if (density < 0.32 && tile.ownerId) return;
-    const biome = tile.biome || "grassland";
-    const count = biome === "jungle"
-      ? density > 0.68 ? 5 : 4
-      : biome === "woods"
-        ? density > 0.72 ? 4 : 3
-        : density > 0.76 ? 4 : density > 0.52 ? 3 : 2;
-    for (let i = 0; i < count; i += 1) {
-      const angle = hash2d(tile.q + i * 13, tile.r - i * 17, seed + 5200) * TAU;
-      const dist = 0.16 + hash2d(tile.q - i * 19, tile.r + i * 23, seed + 5300) * 0.36;
-      const x = Math.cos(angle) * dist;
-      const z = Math.sin(angle) * dist;
-      const variant = hash2d(tile.q * 3 + i, tile.r * 5 - i, seed + 5400);
-      if (biome === "desert") {
-        if (variant > 0.62) this._addCactus(group, x, 0.02, z, 0.72 + variant * 0.42);
-        else this._addPebble(group, x, 0.025, z, 0.75 + variant * 0.48, 0xa97842);
-      } else if (biome === "arctic") {
-        if (variant > 0.52) this._addPebble(group, x, 0.025, z, 0.86 + variant * 0.4, 0xd8e1df);
-        else this._addGrassTuft(group, x, 0.02, z, 0.55 + variant * 0.35, 0xc3d1c7);
-      } else if (biome === "jungle") {
-        if (variant > 0.28) this._addTinyTree(group, x, 0.02, z, 0.92 + variant * 0.55, 0x27723f);
-        else this._addGrassTuft(group, x, 0.02, z, 0.9 + variant * 0.7, 0x3f9b4d);
-      } else if (biome === "woods") {
-        if (variant > 0.38) this._addTinyTree(group, x, 0.02, z, 0.82 + variant * 0.45, 0x2f7b42);
-        else this._addGrassTuft(group, x, 0.02, z, 0.72 + variant * 0.5, 0x6b9b52);
-      } else if (variant > 0.66) this._addTinyTree(group, x, 0.02, z, 0.82 + variant * 0.45);
-      else if (variant > 0.34) this._addPebble(group, x, 0.025, z, 0.8 + variant * 0.5);
-      else this._addGrassTuft(group, x, 0.02, z, 0.75 + variant * 0.6);
-    }
+    return decorations.addLandNature(this, group, tile);
   }
 
   _addWaterNature(group, tile) {
-    const seed = this.map?.seed || 1;
-    const count = 1 + Math.floor(hash2d(tile.q * 17, tile.r * 13, seed + 6100) * 3);
-    for (let i = 0; i < count; i += 1) {
-      const angle = hash2d(tile.q + i * 11, tile.r - i * 7, seed + 6200) * TAU;
-      const dist = 0.22 + hash2d(tile.q - i * 5, tile.r + i * 3, seed + 6300) * 0.28;
-      const x = Math.cos(angle) * dist;
-      const z = Math.sin(angle) * dist;
-      if (hash2d(tile.q + i, tile.r - i, seed + 6400) > 0.45) this._addReeds(group, x, 0.02, z);
-      else this._addPebble(group, x, 0.02, z, 0.55, 0x6f7d78);
-    }
+    return decorations.addWaterNature(this, group, tile);
   }
 
   _addTinyTree(group, x, y, z, scale = 1, crownColor = 0x2f8a55) {
-    const THREE = window.THREE;
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.025 * scale, 0.032 * scale, 0.16 * scale, 5),
-      new THREE.MeshStandardMaterial({ color: 0x6f4a2d, roughness: 0.86 })
-    );
-    trunk.position.set(x, y + 0.08 * scale, z);
-    group.add(trunk);
-    const crown = new THREE.Mesh(
-      new THREE.ConeGeometry(0.12 * scale, 0.24 * scale, 6),
-      new THREE.MeshStandardMaterial({ color: crownColor, roughness: 0.9 })
-    );
-    crown.position.set(x, y + 0.25 * scale, z);
-    group.add(crown);
+    return decorations.addTinyTree(this, group, x, y, z, scale, crownColor);
   }
 
   _addGrassTuft(group, x, y, z, scale = 1, color = 0x5aa65a) {
-    const THREE = window.THREE;
-    const tuft = new THREE.Mesh(
-      new THREE.ConeGeometry(0.055 * scale, 0.15 * scale, 5),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.94 })
-    );
-    tuft.position.set(x, y + 0.07 * scale, z);
-    tuft.rotation.z = 0.18;
-    group.add(tuft);
+    return decorations.addGrassTuft(this, group, x, y, z, scale, color);
   }
 
   _addCactus(group, x, y, z, scale = 1) {
-    const THREE = window.THREE;
-    const mat = new THREE.MeshStandardMaterial({ color: 0x4f8f55, roughness: 0.88 });
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025 * scale, 0.035 * scale, 0.22 * scale, 6), mat);
-    stem.position.set(x, y + 0.11 * scale, z);
-    group.add(stem);
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.014 * scale, 0.018 * scale, 0.12 * scale, 6), mat);
-    arm.position.set(x + 0.055 * scale, y + 0.13 * scale, z);
-    arm.rotation.z = Math.PI / 2;
-    group.add(arm);
+    return decorations.addCactus(this, group, x, y, z, scale);
   }
 
   _addPebble(group, x, y, z, scale = 1, color = 0x8b8578) {
-    const THREE = window.THREE;
-    const pebble = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(0.055 * scale, 0),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.96 })
-    );
-    pebble.position.set(x, y + 0.035 * scale, z);
-    pebble.scale.y = 0.48;
-    group.add(pebble);
+    return decorations.addPebble(this, group, x, y, z, scale, color);
   }
 
   _addReeds(group, x, y, z) {
-    const THREE = window.THREE;
-    const mat = new THREE.MeshStandardMaterial({ color: 0x7ea65b, roughness: 0.9 });
-    for (let i = 0; i < 3; i += 1) {
-      const reed = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, 0.16 + i * 0.035, 5), mat);
-      reed.position.set(x + (i - 1) * 0.028, y + 0.08 + i * 0.015, z + (i % 2) * 0.025);
-      reed.rotation.z = (i - 1) * 0.12;
-      group.add(reed);
-    }
+    return decorations.addReeds(this, group, x, y, z);
   }
 
   _addCapitalMarker(group, tile, ownerColor) {
@@ -2037,110 +1840,20 @@ export class HexMapRenderer {
     }
   }
 
-  _addTankUnit(group, { x = 0, y = 0, z = 0, scale = 1, color = 0x53664f, phase = 0 } = {}) {
-    const THREE = window.THREE;
-    const unit = new THREE.Group();
-    unit.position.set(x, y, z);
-    unit.scale.setScalar(scale);
-    const hullMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.08 });
-    const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x2f382f, roughness: 0.78 });
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.14, 0.24), hullMaterial);
-    hull.position.y = 0.07;
-    unit.add(hull);
-    const turret = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.08, 0.16), hullMaterial);
-    turret.position.set(0.02, 0.18, 0);
-    unit.add(turret);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.34, 8), darkMaterial);
-    barrel.position.set(0.22, 0.18, 0);
-    barrel.rotation.z = Math.PI / 2;
-    unit.add(barrel);
-    for (const zOffset of [-0.14, 0.14]) {
-      const tread = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.045, 0.055), darkMaterial);
-      tread.position.set(0, 0.025, zOffset);
-      unit.add(tread);
-    }
-    group.add(unit);
-    this._registerAnimation(group, unit, "patrol", { phase, duration: 11 });
-    this._registerAnimation(group, turret, "turretScan", { phase: phase + 1.1, duration: 9.5, amplitude: 0.75 });
+  _addTankUnit(group, options = {}) {
+    return decorations.addTankUnit(this, group, options);
   }
 
-  _addPlaneUnit(group, { x = 0, y = 0, z = 0, scale = 1, color = 0xb8c6d8, phase = 0 } = {}) {
-    const THREE = window.THREE;
-    const unit = new THREE.Group();
-    unit.position.set(x, y, z);
-    unit.scale.setScalar(scale);
-    unit.rotation.z = -0.35;
-    const material = new THREE.MeshStandardMaterial({ color, metalness: 0.22, roughness: 0.42, emissive: new THREE.Color(color).multiplyScalar(0.12) });
-    const body = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.46, 3), material);
-    body.rotation.z = -Math.PI / 2;
-    unit.add(body);
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.42), material);
-    wing.position.set(-0.02, 0, 0);
-    unit.add(wing);
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.025, 0.22), material);
-    tail.position.set(-0.18, 0.02, 0);
-    unit.add(tail);
-    group.add(unit);
-    this._registerAnimation(group, unit, "fly", { phase, duration: 12 });
+  _addPlaneUnit(group, options = {}) {
+    return decorations.addPlaneUnit(this, group, options);
   }
 
-  _addShipUnit(group, { x = 0, y = 0, z = 0, scale = 1, color = 0x3f6f82, phase = 0 } = {}) {
-    const THREE = window.THREE;
-    const unit = new THREE.Group();
-    unit.position.set(x, y, z);
-    unit.scale.setScalar(scale);
-    const hullMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.08 });
-    const deckMaterial = new THREE.MeshStandardMaterial({ color: 0xb6c3c8, roughness: 0.5 });
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.18), hullMaterial);
-    hull.position.y = 0.06;
-    unit.add(hull);
-    const bow = new THREE.Mesh(new THREE.ConeGeometry(0.095, 0.18, 4), hullMaterial);
-    bow.position.set(0.3, 0.06, 0);
-    bow.rotation.z = -Math.PI / 2;
-    bow.rotation.y = Math.PI / 4;
-    unit.add(bow);
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.12), deckMaterial);
-    cabin.position.set(-0.04, 0.18, 0);
-    unit.add(cabin);
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.25, 6), deckMaterial);
-    mast.position.set(-0.12, 0.34, 0);
-    unit.add(mast);
-    group.add(unit);
-    this._registerAnimation(group, unit, "sail", { phase, duration: 10.5 });
-    this._addWave(group, { x, y: y + 0.015, z: z - 0.12, radius: 0.18 * scale, phase: phase + 0.8 });
+  _addShipUnit(group, options = {}) {
+    return decorations.addShipUnit(this, group, options);
   }
 
-  _addInfantryUnit(group, { x = 0, y = 0, z = 0, scale = 1, color = 0xe2dcc8, phase = 0 } = {}) {
-    const THREE = window.THREE;
-    const squad = new THREE.Group();
-    squad.position.set(x, y, z);
-    squad.scale.setScalar(scale);
-    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.58, emissive: new THREE.Color(color).multiplyScalar(0.12) });
-    const offsets = [
-      [-0.12, -0.08],
-      [0.08, -0.02],
-      [-0.02, 0.12],
-    ];
-    offsets.forEach(([xOffset, zOffset], index) => {
-      const soldier = new THREE.Group();
-      soldier.position.set(xOffset, 0, zOffset);
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.16, 8), material);
-      body.position.y = 0.1;
-      soldier.add(body);
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), material);
-      head.position.y = 0.21;
-      soldier.add(head);
-      const rifle = new THREE.Mesh(
-        new THREE.BoxGeometry(0.018, 0.018, 0.16),
-        new THREE.MeshStandardMaterial({ color: 0x272a24, roughness: 0.8 })
-      );
-      rifle.position.set(0.045, 0.14, 0.03);
-      rifle.rotation.y = 0.7;
-      soldier.add(rifle);
-      squad.add(soldier);
-      this._registerAnimation(group, soldier, "drillMarch", { phase: phase + index * 0.75, duration: 8.5 });
-    });
-    group.add(squad);
+  _addInfantryUnit(group, options = {}) {
+    return decorations.addInfantryUnit(this, group, options);
   }
 
   _bindInput() {
