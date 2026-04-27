@@ -29,8 +29,8 @@ export const SCENE_CONFIG = {
   fog: {
     enabled: true,
     color: 0x1a3a4d, // slightly lighter blue for depth
-    near: 8,
-    far: 140,
+    near: 4,
+    far: 70,
   },
 };
 

@@ -141,7 +141,11 @@ export function applyQualitySettings(renderer, scene, keyLight, THREE) {
 
   // Apply fog
   if (SCENE_CONFIG.fog) {
-    scene.fog = new THREE.Fog(0x1a3a4d, 8, 140);
+    scene.fog = new THREE.Fog(
+      SCENE_CONFIG.fog.color,
+      SCENE_CONFIG.fog.near,
+      SCENE_CONFIG.fog.far,
+    );
   }
 
   console.log(
