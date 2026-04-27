@@ -8,6 +8,7 @@
 
 import { hash2d } from "../utils.js";
 import { getMaterialPreset } from "./config.js";
+import { createLowPolyInfantry, createLowPolyTank, createLowPolyAircraft, createLowPolyShip } from "./assets.js";
 
 const TAU = Math.PI * 2;
 
@@ -405,36 +406,16 @@ export function addLowPolyPerson(renderer, group, {
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addTankUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0x53664f, phase = 0 } = {}) {
-  const THREE = window.THREE;
-  const unit = new THREE.Group();
+  const unit = createLowPolyTank({ color, scale });
   unit.position.set(x, y, z);
-  unit.scale.setScalar(scale);
-
-  const hullMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.08 });
-  const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x2f382f, roughness: 0.78 });
-
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.14, 0.24), hullMaterial);
-  hull.position.y = 0.07;
-  unit.add(hull);
-
-  const turret = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.08, 0.16), hullMaterial);
-  turret.position.set(0.02, 0.18, 0);
-  unit.add(turret);
-
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.34, 8), darkMaterial);
-  barrel.position.set(0.22, 0.18, 0);
-  barrel.rotation.z = Math.PI / 2;
-  unit.add(barrel);
-
-  for (const zOffset of [-0.14, 0.14]) {
-    const tread = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.045, 0.055), darkMaterial);
-    tread.position.set(0, 0.025, zOffset);
-    unit.add(tread);
-  }
-
   group.add(unit);
   registerAnimation(renderer, group, unit, "patrol", { phase, duration: 11 });
-  registerAnimation(renderer, group, turret, "turretScan", { phase: phase + 1.1, duration: 9.5, amplitude: 0.75 });
+
+  // Find turret for scan animation
+  const turret = unit.children.find(c => c.userData?.rotationalAxis === "y");
+  if (turret) {
+    registerAnimation(renderer, group, turret, "turretScan", { phase: phase + 1.1, duration: 9.5, amplitude: 0.75 });
+  }
 }
 
 /**
@@ -444,26 +425,8 @@ export function addTankUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, c
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addPlaneUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0xb8c6d8, phase = 0 } = {}) {
-  const THREE = window.THREE;
-  const unit = new THREE.Group();
+  const unit = createLowPolyAircraft({ color, scale });
   unit.position.set(x, y, z);
-  unit.scale.setScalar(scale);
-  unit.rotation.z = -0.35;
-
-  const material = new THREE.MeshStandardMaterial({ color, metalness: 0.22, roughness: 0.42, emissive: new THREE.Color(color).multiplyScalar(0.12) });
-
-  const body = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.46, 3), material);
-  body.rotation.z = -Math.PI / 2;
-  unit.add(body);
-
-  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.42), material);
-  wing.position.set(-0.02, 0, 0);
-  unit.add(wing);
-
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.025, 0.22), material);
-  tail.position.set(-0.18, 0.02, 0);
-  unit.add(tail);
-
   group.add(unit);
   registerAnimation(renderer, group, unit, "fly", { phase, duration: 12 });
 }
@@ -475,32 +438,8 @@ export function addPlaneUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, 
  * @param {Object} options - { x, y, z, scale, color, phase }
  */
 export function addShipUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 1, color = 0x3f6f82, phase = 0 } = {}) {
-  const THREE = window.THREE;
-  const unit = new THREE.Group();
+  const unit = createLowPolyShip({ color, scale });
   unit.position.set(x, y, z);
-  unit.scale.setScalar(scale);
-
-  const hullMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.08 });
-  const deckMaterial = new THREE.MeshStandardMaterial({ color: 0xb6c3c8, roughness: 0.5 });
-
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.18), hullMaterial);
-  hull.position.y = 0.06;
-  unit.add(hull);
-
-  const bow = new THREE.Mesh(new THREE.ConeGeometry(0.095, 0.18, 4), hullMaterial);
-  bow.position.set(0.3, 0.06, 0);
-  bow.rotation.z = -Math.PI / 2;
-  bow.rotation.y = Math.PI / 4;
-  unit.add(bow);
-
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.12), deckMaterial);
-  cabin.position.set(-0.04, 0.18, 0);
-  unit.add(cabin);
-
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.25, 6), deckMaterial);
-  mast.position.set(-0.12, 0.34, 0);
-  unit.add(mast);
-
   group.add(unit);
   registerAnimation(renderer, group, unit, "sail", { phase, duration: 10.5 });
   addWave(renderer, group, { x, y: y + 0.015, z: z - 0.12, radius: 0.18 * scale, phase: phase + 0.8 });
@@ -518,7 +457,7 @@ export function addInfantryUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 
   squad.position.set(x, y, z);
   squad.scale.setScalar(scale);
 
-  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.58, emissive: new THREE.Color(color).multiplyScalar(0.12) });
+  // Create 3 soldiers in formation
   const offsets = [
     [-0.12, -0.08],
     [0.08, -0.02],
@@ -526,25 +465,8 @@ export function addInfantryUnit(renderer, group, { x = 0, y = 0, z = 0, scale = 
   ];
 
   offsets.forEach(([xOffset, zOffset], index) => {
-    const soldier = new THREE.Group();
+    const soldier = createLowPolyInfantry({ color, scale: 0.8 });
     soldier.position.set(xOffset, 0, zOffset);
-
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.16, 8), material);
-    body.position.y = 0.1;
-    soldier.add(body);
-
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), material);
-    head.position.y = 0.21;
-    soldier.add(head);
-
-    const rifle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.018, 0.018, 0.16),
-      new THREE.MeshStandardMaterial({ color: 0x272a24, roughness: 0.8 })
-    );
-    rifle.position.set(0.045, 0.14, 0.03);
-    rifle.rotation.y = 0.7;
-    soldier.add(rifle);
-
     squad.add(soldier);
     registerAnimation(renderer, group, soldier, "drillMarch", { phase: phase + index * 0.75, duration: 8.5 });
   });
