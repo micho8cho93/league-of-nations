@@ -25,12 +25,12 @@ export const RENDERER_CONFIG = {
 // ============================================================================
 
 export const SCENE_CONFIG = {
-  backgroundColor: 0xd9e6ee,
+  backgroundColor: 0x102333, // dark blue
   fog: {
     enabled: true,
-    color: 0xd2e0e8,
+    color: 0x1a3a4d, // slightly lighter blue for depth
     near: 8,
-    far: 160,
+    far: 140,
   },
 };
 
