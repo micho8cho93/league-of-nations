@@ -87,232 +87,260 @@ function createOceaniaMap() {
   };
 
   // ============================================
-  // AUSTRALIA (~140 tiles) - central landmass
+  // AUSTRALIA (~180 tiles) - dominant landmass
   // ============================================
 
-  // Western Australia - desert and grassland
+  // Western Australia - desert and grassland (Perth region)
   const australiaWest = [
-    // Far west - desert
-    [-10, 2], [-10, 3], [-10, 4], [-9, 1], [-9, 2], [-9, 3], [-9, 4], [-9, 5],
-    [-8, 1], [-8, 2], [-8, 3], [-8, 4], [-8, 5], [-7, 0], [-7, 1], [-7, 2],
-    [-7, 3], [-7, 4], [-7, 5],
-    // Mid-west - desert/grassland transition
-    [-6, 0], [-6, 1], [-6, 2], [-6, 3], [-6, 4], [-5, 0], [-5, 1], [-5, 2],
-    [-5, 3], [-5, 4], [-5, 5], [-4, 0], [-4, 1], [-4, 2], [-4, 3], [-4, 4],
+    [-12, 0], [-12, 1], [-12, 2], [-12, 3], [-11, -1], [-11, 0], [-11, 1],
+    [-11, 2], [-11, 3], [-11, 4], [-10, -1], [-10, 0], [-10, 1], [-10, 2],
+    [-10, 3], [-10, 4], [-9, -2], [-9, -1], [-9, 0], [-9, 1], [-9, 2],
+    [-9, 3], [-9, 4], [-9, 5],
   ];
   for (const [q, r] of australiaWest) {
     addTile(q, r, "land", "desert");
   }
 
-  // Central Australia - desert interior
+  // South Australia - desert interior (Outback)
   const australiaCentral = [
-    [-4, 5], [-3, 0], [-3, 1], [-3, 2], [-3, 3], [-3, 4], [-3, 5], [-2, 0],
-    [-2, 1], [-2, 2], [-2, 3], [-2, 4], [-2, 5], [-1, 0], [-1, 1], [-1, 2],
-    [-1, 3], [-1, 4], [-1, 5],
+    [-8, -2], [-8, -1], [-8, 0], [-8, 1], [-8, 2], [-8, 3], [-8, 4],
+    [-7, -3], [-7, -2], [-7, -1], [-7, 0], [-7, 1], [-7, 2], [-7, 3],
+    [-7, 4], [-7, 5], [-6, -3], [-6, -2], [-6, -1], [-6, 0], [-6, 1],
+    [-6, 2], [-6, 3], [-6, 4], [-6, 5], [-5, -3], [-5, -2], [-5, -1],
+    [-5, 0], [-5, 1], [-5, 2], [-5, 3], [-5, 4], [-5, 5], [-4, -2],
+    [-4, -1], [-4, 0], [-4, 1], [-4, 2], [-4, 3], [-4, 4],
   ];
   for (const [q, r] of australiaCentral) {
     addTile(q, r, "land", "desert");
   }
 
-  // Northern Territory - grassland/jungle
+  // Northern Territory - grassland/jungle (Darwin region)
   const australiaNorthern = [
-    [-7, -1], [-6, -2], [-6, -1], [-5, -2], [-5, -1], [-4, -2], [-4, -1],
-    [-3, -2], [-3, -1], [-2, -2], [-2, -1], [-1, -2], [-1, -1], [0, -2],
-    [0, -1], [1, -2], [1, -1],
+    [-7, -4], [-6, -5], [-6, -4], [-5, -5], [-5, -4], [-4, -5], [-4, -4],
+    [-3, -5], [-3, -4], [-2, -5], [-2, -4], [-1, -5], [-1, -4], [0, -5],
+    [0, -4],
   ];
   for (const [q, r] of australiaNorthern) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Northeast tropical region - jungle/grassland
+  // Far northeast - tropical region (Cape York)
   const australiaNortheast = [
-    [1, -3], [2, -3], [2, -2], [3, -3], [3, -2], [4, -3], [4, -2], [4, -1],
+    [1, -6], [2, -6], [2, -5], [3, -6], [3, -5], [4, -6], [4, -5],
   ];
   for (const [q, r] of australiaNortheast) {
     addTile(q, r, "land", "jungle");
   }
 
-  // Eastern Australia - mixed grassland/jungle (Queensland, NSW, Victoria)
-  const australiaEast = [
-    [0, 0], [1, 0], [1, 1], [2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2],
-    [4, 0], [4, 1], [4, 2], [5, 0], [5, 1], [5, 2], [5, 3],
+  // Queensland coast - grassland/jungle mix
+  const australiaEastCoast = [
+    [1, -3], [2, -3], [2, -2], [3, -3], [3, -2], [4, -3], [4, -2],
+    [5, -3], [5, -2], [5, -1], [6, -2], [6, -1],
   ];
-  for (const [q, r] of australiaEast) {
+  for (const [q, r] of australiaEastCoast) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Southern Australia - grassland (South Australia, Victoria coast)
+  // Eastern Australia inland - grassland (NSW, Queensland)
+  const australiaEastInland = [
+    [-1, -3], [-1, -2], [-1, -1], [0, -3], [0, -2], [0, -1], [1, -2],
+    [1, -1], [1, 0], [2, -1], [2, 0], [2, 1], [3, -1], [3, 0], [3, 1],
+    [4, 0], [4, 1], [5, 0], [5, 1],
+  ];
+  for (const [q, r] of australiaEastInland) {
+    addTile(q, r, "land", "grassland");
+  }
+
+  // Southern Australia - grassland coast (Victoria, South coast)
   const australiaSouth = [
-    [-5, 6], [-4, 6], [-3, 6], [-2, 6], [-1, 6], [0, 6], [1, 6], [2, 6],
-    [3, 6], [3, 5], [4, 5], [5, 4], [5, 5],
+    [-8, 5], [-7, 6], [-6, 6], [-5, 6], [-4, 5], [-3, 5], [-2, 5], [-1, 5],
+    [0, 5], [1, 5], [2, 5], [3, 5], [4, 5], [5, 4], [6, 4], [6, 5],
   ];
   for (const [q, r] of australiaSouth) {
     addTile(q, r, "land", "grassland");
   }
 
+  // Southeast Australia - grassland (Melbourne, Sydney region)
+  const australiaSoutheast = [
+    [2, 2], [2, 3], [2, 4], [3, 2], [3, 3], [3, 4], [4, 2], [4, 3], [4, 4],
+    [5, 2], [5, 3], [6, 3],
+  ];
+  for (const [q, r] of australiaSoutheast) {
+    addTile(q, r, "land", "grassland");
+  }
+
   // ============================================
-  // TASMANIA (~8 tiles) - south of Australia
+  // TASMANIA (~6 tiles) - south of Australia
   // ============================================
   const tasmania = [
-    [3, 7], [4, 7], [4, 8], [5, 8],
+    [4, 6], [5, 6], [5, 7],
   ];
   for (const [q, r] of tasmania) {
     addTile(q, r, "land", "grassland");
   }
 
   // ============================================
-  // PAPUA NEW GUINEA (~32 tiles) - north of Australia
+  // PAPUA NEW GUINEA (~55 tiles) - north of Australia
   // ============================================
 
-  // PNG central - jungle core
+  // PNG main body - jungle core
   const pngCore = [
-    [0, -4], [1, -4], [2, -4], [2, -5], [3, -4], [3, -5], [4, -4], [4, -5],
-    [5, -4], [5, -5],
+    [0, -7], [1, -7], [2, -7], [2, -8], [3, -7], [3, -8], [4, -7], [4, -8],
+    [5, -7], [5, -8], [6, -7], [6, -8],
   ];
   for (const [q, r] of pngCore) {
     addTile(q, r, "land", "jungle");
   }
 
-  // PNG northern extension - grassland
+  // PNG northern coast - grassland
   const pngNorth = [
-    [0, -5], [0, -6], [1, -5], [1, -6], [2, -6], [3, -6], [4, -6],
+    [-1, -7], [0, -8], [0, -9], [1, -8], [1, -9], [2, -9], [3, -9], [4, -9],
+    [5, -9], [6, -9],
   ];
   for (const [q, r] of pngNorth) {
     addTile(q, r, "land", "grassland");
   }
 
-  // PNG eastern peninsula - mixed
+  // PNG western region - grassland
+  const pngWest = [
+    [-1, -6], [-1, -8], [0, -6], [7, -8], [7, -7],
+  ];
+  for (const [q, r] of pngWest) {
+    addTile(q, r, "land", "grassland");
+  }
+
+  // PNG eastern peninsula - jungle
   const pngEast = [
-    [6, -4], [6, -3], [6, -2], [7, -4], [7, -3],
+    [7, -6], [8, -6], [8, -5], [9, -6], [9, -5],
   ];
   for (const [q, r] of pngEast) {
     addTile(q, r, "land", "jungle");
   }
 
   // ============================================
-  // INDONESIA EDGE (~12 tiles) - northwest fragments
+  // INDONESIA EDGE (~15 tiles) - northwest
   // ============================================
   const indonesiaEdge = [
-    [-12, -2], [-12, -1], [-11, -2], [-11, -1], [-10, -2], [-10, -1],
-    [-9, -2], [-9, -1], [-8, 0], [-7, 6], [-6, 6],
+    [-14, -3], [-14, -2], [-13, -3], [-13, -2], [-12, -4], [-12, -3],
+    [-11, -5], [-11, -4], [-10, -5], [-10, -4], [-10, 5], [-9, 5], [-8, 5],
   ];
   for (const [q, r] of indonesiaEdge) {
     addTile(q, r, "land", "jungle");
   }
 
   // ============================================
-  // NEW ZEALAND (~52 tiles) - southeast of Australia
+  // NEW ZEALAND (~45 tiles) - southeast ocean
   // ============================================
 
-  // North Island - grassland/forest
+  // North Island - grassland with some jungle
   const nzNorth = [
-    [2, 9], [3, 8], [3, 9], [3, 10], [4, 9], [4, 10],
-    [5, 9], [5, 10], [6, 9], [6, 10],
+    [3, 8], [4, 7], [4, 8], [4, 9], [5, 8], [5, 9], [5, 10],
+    [6, 8], [6, 9], [6, 10], [7, 9],
   ];
   for (const [q, r] of nzNorth) {
     addTile(q, r, "land", "grassland");
   }
 
-  // North Island - inner jungle
-  const nzNorthJungle = [
-    [4, 11], [5, 11], [6, 11],
+  // North Island - volcanic interior
+  const nzNorthVolcanic = [
+    [5, 11], [6, 11], [7, 10],
   ];
-  for (const [q, r] of nzNorthJungle) {
+  for (const [q, r] of nzNorthVolcanic) {
     addTile(q, r, "land", "jungle");
   }
 
-  // South Island - arctic/mountain (iron resource)
+  // South Island - arctic/mountain (iron)
   const nzSouth = [
-    [2, 11], [2, 12], [3, 11], [3, 12], [3, 13], [4, 12], [4, 13],
-    [5, 12], [5, 13], [6, 12], [6, 13],
+    [3, 10], [3, 11], [3, 12], [3, 13], [4, 10], [4, 11], [4, 12],
+    [4, 13], [5, 12], [5, 13], [5, 14], [6, 12], [6, 13],
   ];
   for (const [q, r] of nzSouth) {
     addTile(q, r, "land", "arctic");
   }
 
   // ============================================
-  // SOLOMON ISLANDS (~8 tiles) - northeast scattered
+  // SOLOMON ISLANDS (~8 tiles)
   // ============================================
   const solomonIslands = [
-    [9, -5], [10, -5], [10, -4], [11, -5], [11, -4], [11, -3],
+    [10, -6], [11, -6], [11, -5], [12, -6], [12, -5], [13, -5],
   ];
   for (const [q, r] of solomonIslands) {
     addTile(q, r, "land", "jungle");
   }
 
   // ============================================
-  // VANUATU (~5 tiles) - east of Solomon Islands
+  // VANUATU (~6 tiles)
   // ============================================
   const vanuatu = [
-    [12, -1], [12, 0], [13, 0], [13, 1],
+    [13, -2], [13, -1], [14, -2], [14, -1], [14, 0],
   ];
   for (const [q, r] of vanuatu) {
     addTile(q, r, "land", "grassland");
   }
 
   // ============================================
-  // NEW CALEDONIA (~8 tiles) - south of Vanuatu
+  // NEW CALEDONIA (~8 tiles)
   // ============================================
   const newCaledonia = [
-    [11, 3], [12, 2], [12, 3], [12, 4], [13, 2], [13, 3], [13, 4],
+    [12, 2], [13, 1], [13, 2], [13, 3], [14, 2], [14, 3], [15, 3],
   ];
   for (const [q, r] of newCaledonia) {
     addTile(q, r, "land", "grassland");
   }
 
   // ============================================
-  // FIJI (~6 tiles) - central Pacific
+  // FIJI (~7 tiles)
   // ============================================
   const fiji = [
-    [14, 0], [15, 0], [15, 1], [16, 1],
+    [15, 0], [16, 0], [16, 1], [16, 2], [17, 1], [17, 2],
   ];
   for (const [q, r] of fiji) {
     addTile(q, r, "land", "grassland");
   }
 
   // ============================================
-  // SAMOA / AMERICAN SAMOA (~4 tiles) - east of Fiji
+  // SAMOA / AMERICAN SAMOA (~5 tiles)
   // ============================================
   const samoa = [
-    [18, -1], [18, 0], [19, 0],
+    [20, -2], [20, -1], [21, -1], [21, 0], [22, 0],
   ];
   for (const [q, r] of samoa) {
     addTile(q, r, "land", "grassland");
   }
 
   // ============================================
-  // TONGA (~5 tiles) - south of Samoa
+  // TONGA (~6 tiles)
   // ============================================
   const tonga = [
-    [17, 3], [18, 3], [18, 4], [19, 4],
+    [19, 2], [20, 2], [20, 3], [21, 3], [21, 4],
   ];
   for (const [q, r] of tonga) {
     addTile(q, r, "land", "grassland");
   }
 
   // ============================================
-  // FRENCH POLYNESIA (~18 tiles) - scattered far east
+  // FRENCH POLYNESIA (~20 tiles) - scattered
   // ============================================
 
-  // Society Islands cluster
+  // Society Islands
   const polynesiaSociety = [
-    [22, -3], [23, -3], [23, -2], [24, -2],
+    [24, -4], [25, -4], [25, -3], [26, -3],
   ];
   for (const [q, r] of polynesiaSociety) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Marquesas Islands cluster
+  // Marquesas Islands
   const polynesiaMarquesas = [
-    [24, 1], [25, 1], [25, 2],
+    [27, -2], [28, -2], [28, -1], [29, -1],
   ];
   for (const [q, r] of polynesiaMarquesas) {
     addTile(q, r, "land", "jungle");
   }
 
-  // Tuamotu Archipelago cluster (scattered)
+  // Tuamotu Archipelago
   const polynesiaTuamotu = [
-    [22, 4], [23, 5], [24, 6], [25, 5],
+    [24, 2], [25, 2], [25, 3], [26, 3], [27, 4],
   ];
   for (const [q, r] of polynesiaTuamotu) {
     addTile(q, r, "land", "grassland");
@@ -320,19 +348,27 @@ function createOceaniaMap() {
 
   // Cook Islands
   const polynesiaCooki = [
-    [20, 5], [21, 5],
+    [22, 5], [23, 5],
   ];
   for (const [q, r] of polynesiaCooki) {
     addTile(q, r, "land", "grassland");
   }
 
+  // Easter Island (far southeast)
+  const polynesiaEaster = [
+    [29, 5], [30, 5],
+  ];
+  for (const [q, r] of polynesiaEaster) {
+    addTile(q, r, "land", "grassland");
+  }
+
   // ============================================
-  // MICRONESIA (~18 tiles) - far north/northeast scattered
+  // MICRONESIA (~25 tiles) - scattered north/northeast
   // ============================================
 
-  // Guam/Mariana Islands
+  // Guam / Mariana Islands
   const micronesiaMariana = [
-    [16, -8], [17, -8], [17, -7],
+    [18, -9], [19, -9], [19, -8], [20, -8],
   ];
   for (const [q, r] of micronesiaMariana) {
     addTile(q, r, "land", "jungle");
@@ -340,31 +376,31 @@ function createOceaniaMap() {
 
   // Palau
   const micronesiaPalau = [
-    [14, -6], [14, -5], [15, -6],
+    [16, -8], [16, -7], [17, -8],
   ];
   for (const [q, r] of micronesiaPalau) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Chuuk/Truk Islands
-  const micronesiaFarEast = [
-    [20, -6], [21, -6], [21, -5], [22, -5],
+  // Federated States of Micronesia (Chuuk/Pohnpei)
+  const micronesiaChuuk = [
+    [22, -8], [23, -8], [23, -7], [24, -7],
   ];
-  for (const [q, r] of micronesiaFarEast) {
+  for (const [q, r] of micronesiaChuuk) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Marshall Islands scattered
+  // Marshall Islands
   const micronesiaMarshall = [
-    [18, -6], [19, -6], [19, -5], [20, -4],
+    [20, -6], [21, -6], [21, -5], [22, -6], [23, -5],
   ];
   for (const [q, r] of micronesiaMarshall) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Kiribati - scattered micro islands
+  // Kiribati - scattered Line Islands
   const micronesiaKiribati = [
-    [22, 7], [23, 7], [24, 8],
+    [25, 6], [26, 6], [26, 7], [27, 7],
   ];
   for (const [q, r] of micronesiaKiribati) {
     addTile(q, r, "land", "grassland");
@@ -373,8 +409,8 @@ function createOceaniaMap() {
   // ============================================
   // FILL REMAINING MAP WITH WATER
   // ============================================
-  for (let q = -28; q <= 28; q++) {
-    for (let r = -28; r <= 28; r++) {
+  for (let q = -32; q <= 32; q++) {
+    for (let r = -32; r <= 32; r++) {
       // Skip if tile already exists
       if (tiles.find((tile) => tile.q === q && tile.r === r)) continue;
       // Add water tile
@@ -384,7 +420,7 @@ function createOceaniaMap() {
 
   return {
     size: "Large",
-    radius: 28,
+    radius: 32,
     seed: 12345, // Fixed seed for consistency
     landRatio: tiles.filter((t) => t.terrain === "land").length / tiles.length,
     tiles,
