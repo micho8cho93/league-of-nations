@@ -11,14 +11,10 @@ export const SCENARIO_METADATA = Object.freeze({
   [SCENARIOS.OCEANIA_RESOURCE_FRONTIERS]: {
     id: "oceania-resource-frontiers",
     name: "Oceania Resource Frontiers",
-    description:
-      "A geographically inspired Oceania scenario where players compete to secure fruit, hardwood, iron, and oil across Australia, New Zealand, Papua New Guinea, and nearby Pacific islands.",
     mode: GAME_MODES.ADVANCED,
     maxPlayers: 4,
     minPlayers: 1,
     singlePlayerOnly: true,
-    geographicNote:
-      "This scenario uses a simplified Oceania map inspired by Australia, New Zealand, Papua New Guinea, and nearby Pacific islands.",
   },
 });
 
@@ -63,7 +59,7 @@ export const OCEANIA_OBJECTIVES = Object.freeze([
   },
 ]);
 
-// Handcrafted Oceania map - simplified geographic layout
+// Handcrafted Oceania map - geographically accurate layout
 function createOceaniaMap() {
   const tiles = [];
 
@@ -93,107 +89,135 @@ function createOceaniaMap() {
   // Fill surrounding water
   const waterTiles = [
     // Perimeter water tiles form the surrounding sea
-    [-10, -10], [-10, -5], [-10, 0], [-10, 5], [-10, 10],
-    [-5, -10], [-5, 10],
-    [0, -10], [0, 10],
-    [5, -10], [5, 10],
-    [10, -10], [10, -5], [10, 0], [10, 5], [10, 10],
+    [-12, -12], [-12, -8], [-12, -4], [-12, 0], [-12, 4], [-12, 8], [-12, 12],
+    [-8, -12], [-8, 12],
+    [-4, -12], [-4, 12],
+    [0, -12], [0, 12],
+    [4, -12], [4, 12],
+    [8, -12], [8, 12],
+    [12, -12], [12, -8], [12, -4], [12, 0], [12, 4], [12, 8], [12, 12],
   ];
   for (const [q, r] of waterTiles) {
     addTile(q, r, "water", "water", TILE_TYPES.WATER);
   }
 
-  // AUSTRALIA region (eastern, western, central)
-  // Grassland (eastern Australia) - fruit
-  const australiaEastGrassland = [
-    [1, 2], [2, 2], [3, 2], [2, 3], [3, 3], [4, 2],
+  // AUSTRALIA (large continent) - ~28 tiles
+  // Western Australia - desert/grassland
+  const australiaWest = [
+    [-6, 3], [-5, 2], [-5, 3], [-5, 4], [-4, 2], [-4, 3], [-4, 4], [-3, 3],
   ];
-  for (const [q, r] of australiaEastGrassland) {
-    addTile(q, r, "land", "grassland");
-  }
-
-  // Jungle (eastern Australia coast)
-  const australiaJungle = [
-    [2, 1], [3, 1], [4, 1],
-  ];
-  for (const [q, r] of australiaJungle) {
-    addTile(q, r, "land", "jungle");
-  }
-
-  // Desert (central/western Australia) - oil
-  const australiaDesert = [
-    [-2, 2], [-1, 2], [0, 2], [-3, 2], [-2, 3], [-1, 3], [0, 3],
-  ];
-  for (const [q, r] of australiaDesert) {
+  for (const [q, r] of australiaWest) {
     addTile(q, r, "land", "desert");
   }
 
-  // Grassland (western Australia)
-  const australiaWestGrassland = [
-    [-4, 2], [-4, 3], [-3, 3],
+  // Central Australia - desert (oil resource)
+  const australiaCentral = [
+    [-3, 2], [-2, 2], [-2, 3], [-2, 4], [-1, 3], [-1, 4],
   ];
-  for (const [q, r] of australiaWestGrassland) {
+  for (const [q, r] of australiaCentral) {
+    addTile(q, r, "land", "desert");
+  }
+
+  // Northern Territory - grassland
+  const australiaNorhtern = [
+    [-3, 1], [-2, 1], [-1, 1], [-1, 2],
+  ];
+  for (const [q, r] of australiaNorhtern) {
     addTile(q, r, "land", "grassland");
   }
 
-  // Tasmania (south of Australia) - mixed
+  // Eastern Australia - grassland/jungle
+  const australiaEastGrass = [
+    [1, 2], [2, 2], [2, 3], [3, 2], [3, 3], [3, 4],
+  ];
+  for (const [q, r] of australiaEastGrass) {
+    addTile(q, r, "land", "grassland");
+  }
+
+  // Queensland coast - jungle
+  const australiaEastJungle = [
+    [1, 1], [2, 1], [3, 1],
+  ];
+  for (const [q, r] of australiaEastJungle) {
+    addTile(q, r, "land", "jungle");
+  }
+
+  // Tasmania - grassland
   const tasmania = [
-    [2, 5], [1, 5], [1, 6],
+    [2, 5], [2, 6], [3, 5],
   ];
   for (const [q, r] of tasmania) {
     addTile(q, r, "land", "grassland");
   }
 
-  // PAPUA NEW GUINEA region (north, mostly jungle)
+  // PAPUA NEW GUINEA (northeast) - ~10 tiles
   const pngJungle = [
-    [2, -4], [3, -4], [2, -3], [3, -3], [1, -4], [4, -3],
+    [1, -3], [2, -3], [3, -3], [2, -4], [3, -4], [4, -3],
   ];
   for (const [q, r] of pngJungle) {
     addTile(q, r, "land", "jungle");
   }
 
-  // PNG sparse grassland
   const pngGrassland = [
-    [4, -4], [3, -5],
+    [1, -2], [2, -2], [4, -4], [5, -3],
   ];
   for (const [q, r] of pngGrassland) {
     addTile(q, r, "land", "grassland");
   }
 
-  // NEW ZEALAND region (south, arctic/iron)
-  const nzArctic = [
-    [-1, 6], [-2, 6], [-1, 7], [-2, 7], [-3, 6],
+  // NEW ZEALAND - two islands
+  // North Island (larger) - grassland/forest
+  const nzNorthIsland = [
+    [-2, 6], [-1, 5], [-1, 6], [0, 5], [0, 6],
   ];
-  for (const [q, r] of nzArctic) {
+  for (const [q, r] of nzNorthIsland) {
+    addTile(q, r, "land", "grassland");
+  }
+
+  // South Island (smaller) - arctic/mountain
+  const nzSouthIsland = [
+    [-2, 7], [-1, 7], [0, 7],
+  ];
+  for (const [q, r] of nzSouthIsland) {
     addTile(q, r, "land", "arctic");
   }
 
-  // NZ grassland (north island)
-  const nzGrassland = [
-    [-1, 5], [-2, 5],
+  // PACIFIC ISLANDS (scattered east/northeast)
+  // Fiji region
+  const fiji = [
+    [6, 0], [6, 1], [7, 1],
   ];
-  for (const [q, r] of nzGrassland) {
+  for (const [q, r] of fiji) {
     addTile(q, r, "land", "grassland");
   }
 
-  // FIJI / PACIFIC ISLANDS (east of Oceania)
-  const fijiGrassland = [
-    [6, 0], [6, 1], [7, 0],
+  // Samoa/Tonga region
+  const samoa = [
+    [8, 0], [8, 1],
   ];
-  for (const [q, r] of fijiGrassland) {
+  for (const [q, r] of samoa) {
     addTile(q, r, "land", "grassland");
   }
 
-  const fijiJungle = [
-    [7, 1], [8, 0],
+  // Solomon Islands
+  const solomonIslands = [
+    [5, -1], [5, 0], [6, -1],
   ];
-  for (const [q, r] of fijiJungle) {
+  for (const [q, r] of solomonIslands) {
     addTile(q, r, "land", "jungle");
   }
 
+  // Vanuatu
+  const vanuatu = [
+    [5, 2], [6, 2],
+  ];
+  for (const [q, r] of vanuatu) {
+    addTile(q, r, "land", "grassland");
+  }
+
   // Fill remaining map with water
-  for (let q = -10; q <= 10; q++) {
-    for (let r = -10; r <= 10; r++) {
+  for (let q = -12; q <= 12; q++) {
+    for (let r = -12; r <= 12; r++) {
       if (tiles.find((tile) => tile.q === q && tile.r === r)) continue;
       addTile(q, r, "water", "water", TILE_TYPES.WATER);
     }
@@ -201,7 +225,7 @@ function createOceaniaMap() {
 
   return {
     size: "Small",
-    radius: 10,
+    radius: 12,
     seed: 12345, // Fixed seed for consistency
     landRatio: tiles.filter((t) => t.terrain === "land").length / tiles.length,
     tiles,
@@ -213,25 +237,25 @@ export const OCEANIA_STARTING_POSITIONS = [
   {
     nationIndex: 0, // Player
     name: "Republic of Australia",
-    startTiles: [[2, 2], [3, 2]], // Eastern Australia
+    startTiles: [[2, 2], [3, 2]], // Eastern Australia grassland
     startingResources: { fruit: 3, hardwood: 1, iron: 0, oil: 0 },
   },
   {
     nationIndex: 1, // Bot 1
     name: "Western Federation",
-    startTiles: [[-3, 2], [-2, 2]], // Western Australia
+    startTiles: [[-5, 3], [-4, 3]], // Western Australia desert
     startingResources: { fruit: 2, hardwood: 0, iron: 0, oil: 2 },
   },
   {
     nationIndex: 2, // Bot 2
     name: "New Zealand Union",
-    startTiles: [[-1, 6], [-2, 6]], // New Zealand
+    startTiles: [[-1, 6], [0, 6]], // New Zealand North Island
     startingResources: { fruit: 1, hardwood: 1, iron: 2, oil: 0 },
   },
   {
     nationIndex: 3, // Bot 3
     name: "Papua Collective",
-    startTiles: [[2, -4], [3, -4]], // Papua New Guinea
+    startTiles: [[2, -3], [3, -3]], // Papua New Guinea jungle
     startingResources: { fruit: 1, hardwood: 3, iron: 0, oil: 0 },
   },
 ];
