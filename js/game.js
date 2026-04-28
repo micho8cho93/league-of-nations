@@ -59,6 +59,17 @@ import {
   spendMoney,
 } from "./nation.js";
 import {
+  INFRASTRUCTURE_BUILD_COSTS,
+  INFRASTRUCTURE_LABELS,
+  INFRASTRUCTURE_TYPES,
+  canTileHostInfrastructure,
+  computeNationLogistics,
+  infrastructureLabel,
+  infrastructureRequiredTier,
+  normalizeInfrastructureType,
+  tileInfrastructureType,
+} from "./infrastructure.js";
+import {
   assignStartingTerritories,
   buildTileIndex,
   createMapData,
@@ -72,12 +83,14 @@ import {
   destroyCost,
   productionForTile,
   tileTypeUnlocked,
-  transportHappinessBonus,
-  transportGrowthMultiplier,
   trainingCost,
   workerAdminCost,
   checkEraAdvancement,
 } from "./tech.js";
+import {
+  checkVictory as evaluateVictory,
+  refreshVictoryProgress,
+} from "./victory.js";
 import {
   applyTrade,
   breakAlliance,
@@ -209,6 +222,7 @@ export class GameState {
     this.gameOver = data.gameOver || null;
     this.selectedTileId = data.selectedTileId || null;
     this.lastSummary = data.lastSummary || null;
+    this.victoryProgress = data.victoryProgress || null;
     this.isProcessingTurn = Boolean(data.isProcessingTurn);
     this.serverAuthoritative = Boolean(data.serverAuthoritative);
     this.listeners = new Set();
@@ -220,7 +234,9 @@ export class GameState {
     this.normalizePopulationStates();
     this.normalizeAdvancedNationStates();
     this.recomputeTerritories();
+    this.normalizeDiscoveryStates();
     scheduleEraEvent(this, this.era);
+    if (!this.serverAuthoritative || !data.victoryProgress) refreshVictoryProgress(this);
   }
 
   static newGame(rawSettings = {}) {
@@ -290,6 +306,14 @@ export class GameState {
     } else {
       // Normal starting territory assignment
       assignStartingTerritories(map, Object.values(nations), rng);
+    }
+
+    // Advanced Mode: Give all nations starting hardwood to avoid early bottleneck
+    if (isAdvancedMode({ mode: settings.mode })) {
+      for (const nation of Object.values(nations)) {
+        nation.resources = nation.resources || {};
+        nation.resources.hardwood = (nation.resources.hardwood || 0) + 10;
+      }
     }
 
     // Get objectives if scenario
@@ -374,20 +398,86 @@ export class GameState {
 
   fogOfWarVisibilityFor(nationId = this.playerId) {
     if (!this.settings.fogOfWarEnabled) return null;
-    const nation = this.nations[nationId];
-    const territoryIds = Array.isArray(nation?.territory) && nation.territory.length
-      ? nation.territory
-      : this.tiles.filter((tile) => tile.ownerId === nationId).map((tile) => tile.id);
-    const visibility = computeFogOfWarVisibility(this.tiles, territoryIds, FOG_OF_WAR_RADIUS);
+    const visibility = computeFogOfWarVisibility(this.tiles, this.discoverySourceTileIdsFor(nationId), FOG_OF_WAR_RADIUS);
     return {
       enabled: true,
       ...visibility,
     };
   }
 
+  discoverySourceTileIdsFor(nationId = this.playerId) {
+    const nation = this.nations[nationId];
+    const sourceIds = new Set(
+      Array.isArray(nation?.territory) && nation.territory.length
+        ? nation.territory
+        : this.tiles.filter((tile) => tile.ownerId === nationId).map((tile) => tile.id)
+    );
+    for (const tile of this.tiles) {
+      if (tile.unit?.nationId === nationId) sourceIds.add(tile.id);
+    }
+    return [...sourceIds];
+  }
+
   isTileVisible(tileIdValue, nationId = this.playerId) {
     const visibility = this.fogOfWarVisibilityFor(nationId);
     return !visibility || visibility.visibleTileIds.has(tileIdValue);
+  }
+
+  hasDiscoveredNation(nationId = this.playerId, targetId) {
+    if (!targetId || !this.nations[nationId] || !this.nations[targetId]) return false;
+    if (!this.settings.fogOfWarEnabled) return true;
+    return Array.isArray(this.nations[nationId].discoveredNations) && this.nations[nationId].discoveredNations.includes(targetId);
+  }
+
+  discoverNation(nationId, targetId) {
+    const nation = this.nations[nationId];
+    if (!nation || !targetId || !this.nations[targetId]) return false;
+    const discovered = new Set(Array.isArray(nation.discoveredNations) ? nation.discoveredNations : []);
+    const sizeBefore = discovered.size;
+    discovered.add(nationId);
+    discovered.add(targetId);
+    nation.discoveredNations = [...discovered];
+    return discovered.size !== sizeBefore;
+  }
+
+  establishDiplomaticContact(a, b) {
+    const aDiscovered = this.discoverNation(a, b);
+    const bDiscovered = this.discoverNation(b, a);
+    return aDiscovered || bDiscovered;
+  }
+
+  normalizeDiscoveryStates() {
+    for (const nation of Object.values(this.nations)) {
+      const discovered = new Set((Array.isArray(nation.discoveredNations) ? nation.discoveredNations : []).filter((id) => this.nations[id]));
+      discovered.add(nation.id);
+      nation.discoveredNations = [...discovered];
+    }
+    this.refreshDiscoveredNations();
+  }
+
+  refreshDiscoveredNations() {
+    for (const nation of Object.values(this.nations)) this.refreshDiscoveredNationsFor(nation.id);
+  }
+
+  refreshDiscoveredNationsFor(nationId) {
+    const nation = this.nations[nationId];
+    if (!nation) return;
+    const discovered = new Set(Array.isArray(nation.discoveredNations) ? nation.discoveredNations : []);
+    discovered.add(nationId);
+    const visibility = this.fogOfWarVisibilityFor(nationId);
+    if (visibility?.visibleTileIds) {
+      for (const tileIdValue of visibility.visibleTileIds) {
+        const ownerId = this.tileById(tileIdValue)?.ownerId;
+        if (ownerId && ownerId !== nationId && this.nations[ownerId]?.active) discovered.add(ownerId);
+      }
+    }
+    for (const alliance of this.alliances || []) {
+      if (!alliance?.active || !Array.isArray(alliance.members) || !alliance.members.includes(nationId)) continue;
+      for (const memberId of alliance.members) {
+        if (memberId !== nationId && this.nations[memberId]) discovered.add(memberId);
+      }
+    }
+    nation.discoveredNations = [...discovered];
   }
 
   selectTile(id) {
@@ -571,6 +661,48 @@ export class GameState {
     if (!silent) this.addEvent(`${nation.name} built a ${typeLabel(type)} for $${check.cost}.`, { nationId, type: "build", tileId: tile.id });
     this.changed("build");
     return { ok: true, cost: check.cost, advancedCost: check.advancedCost || null };
+  }
+
+  canBuildInfrastructure(tileIdValue, infrastructureType, nationId = this.playerId) {
+    const nation = this.nations[nationId];
+    const tile = this.tileById(tileIdValue);
+    const type = normalizeInfrastructureType(infrastructureType);
+    if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    if (!tile || tile.ownerId !== nationId) return { ok: false, reason: "Infrastructure can only be built on owned tiles." };
+    if (type === INFRASTRUCTURE_TYPES.NONE || !INFRASTRUCTURE_LABELS[type]) return { ok: false, reason: "Unknown infrastructure type." };
+    if (!canTileHostInfrastructure(tile, type)) {
+      return { ok: false, reason: type === INFRASTRUCTURE_TYPES.ADVANCED ? "Advanced networks require an owned land or water tile." : "Roads and rail require owned land tiles." };
+    }
+    const requiredTier = infrastructureRequiredTier(type);
+    if ((nation.tech.infrastructure || 0) < requiredTier) return { ok: false, reason: `Requires Infrastructure tier ${requiredTier}.` };
+    const currentType = tileInfrastructureType(tile);
+    if (currentType === type) return { ok: false, reason: `${INFRASTRUCTURE_LABELS[type]} is already present on this tile.` };
+    if (infrastructureRequiredTier(currentType) > requiredTier) return { ok: false, reason: "This tile already has a more advanced network." };
+    const cost = INFRASTRUCTURE_BUILD_COSTS[type] || 0;
+    if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+    return { ok: true, cost, infrastructureType: type };
+  }
+
+  buildInfrastructure(tileIdValue, infrastructureType, nationId = this.playerId, { silent = false } = {}) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    const check = this.canBuildInfrastructure(tileIdValue, infrastructureType, nationId);
+    if (!check.ok) return check;
+    const action = this.spendAction("buildInfrastructure", nationId);
+    if (!action.ok) return action;
+    const nation = this.nations[nationId];
+    const tile = this.tileById(tileIdValue);
+    if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
+    tile.infrastructure = check.infrastructureType;
+    nation.stats.built += 1;
+    if (!silent) {
+      this.addEvent(`${nation.name} expanded ${infrastructureLabel(check.infrastructureType).toLowerCase()} on a controlled tile for $${check.cost}.`, {
+        nationId,
+        type: "build",
+        tileId: tile.id,
+      });
+    }
+    this.changed("infrastructure");
+    return { ok: true, cost: check.cost, infrastructureType: check.infrastructureType };
   }
 
   destroyTile(tileIdValue, nationId = this.playerId) {
@@ -1153,17 +1285,23 @@ export class GameState {
     const nation = this.nations[nationId];
     if (!nation?.active) return { produced: 0, consumed: 0, net: 0, capacity: 0 };
     const consumed = foodConsumptionFor(nation, this.era);
+    const logistics = this.logisticsSummaryFor(nationId);
     let produced = 0;
     for (const tile of this.tiles) {
       if (tile.ownerId !== nationId) continue;
       const production = productionForTile(nation, tile, this.era);
       if (production?.food) {
-        const exhaustedProduction = applyWarExhaustionProduction(nation, production.food);
+        const adjustedProduction = Math.ceil(production.food * logistics.foodModifier);
+        const exhaustedProduction = applyWarExhaustionProduction(nation, adjustedProduction);
         produced += applyStockpileDiminishingReturns(nation, "food", exhaustedProduction);
       }
     }
     const capacity = nation.territory.length * BALANCE.population.capacityPerTile;
     return { produced, consumed, net: produced - consumed, capacity };
+  }
+
+  logisticsSummaryFor(nationId) {
+    return computeNationLogistics(this.tiles, this.nations[nationId]);
   }
 
   async endTurn({ onBotTurn = null } = {}) {
@@ -1238,6 +1376,7 @@ export class GameState {
     const foodProducedByNation = {};
     const happinessContexts = {};
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
+      const logistics = this.logisticsSummaryFor(nation.id);
       happinessContexts[nation.id] = { unpaidUpkeep: 0 };
       const warReadiness = updateWarReadinessForTurn(this, nation.id);
       const upkeep = warUpkeep(this, nation.id);
@@ -1273,8 +1412,9 @@ export class GameState {
           this.addEvent(`${nation.name} gathered ${gainedText} from controlled terrain.`, { nationId: nation.id, type: "resource" });
         }
       }
-      const foodProduced = this.produceForNation(nation, summary);
+      const foodProduced = this.produceForNation(nation, summary, logistics);
       foodProducedByNation[nation.id] = foodProduced;
+      happinessContexts[nation.id].logistics = logistics;
     }
 
     const tradeResult = processTradeRoutes(this, summary);
@@ -1302,7 +1442,7 @@ export class GameState {
     this.lastSummary = summary;
     this.cleanupSieges();
     this.recomputeTerritories();
-    this.checkVictory();
+    this.checkVictory({ turnBoundary: true });
     const nextEra = checkEraAdvancement(this);
     if (!this.gameOver && nextEra) {
       const eraEvent = maybeRunGlobalEvent(this, { force: true });
@@ -1317,7 +1457,7 @@ export class GameState {
     }
   }
 
-  produceForNation(nation, summary) {
+  produceForNation(nation, summary, logistics = this.logisticsSummaryFor(nation.id)) {
     let populationGain = 0;
     let foodProduced = 0;
     const happinessEnabled = this.settings.happinessEnabled !== false;
@@ -1342,7 +1482,10 @@ export class GameState {
       }
       for (const resource of ["food", "materials", "education", "industry"]) {
         if (production[resource]) {
-          const exhaustedProduction = applyWarExhaustionProduction(nation, production[resource]);
+          let adjustedAmount = production[resource];
+          if (resource === "food") adjustedAmount = Math.ceil(adjustedAmount * logistics.foodModifier);
+          if (resource === "materials") adjustedAmount = Math.ceil(adjustedAmount * logistics.materialsModifier);
+          const exhaustedProduction = applyWarExhaustionProduction(nation, adjustedAmount);
           const happyProduction = happinessEnabled ? applyHappinessProduction(nation, exhaustedProduction) : exhaustedProduction;
           const produced = applyStockpileDiminishingReturns(nation, resource, happyProduction);
           nation.resources[resource] += produced;
@@ -1373,6 +1516,7 @@ export class GameState {
   }
 
   consumeFood(nation, summary, foodProduced, happinessContext = {}) {
+    const logistics = happinessContext.logistics || this.logisticsSummaryFor(nation.id);
     // Each person consumes food every turn; rate rises slightly each era (urbanization costs more).
     const consumption = foodConsumptionFor(nation, this.era);
     summary.foodConsumed += consumption;
@@ -1466,7 +1610,7 @@ export class GameState {
     else if (surplusRatio >= BALANCE.population.growth.comfortableSurplusRatio) baseGrowth = BALANCE.population.growth.comfortableGrowth;
     else baseGrowth = BALANCE.population.growth.marginalGrowth;
 
-    const growth = Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(nation));
+    const growth = Math.round(baseGrowth * headroomFraction * logistics.growthMultiplier);
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
@@ -1627,32 +1771,17 @@ export class GameState {
     };
   }
 
-  checkVictory() {
-    if (this.gameOver) return this.gameOver;
-    const active = Object.values(this.nations).filter((nation) => nation.active);
-    if (active.length <= 1) {
-      this.gameOver = {
-        type: "domination",
-        label: "Total Domination",
-        winnerId: active[0]?.id || this.playerId,
-        turn: this.turn,
-        scores: this.scoreboard(),
-      };
-    } else if (!this.settings.unlimitedMode && this.settings.maxTurns > 0 && this.turn >= this.settings.maxTurns) {
-      const scores = this.scoreboard();
-      this.gameOver = {
-        type: "turn_limit",
-        label: "Turn Limit Reached",
-        winnerId: scores[0].id,
-        turn: this.turn,
-        scores,
-      };
-    }
-    if (this.gameOver) {
-      this.addEvent(`${this.nations[this.gameOver.winnerId].name} won by ${this.gameOver.label}.`, { nationId: this.gameOver.winnerId, type: "victory" });
-      this.emit({ type: "game_over", gameOver: this.gameOver });
-    }
-    return this.gameOver;
+  checkVictory(options = {}) {
+    const alreadyOver = Boolean(this.gameOver);
+    const result = evaluateVictory(this, {
+      ...options,
+      scoreboard: (game) => game.scoreboard(),
+      onVictory: (gameOver) => {
+        this.addEvent(`${this.nations[gameOver.winnerId].name} won by ${gameOver.label}.`, { nationId: gameOver.winnerId, type: "victory" });
+      },
+    });
+    if (!alreadyOver && result) this.emit({ type: "game_over", gameOver: result });
+    return result;
   }
 
   scoreboard() {
@@ -1675,9 +1804,11 @@ export class GameState {
     for (const tile of this.tiles) {
       if (tile.ownerId && this.nations[tile.ownerId]) this.nations[tile.ownerId].territory.push(tile.id);
     }
+    this.refreshDiscoveredNations();
   }
 
   changed(source) {
+    if (!this.serverAuthoritative) refreshVictoryProgress(this);
     this.emit({ type: "state_changed", source });
   }
 
@@ -1771,6 +1902,7 @@ function applyHappinessProduction(nation, amount) {
 
 function populationHappinessDelta(game, nation, context = {}) {
   const config = BALANCE.population.happiness.changes;
+  const logistics = context.logistics || computeNationLogistics(game.tiles || game.map?.tiles || [], nation);
   const consumption = Math.max(1, Number(context.consumption) || 1);
   const surplus = Number(context.surplus) || 0;
   const surplusRatio = surplus / consumption;
@@ -1795,9 +1927,7 @@ function populationHappinessDelta(game, nation, context = {}) {
   if (activeWarCount === 0 && surplus >= BALANCE.population.growth.minimumFoodSurplus && (Number(context.unpaidUpkeep) || 0) <= 0) {
     delta += config.peacefulRecovery;
   }
-  if (!context.famine && surplus >= BALANCE.population.growth.minimumFoodSurplus && (Number(context.unpaidUpkeep) || 0) <= 0) {
-    delta += transportHappinessBonus(nation);
-  }
+  delta += logistics.happinessDelta;
 
   if (delta === 0 && normalizeHappiness(nation.population.happiness) < BALANCE.population.happiness.default) return 1;
   return clamp(delta, -15, 8);

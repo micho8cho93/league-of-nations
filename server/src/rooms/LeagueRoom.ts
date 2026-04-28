@@ -77,6 +77,7 @@ interface PlayerActionPayload {
   partnerId?: unknown;
   allianceId?: unknown;
   buildingType?: unknown;
+  infrastructureType?: unknown;
   amount?: unknown;
   strength?: unknown;
   branch?: unknown;

@@ -86,6 +86,7 @@ export const BALANCE = {
     costs: {
       assignWorkers: 1,
       buildTile: 1,
+      buildInfrastructure: 1,
       destroyTile: 1,
       trainUnit: 1,
       moveOrAttackUnit: 1,

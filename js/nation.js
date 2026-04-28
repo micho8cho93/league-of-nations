@@ -67,6 +67,7 @@ export function createNation({
     actionsUsedThisTurn: 0,
     capitalTileId: null,
     territory: [],
+    discoveredNations: [id],
     warExhaustion: BALANCE.war.exhaustion.min,
     mobilizationLevel: BALANCE.war.mobilization.peacetimeLevel,
     population: {

@@ -1,4 +1,8 @@
 import type { ServerGameState } from "./initialGame.js";
+import {
+  INFRASTRUCTURE_UNLOCKS,
+  transportUnlockForTier,
+} from "./infrastructure.js";
 
 type Nation = ServerGameState["nations"][string];
 type Tile = ServerGameState["map"]["tiles"][number];
@@ -39,13 +43,6 @@ export const TECH_CATEGORIES: Record<TechCategory, { label: string; tileTypes: s
   military: { label: "Military", tileTypes: [TILE_TYPES.MILITARY], baseCost: 420, resource: "materials" },
 };
 
-export const INFRASTRUCTURE_UNLOCKS = [
-  { tier: 1, tileType: TILE_TYPES.ROAD, label: "Road", era: 1 },
-  { tier: 2, tileType: TILE_TYPES.RAILROAD, label: "Railroad", era: 2 },
-  { tier: 3, tileType: TILE_TYPES.HIGHWAY, label: "Highway", era: 3 },
-  { tier: 4, tileType: TILE_TYPES.AIRPORT, label: "Airport", era: 4 },
-];
-
 export const MILITARY_BRANCHES: Record<MilitaryBranch, { label: string; baseCost: number; materialCost: number; educationCost?: number }> = {
   tanks: { label: "Tanks", baseCost: 900, materialCost: 45 },
   air: { label: "Air", baseCost: 1050, materialCost: 35, educationCost: 35 },
@@ -82,7 +79,7 @@ export function researchRequirement(category: string, nextTier: number) {
   if (!config) return null;
   const resourceCost = Math.ceil(config.baseCost * TECH_RESEARCH.resourceCostRate * Math.pow(TECH_RESEARCH.resourceCostExponent, nextTier - 1));
   if (category === "infrastructure") {
-    const unlock = INFRASTRUCTURE_UNLOCKS[nextTier - 1] || null;
+    const unlock = transportUnlockForTier(nextTier);
     return {
       activeTiles: 0,
       resource: config.resource,
@@ -179,7 +176,7 @@ export function buildingTechRequirement(type: string, nation: Nation, era: numbe
   if (type === TILE_TYPES.FISHERY && numberValue(nation.tech.farming) < 1) return { ok: false, reason: "Requires Farming tier 1." };
   if (type === TILE_TYPES.MOUNTAIN_MINE && numberValue(nation.tech.mining) < 2) return { ok: false, reason: "Requires Mining tier 2." };
   if (type === TILE_TYPES.UNIVERSITY && numberValue(nation.tech.education) < 3) return { ok: false, reason: "Requires Education tier 3." };
-  const unlock = INFRASTRUCTURE_UNLOCKS.find((item) => item.tileType === type);
+  const unlock = INFRASTRUCTURE_UNLOCKS.find((item) => item.type === type);
   if (unlock) {
     if (era < unlock.era) return { ok: false, reason: `${unlock.label}s unlock in Era ${unlock.era}.` };
     if (numberValue(nation.tech.infrastructure) < unlock.tier) return { ok: false, reason: `Requires Infrastructure tier ${unlock.tier}.` };
@@ -192,7 +189,7 @@ export function getUnlockedActions(game: ServerGameState, nation: Nation) {
     trade: game.era >= 2,
     diplomacy: game.era >= 2,
     war: game.era >= 3,
-    transport: INFRASTRUCTURE_UNLOCKS.filter((unlock) => game.era >= unlock.era && numberValue(nation.tech.infrastructure) >= unlock.tier).map((unlock) => unlock.tileType),
+    transport: INFRASTRUCTURE_UNLOCKS.filter((unlock) => game.era >= unlock.era && numberValue(nation.tech.infrastructure) >= unlock.tier).map((unlock) => unlock.type),
     training: {
       infantry: true,
       tanks: game.era >= 4 && numberValue(nation.tech.branches?.tanks) > 0,

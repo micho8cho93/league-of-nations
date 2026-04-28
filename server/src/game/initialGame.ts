@@ -1,4 +1,5 @@
 import { normalizeAdvancedResources } from "./advanced.js";
+import { refreshVictoryProgress } from "./victory.js";
 
 type ControllerType = "human" | "bot";
 type MapOptionLevel = "Low" | "Balanced" | "High";
@@ -51,6 +52,7 @@ interface Nation {
   actionsUsedThisTurn: number;
   capitalTileId: string | null;
   territory: string[];
+  discoveredNations: string[];
   warExhaustion: number;
   reputation: number;
   mobilizationLevel: number;
@@ -83,6 +85,7 @@ interface Tile {
   landform: "continent" | "island" | "sea";
   biome: Biome;
   type: string;
+  infrastructure?: string;
   ownerId: string | null;
   workers: number;
   unit: null | {
@@ -135,6 +138,7 @@ export interface ServerGameState {
   pendingEraReport: null;
   globalEvents: Record<string, unknown>;
   gameOver: null | Record<string, unknown>;
+  victoryProgress: null | Record<string, unknown>;
   selectedTileId: null;
   lastSummary: null | Record<string, unknown>;
   startedAt: number;
@@ -295,7 +299,7 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
   assignStartingTerritories(map, Object.values(nations), territoryRng);
 
   const startedAt = Date.now();
-  return {
+  const game: ServerGameState = {
     settings,
     gameId: "",
     roomId: "",
@@ -346,6 +350,7 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     pendingEraReport: null,
     globalEvents: {},
     gameOver: null,
+    victoryProgress: null,
     selectedTileId: null,
     lastSummary: null,
     startedAt,
@@ -354,6 +359,8 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     playerId: seats.find((seat) => seat.controllerType === "human")?.nationId || seats[0]?.nationId || "nation-1",
     seats,
   };
+  refreshVictoryProgress(game);
+  return game;
 }
 
 function normalizeInitialGameSettings(settings: InitialGameSettings): InitialGameSettings {
@@ -431,6 +438,7 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
     pendingEraReport: game.pendingEraReport,
     globalEvents: game.globalEvents,
     gameOver: game.gameOver,
+    victoryProgress: game.victoryProgress,
     selectedTileId: null,
     lastSummary: game.lastSummary,
     startedAt: game.startedAt,
@@ -526,6 +534,7 @@ function createNation({
     actionsUsedThisTurn: 0,
     capitalTileId: null,
     territory: [],
+    discoveredNations: [id],
     warExhaustion: 0,
     reputation: 0,
     mobilizationLevel: 0,
@@ -701,6 +710,7 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
       landform: land ? coord.nearestKind : "sea",
       biome: land ? "grassland" : "water",
       type: land ? TILE_TYPES.EMPTY : TILE_TYPES.WATER,
+      infrastructure: "none",
       ownerId: null,
       workers: 0,
       unit: null,

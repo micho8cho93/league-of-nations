@@ -17,7 +17,24 @@ import {
   canResearch as validateResearchTech,
   canResearchBranch as validateResearchBranch,
 } from "./tech.js";
+import {
+  VICTORY_CONFIG as DEFAULT_VICTORY_CONFIG,
+  refreshVictoryProgress,
+  totalDominationWinnerId,
+} from "./victory.js";
 import { applyEventModifiers, tickEventTileEffects } from "./events.js";
+import {
+  INFRASTRUCTURE_BUILD_COSTS,
+  INFRASTRUCTURE_LABELS,
+  INFRASTRUCTURE_TYPES,
+  advancedNetworkSupport,
+  canTileHostInfrastructure,
+  canUseInfrastructureEdge,
+  computeNationLogistics,
+  infrastructureRequiredTier,
+  normalizeInfrastructureType,
+  tileInfrastructureType,
+} from "./infrastructure.js";
 
 type Tile = ServerGameState["map"]["tiles"][number];
 type Nation = ServerGameState["nations"][string];
@@ -33,6 +50,7 @@ type PlayerActionPayload = {
   partnerId?: unknown;
   allianceId?: unknown;
   buildingType?: unknown;
+  infrastructureType?: unknown;
   amount?: unknown;
   strength?: unknown;
   category?: unknown;
@@ -58,6 +76,7 @@ type ActionResult = { ok: true; [key: string]: unknown } | { ok: false; reason: 
 export const SERVER_GAME_ACTION_TYPES = {
   ASSIGN_WORKERS: "ASSIGN_WORKERS",
   BUILD_TILE: "BUILD_TILE",
+  BUILD_INFRASTRUCTURE: "BUILD_INFRASTRUCTURE",
   DESTROY_TILE: "DESTROY_TILE",
   TRAIN_UNIT: "TRAIN_UNIT",
   MOVE_OR_ATTACK_UNIT: "MOVE_OR_ATTACK_UNIT",
@@ -79,6 +98,7 @@ export const SERVER_GAME_ACTION_TYPES = {
 
 export const SERVER_PLAYER_ACTION_TYPES = [
   "assignWorkers",
+  "buildInfrastructure",
   "destroyTile",
   "trainUnit",
   "moveOrAttackUnit",
@@ -96,6 +116,7 @@ export const SERVER_PLAYER_ACTION_TYPES = [
 
 export const SERVER_ACTION_ALIASES: Record<string, string> = {
   assignWorkers: SERVER_GAME_ACTION_TYPES.ASSIGN_WORKERS,
+  buildInfrastructure: SERVER_GAME_ACTION_TYPES.BUILD_INFRASTRUCTURE,
   destroyTile: SERVER_GAME_ACTION_TYPES.DESTROY_TILE,
   trainUnit: SERVER_GAME_ACTION_TYPES.TRAIN_UNIT,
   moveOrAttackUnit: SERVER_GAME_ACTION_TYPES.MOVE_OR_ATTACK_UNIT,
@@ -115,6 +136,7 @@ export const SERVER_ACTION_ALIASES: Record<string, string> = {
   buildTile: SERVER_GAME_ACTION_TYPES.BUILD_TILE,
   endTurn: SERVER_GAME_ACTION_TYPES.END_TURN,
   ASSIGN_WORKERS: SERVER_GAME_ACTION_TYPES.ASSIGN_WORKERS,
+  BUILD_INFRASTRUCTURE: SERVER_GAME_ACTION_TYPES.BUILD_INFRASTRUCTURE,
   DESTROY_TILE: SERVER_GAME_ACTION_TYPES.DESTROY_TILE,
   TRAIN_UNIT: SERVER_GAME_ACTION_TYPES.TRAIN_UNIT,
   MOVE_OR_ATTACK_UNIT: SERVER_GAME_ACTION_TYPES.MOVE_OR_ATTACK_UNIT,
@@ -135,13 +157,10 @@ export const SERVER_ACTION_ALIASES: Record<string, string> = {
   END_TURN: SERVER_GAME_ACTION_TYPES.END_TURN,
 };
 
-export const DEFAULT_VICTORY_CONFIG = {
-  economicGoldThreshold: 20000,
-} as const;
-
 export const ACTION_COSTS: Record<string, number> = {
   [SERVER_GAME_ACTION_TYPES.ASSIGN_WORKERS]: 1,
   [SERVER_GAME_ACTION_TYPES.BUILD_TILE]: 1,
+  [SERVER_GAME_ACTION_TYPES.BUILD_INFRASTRUCTURE]: 1,
   [SERVER_GAME_ACTION_TYPES.DESTROY_TILE]: 1,
   [SERVER_GAME_ACTION_TYPES.TRAIN_UNIT]: 1,
   [SERVER_GAME_ACTION_TYPES.MOVE_OR_ATTACK_UNIT]: 1,
@@ -451,11 +470,15 @@ export function applyServerPlayerAction(
   nationId: string,
   payload: PlayerActionPayload,
 ): ActionResult {
+  normalizeDiscoveryState(game);
   const actionType = normalizeServerActionType(type);
   let result: ActionResult;
   switch (actionType) {
     case SERVER_GAME_ACTION_TYPES.BUILD_TILE:
       result = buildTile(game, stringValue(payload.tileId), stringValue(payload.buildingType ?? payload.typeId), nationId);
+      break;
+    case SERVER_GAME_ACTION_TYPES.BUILD_INFRASTRUCTURE:
+      result = buildInfrastructure(game, stringValue(payload.tileId), stringValue(payload.infrastructureType ?? payload.typeId), nationId);
       break;
     case SERVER_GAME_ACTION_TYPES.ASSIGN_WORKERS:
       result = assignWorkers(game, stringValue(payload.tileId), payload.amount, nationId, payload.category);
@@ -532,11 +555,13 @@ export function processServerRound(game: ServerGameState) {
     iron: 0,
     oil: 0,
     population: 0,
+    happiness: 0,
     notes: [] as string[],
   };
 
   for (const nation of Object.values(game.nations)) {
     if (!nation.active) continue;
+    const logistics = computeNationLogistics(game.map.tiles, nation);
     if (isAdvancedMode(game)) {
       const resourceCollection = collectAdvancedResourcesForNation(game, nation.id);
       for (const resource of ADVANCED_RESOURCE_KEYS) summary[resource] += resourceCollection.gained[resource];
@@ -547,7 +572,9 @@ export function processServerRound(game: ServerGameState) {
       if (!production) continue;
       const multiplier = 1 + Math.max(0, game.era - 1) * 0.2;
       for (const resource of ["food", "materials", "education", "industry"] as const) {
-        const baseAmount = Math.ceil((production[resource] || 0) * multiplier);
+        let baseAmount = Math.ceil((production[resource] || 0) * multiplier);
+        if (resource === "food") baseAmount = Math.ceil(baseAmount * logistics.foodModifier);
+        if (resource === "materials") baseAmount = Math.ceil(baseAmount * logistics.materialsModifier);
         const eventAmount = applyEventModifiers(game, resource, baseAmount);
         const amount = applyWarExhaustionProduction(nation, eventAmount);
         if (!amount) continue;
@@ -562,44 +589,74 @@ export function processServerRound(game: ServerGameState) {
         summary.money += money;
       }
     }
+    if (game.settings.happinessEnabled !== false) {
+      const before = normalizeHappiness(nation.population.happiness);
+      nation.population.happiness = normalizeHappiness(before + logistics.happinessDelta);
+      summary.happiness += nation.population.happiness - before;
+    }
     if (isAdvancedMode(game)) applyAdvancedFruitEffects(game, nation, summary);
   }
 
   game.lastSummary = summary;
   tickEventTileEffects(game);
   addEvent(game, `Turn ${game.turn} production resolved by the server.`, { type: "resource" });
-  checkServerVictory(game);
+  checkServerVictory(game, DEFAULT_VICTORY_CONFIG, { turnBoundary: true });
   return summary;
 }
 
-export function checkServerVictory(game: ServerGameState, config = DEFAULT_VICTORY_CONFIG) {
+export function checkServerVictory(game: ServerGameState, config = DEFAULT_VICTORY_CONFIG, options: { turnBoundary?: boolean } = {}) {
   if (game.gameOver) return game.gameOver;
 
   recomputeTerritories(game);
+  refreshVictoryProgress(game, options);
   const active = Object.values(game.nations).filter((nation) => nation.active);
-  const economicWinner = active.find((nation) => numberValue(nation.money) >= config.economicGoldThreshold);
-  if (economicWinner) {
-    game.gameOver = createVictoryState(game, economicWinner.id, "economic", "Economic Victory", `${economicWinner.name} reached $${config.economicGoldThreshold}.`);
-    addEvent(game, `${economicWinner.name} won by Economic Victory.`, { nationId: economicWinner.id, type: "victory" });
+  const victoryNations = ((game.victoryProgress as Record<string, any> | null)?.nations || {}) as Record<string, any>;
+
+  const dominationWinnerId = totalDominationWinnerId(game);
+  if (dominationWinnerId) {
+    game.gameOver = createVictoryState(
+      game,
+      dominationWinnerId,
+      "total_domination",
+      "Total Domination Victory",
+      `${game.nations[dominationWinnerId].name} controls every capital on the map.`
+    );
+    addEvent(game, `${game.nations[dominationWinnerId].name} won by Total Domination Victory.`, { nationId: dominationWinnerId, type: "victory" });
     return game.gameOver;
   }
 
-  const capturableTiles = game.map.tiles.filter((tile) => tile.terrain === "land" && tile.type !== TILE_TYPES.MOUNTAIN);
-  const capturableOwners = new Set(capturableTiles.map((tile) => tile.ownerId));
-  if (capturableTiles.length > 0 && !capturableOwners.has(null) && capturableOwners.size === 1) {
-    const [winnerId] = [...capturableOwners];
-    if (winnerId && game.nations[winnerId]?.active) {
-      game.gameOver = createVictoryState(game, winnerId, "military", "Military Victory", `${game.nations[winnerId].name} controls every capturable tile.`);
-      addEvent(game, `${game.nations[winnerId].name} won by Military Victory.`, { nationId: winnerId, type: "victory" });
+  if (options.turnBoundary) {
+    const techWinner = active.find((nation) => {
+      const entry = victoryNations[nation.id];
+      return entry?.meetsTechCondition && entry?.techHoldTurns >= config.technologicalSupremacy.holdTurns;
+    });
+    if (techWinner) {
+      game.gameOver = createVictoryState(
+        game,
+        techWinner.id,
+        "technological_supremacy",
+        "Technological Supremacy Victory",
+        `${techWinner.name} completed the final tech tier and held a decisive research lead.`
+      );
+      addEvent(game, `${techWinner.name} won by Technological Supremacy Victory.`, { nationId: techWinner.id, type: "victory" });
       return game.gameOver;
     }
-  }
 
-  if (active.length <= 1) {
-    const winnerId = active[0]?.id || Object.keys(game.nations)[0] || "";
-    game.gameOver = createVictoryState(game, winnerId, "military", "Military Victory", `${game.nations[winnerId]?.name || "A nation"} is the last active nation.`);
-    addEvent(game, `${game.nations[winnerId]?.name || "A nation"} won by Military Victory.`, { nationId: winnerId, type: "victory" });
-    return game.gameOver;
+    const diplomacyWinner = active.find((nation) => {
+      const entry = victoryNations[nation.id];
+      return entry?.meetsDiplomaticCondition && entry?.diplomaticHoldTurns >= config.diplomaticHegemony.holdTurns;
+    });
+    if (diplomacyWinner) {
+      game.gameOver = createVictoryState(
+        game,
+        diplomacyWinner.id,
+        "diplomatic_hegemony",
+        "Diplomatic Hegemony Victory",
+        `${diplomacyWinner.name} maintained a majority alliance bloc for 10 consecutive turns.`
+      );
+      addEvent(game, `${diplomacyWinner.name} won by Diplomatic Hegemony Victory.`, { nationId: diplomacyWinner.id, type: "victory" });
+      return game.gameOver;
+    }
   }
 
   if (!game.settings.unlimitedMode && game.settings.maxTurns > 0 && game.turn >= game.settings.maxTurns) {
@@ -626,10 +683,13 @@ export function checkServerVictory(game: ServerGameState, config = DEFAULT_VICTO
 
 export function handleProposeTrade(state: ServerGameState, player: Nation | null | undefined, payload: PlayerActionPayload = {}): ActionResult {
   if (!player?.active) return reject("INACTIVE_NATION", "Nation is inactive.");
+  normalizeDiscoveryState(state);
   const fromId = player.id;
   const toId = stringValue(payload.partnerId || payload.targetId || (payload as Record<string, unknown>).toId);
   const gate = canUseDiplomacy(state, fromId, toId);
   if (!gate.ok) return gate;
+  const discoveryGate = requireTradeDiscovery(state, fromId, toId);
+  if (!discoveryGate.ok) return discoveryGate;
   if (hasNegativeBundle(payload.offer) || hasNegativeBundle(payload.request)) return reject("INVALID_PAYLOAD", "Trade values must be positive.");
 
   const offer = normalizeBundle(payload.offer);
@@ -652,12 +712,14 @@ export function handleProposeTrade(state: ServerGameState, player: Nation | null
   };
   const proposals = ensureTradeProposals(state);
   proposals.push(proposal);
+  establishDiplomaticContact(state, fromId, toId);
   addEvent(state, `${player.name} proposed a trade to ${state.nations[toId].name}.`, { nationId: fromId, type: "trade" });
   return { ok: true, proposal };
 }
 
 export function handleAcceptTrade(state: ServerGameState, player: Nation | null | undefined, payload: PlayerActionPayload = {}): ActionResult {
   if (!player?.active) return reject("INACTIVE_NATION", "Nation is inactive.");
+  normalizeDiscoveryState(state);
   const proposal = findTradeProposal(state, payload);
   if (!proposal) return reject("INVALID_PAYLOAD", "Trade proposal not found.");
   if (proposal.toId !== player.id) return reject("OWNERSHIP_MISMATCH", "Only the target nation can accept this trade.");
@@ -745,6 +807,50 @@ function buildTile(game: ServerGameState, tileId: string, type: string, nationId
   });
 
   return { ok: true, cost: check.cost, advancedCost: check.advancedCost || null };
+}
+
+function canBuildInfrastructure(
+  game: ServerGameState,
+  tileId: string,
+  infrastructureType: string,
+  nationId: string,
+): { ok: true; cost: number; type: string } | { ok: false; reason: string } {
+  const nation = game.nations[nationId];
+  const tile = tileById(game, tileId);
+  const type = normalizeInfrastructureType(infrastructureType);
+  if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+  if (!tile || tile.ownerId !== nationId) return { ok: false, reason: "Infrastructure can only be built on owned tiles." };
+  if (type === INFRASTRUCTURE_TYPES.NONE || !INFRASTRUCTURE_LABELS[type]) return { ok: false, reason: "Unknown infrastructure type." };
+  if (!canTileHostInfrastructure(tile, type)) {
+    return { ok: false, reason: type === INFRASTRUCTURE_TYPES.ADVANCED ? "Advanced networks require an owned land or water tile." : "Roads and rail require owned land tiles." };
+  }
+  const requiredTier = infrastructureRequiredTier(type);
+  if (numberValue(nation.tech.infrastructure) < requiredTier) return { ok: false, reason: `Requires Infrastructure tier ${requiredTier}.` };
+  const currentType = tileInfrastructureType(tile);
+  if (currentType === type) return { ok: false, reason: `${INFRASTRUCTURE_LABELS[type]} is already present on this tile.` };
+  if (infrastructureRequiredTier(currentType) > requiredTier) return { ok: false, reason: "This tile already has a more advanced network." };
+  const cost = INFRASTRUCTURE_BUILD_COSTS[type] || 0;
+  if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+  return { ok: true, cost, type };
+}
+
+function buildInfrastructure(game: ServerGameState, tileId: string, infrastructureType: string, nationId: string): ActionResult {
+  const check = canBuildInfrastructure(game, tileId, infrastructureType, nationId);
+  if (!check.ok) return check;
+  const action = spendAction(game, nationId, SERVER_GAME_ACTION_TYPES.BUILD_INFRASTRUCTURE);
+  if (!action.ok) return action;
+  const nation = game.nations[nationId];
+  const tile = tileById(game, tileId);
+  if (!nation || !tile) return { ok: false, reason: "Infrastructure target is unavailable." };
+  if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
+  tile.infrastructure = check.type;
+  incrementStat(nation, "built", 1);
+  addEvent(game, `${nation.name} expanded ${INFRASTRUCTURE_LABELS[check.type].toLowerCase()} on a controlled tile for $${check.cost}.`, {
+    nationId,
+    type: "build",
+    tileId: tile.id,
+  });
+  return { ok: true, cost: check.cost, infrastructureType: check.type };
 }
 
 function destroyTile(game: ServerGameState, tileId: string, nationId: string): ActionResult {
@@ -1044,6 +1150,7 @@ function declareWarAction(game: ServerGameState, targetId: string, nationId: str
 }
 
 function tradeAction(game: ServerGameState, partnerId: string, offer: unknown, request: unknown, nationId: string): ActionResult {
+  normalizeDiscoveryState(game);
   const action = canSpendAction(game, nationId, SERVER_GAME_ACTION_TYPES.TRADE);
   if (!action.ok) return action;
   if (hasNegativeBundle(offer) || hasNegativeBundle(request)) return reject("INVALID_PAYLOAD", "Trade values must be positive.");
@@ -1068,6 +1175,7 @@ function tradeAction(game: ServerGameState, partnerId: string, offer: unknown, r
 }
 
 function proposeAllianceAction(game: ServerGameState, partnerId: string, allianceType: string, nationId: string): ActionResult {
+  normalizeDiscoveryState(game);
   const action = canSpendAction(game, nationId, SERVER_GAME_ACTION_TYPES.PROPOSE_ALLIANCE);
   if (!action.ok) return action;
   const result = proposeAlliance(game, nationId, partnerId, allianceType);
@@ -1097,6 +1205,7 @@ function breakAllianceAction(game: ServerGameState, allianceId: string, nationId
 }
 
 function embargoAction(game: ServerGameState, targetId: string, nationId: string): ActionResult {
+  normalizeDiscoveryState(game);
   const action = canSpendAction(game, nationId, SERVER_GAME_ACTION_TYPES.EMBARGO);
   if (!action.ok) return action;
   const result = embargoNation(game, nationId, targetId);
@@ -1378,29 +1487,37 @@ type MilitaryAction = {
 
 function reachableMoveTargets(game: ServerGameState, from: Tile, nationId: string, unitType: string) {
   const config = unitTypeConfig(unitType);
+  const logistics = computeNationLogistics(game.map.tiles, game.nations[nationId]);
+  const sourceBonus = movementBonusAvailable(logistics, from, unitType);
   if (config.ignoresTerrainForMovement) {
     return game.map.tiles
-      .filter((tile) => tile.id !== from.id && hexDistance(from, tile) <= config.moveRange)
+      .filter((tile) => tile.id !== from.id && hexDistance(from, tile) <= config.moveRange + sourceBonus)
       .filter((tile) => canMoveDestination(game, from, tile, nationId, unitType))
       .map((tile) => ({ tile, path: [from.id, tile.id] }));
   }
 
-  const queue = [{ tile: from, path: [from.id], distance: 0 }];
-  const seen = new Map([[from.id, 0]]);
+  const useEdgeBonus = unitType === "infantry" || unitType === "tanks";
+  const maxDistance = config.moveRange + (useEdgeBonus ? 0 : sourceBonus);
+  const queue = [{ tile: from, path: [from.id], distance: 0, bonusRemaining: useEdgeBonus ? sourceBonus : 0 }];
+  const seen = new Map([[`${from.id}:${useEdgeBonus ? sourceBonus : 0}`, 0]]);
   const targets: Array<{ tile: Tile; path: string[] }> = [];
   while (queue.length) {
     const current = queue.shift();
-    if (!current || current.distance >= config.moveRange) continue;
+    if (!current || current.distance >= maxDistance) continue;
     for (const neighbor of neighbors(game, current.tile.id)) {
-      const nextDistance = current.distance + 1;
-      if ((seen.get(neighbor.id) ?? Infinity) <= nextDistance) continue;
+      const useNetworkEdge = useEdgeBonus && current.bonusRemaining > 0 && canUseInfrastructureEdge(logistics, current.tile.id, neighbor.id, unitType);
+      const nextDistance = current.distance + (useNetworkEdge ? 0 : 1);
+      const nextBonusRemaining = useNetworkEdge ? current.bonusRemaining - 1 : current.bonusRemaining;
+      if (nextDistance > maxDistance) continue;
+      const stateKey = `${neighbor.id}:${nextBonusRemaining}`;
+      if ((seen.get(stateKey) ?? Infinity) <= nextDistance) continue;
       if (!canUnitEnterTile(game, nationId, neighbor, unitType).ok) continue;
       if (neighbor.ownerId && neighbor.ownerId !== nationId && !areAllied(game, nationId, neighbor.ownerId)) continue;
       const path = [...current.path, neighbor.id];
-      seen.set(neighbor.id, nextDistance);
+      seen.set(stateKey, nextDistance);
       if (!neighbor.ownerId || neighbor.ownerId === nationId) targets.push({ tile: neighbor, path });
       if (neighbor.ownerId === nationId || areAllied(game, nationId, neighbor.ownerId) || (config.canEnterWater && isWaterLike(neighbor))) {
-        queue.push({ tile: neighbor, path, distance: nextDistance });
+        queue.push({ tile: neighbor, path, distance: nextDistance, bonusRemaining: nextBonusRemaining });
       }
     }
   }
@@ -1442,9 +1559,17 @@ function canUnitAttackTile(game: ServerGameState, tile: Tile, unitType: string) 
   return true;
 }
 
+function movementBonusAvailable(logistics: ReturnType<typeof computeNationLogistics>, from: Tile, unitType: string) {
+  if (unitType === "infantry") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ROAD].has(from.id) ? 1 : 0;
+  if (unitType === "tanks") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(from.id) ? 1 : 0;
+  if (unitType === "air" || unitType === "naval") return advancedNetworkSupport(logistics, from.id) ? 1 : 0;
+  return 0;
+}
+
 function declareWar(game: ServerGameState, attackerId: string, defenderId: string, reason: string): ActionResult {
   if (game.era < 3) return { ok: false, reason: "War unlocks in Era 3." };
   if (attackerId === defenderId) return { ok: false, reason: "A nation cannot declare war on itself." };
+  establishDiplomaticContact(game, attackerId, defenderId);
   const attacker = game.nations[attackerId];
   const defender = game.nations[defenderId];
   if (!attacker?.active || !defender?.active) return { ok: false, reason: "Target is unavailable." };
@@ -1470,6 +1595,7 @@ function applyTrade(game: ServerGameState, fromId: string, toId: string, offer: 
   const result = evaluateTrade(game, fromId, toId, offer, request);
   const record = getDiplomacy(game, fromId, toId);
   if (!result.ok) return result;
+  establishDiplomaticContact(game, fromId, toId);
   if (!result.accepted) {
     record.relation = Math.max(0, numberValue(record.relation) - TRADE.rejectedRelationPenalty);
     return result;
@@ -1497,6 +1623,8 @@ function applyTrade(game: ServerGameState, fromId: string, toId: string, offer: 
 function evaluateTrade(game: ServerGameState, fromId: string, toId: string, offer: unknown, request: unknown) {
   const gate = canUseDiplomacy(game, fromId, toId);
   if (!gate.ok) return gate;
+  const discoveryGate = requireTradeDiscovery(game, fromId, toId);
+  if (!discoveryGate.ok) return discoveryGate;
   const from = game.nations[fromId];
   const to = game.nations[toId];
   const record = getDiplomacy(game, fromId, toId);
@@ -1527,6 +1655,7 @@ function evaluateTrade(game: ServerGameState, fromId: string, toId: string, offe
 function proposeAlliance(game: ServerGameState, fromId: string, toId: string, type = "trade") {
   const gate = canUseDiplomacy(game, fromId, toId);
   if (!gate.ok) return gate;
+  establishDiplomaticContact(game, fromId, toId);
   const config = TRADE.alliances[type] || TRADE.alliances.trade;
   const from = game.nations[fromId];
   const to = game.nations[toId];
@@ -1583,6 +1712,7 @@ function breakAlliance(game: ServerGameState, allianceId: string, breakerId: str
 function embargoNation(game: ServerGameState, fromId: string, targetId: string): ActionResult {
   const gate = canUseDiplomacy(game, fromId, targetId);
   if (!gate.ok) return gate;
+  establishDiplomaticContact(game, fromId, targetId);
   if (fromId === targetId) return { ok: false, reason: "A nation cannot embargo itself." };
   if (areAtWar(game, fromId, targetId)) return { ok: false, reason: "War already blocks direct trade." };
   const from = game.nations[fromId];
@@ -2169,6 +2299,7 @@ function recomputeTerritories(game: ServerGameState) {
     nation.territory = game.map.tiles.filter((tile) => tile.ownerId === nation.id).map((tile) => tile.id);
     nation.capitalTileId = game.map.tiles.find((tile) => tile.ownerId === nation.id && tile.isCapital)?.id || nation.capitalTileId;
   }
+  refreshDiscoveredNations(game);
 }
 
 function createVictoryState(game: ServerGameState, winnerId: string, victoryType: string, label: string, reason: string) {
@@ -2334,6 +2465,98 @@ function normalizeActionPointState(nation: Nation) {
   nation.actionPoints = normalizeActionCount(rawPoints, nation.maxActionPoints, nation.maxActionPoints);
   nation.actionsRemaining = nation.actionPoints;
   nation.actionsUsedThisTurn = Math.max(0, Math.floor(Number(nation.actionsUsedThisTurn) || 0));
+}
+
+function normalizeDiscoveryState(game: ServerGameState) {
+  for (const nation of Object.values(game.nations)) {
+    const discovered = new Set((Array.isArray(nation.discoveredNations) ? nation.discoveredNations : []).filter((id) => game.nations[id]));
+    discovered.add(nation.id);
+    nation.discoveredNations = [...discovered];
+  }
+  refreshDiscoveredNations(game);
+}
+
+function refreshDiscoveredNations(game: ServerGameState) {
+  for (const nation of Object.values(game.nations)) refreshDiscoveredNationsFor(game, nation.id);
+}
+
+function refreshDiscoveredNationsFor(game: ServerGameState, nationId: string) {
+  const nation = game.nations[nationId];
+  if (!nation) return;
+  const discovered = new Set(Array.isArray(nation.discoveredNations) ? nation.discoveredNations : []);
+  discovered.add(nationId);
+  const visibility = fogOfWarVisibilityFor(game, nationId);
+  if (visibility) {
+    for (const tileIdValue of visibility) {
+      const ownerId = tileById(game, tileIdValue)?.ownerId;
+      if (ownerId && ownerId !== nationId && game.nations[ownerId]?.active) discovered.add(ownerId);
+    }
+  }
+  for (const alliance of game.alliances as Array<Record<string, any>>) {
+    if (!alliance?.active || !Array.isArray(alliance.members) || !alliance.members.includes(nationId)) continue;
+    for (const memberId of alliance.members) {
+      if (memberId !== nationId && game.nations[memberId]) discovered.add(memberId);
+    }
+  }
+  nation.discoveredNations = [...discovered];
+}
+
+function fogOfWarVisibilityFor(game: ServerGameState, nationId: string) {
+  if (!game.settings.fogOfWarEnabled) return null;
+  const visibleTileIds = new Set<string>();
+  const seen = new Set<string>();
+  const queue: Array<{ tile: Tile; distance: number }> = [];
+  for (const sourceId of discoverySourceTileIdsFor(game, nationId)) {
+    const tile = tileById(game, sourceId);
+    if (!tile || seen.has(tile.id)) continue;
+    seen.add(tile.id);
+    visibleTileIds.add(tile.id);
+    queue.push({ tile, distance: 0 });
+  }
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    if (current.distance >= 3) continue;
+    for (const neighbor of neighbors(game, current.tile.id)) {
+      if (seen.has(neighbor.id)) continue;
+      seen.add(neighbor.id);
+      visibleTileIds.add(neighbor.id);
+      queue.push({ tile: neighbor, distance: current.distance + 1 });
+    }
+  }
+  return visibleTileIds;
+}
+
+function discoverySourceTileIdsFor(game: ServerGameState, nationId: string) {
+  const nation = game.nations[nationId];
+  const sourceIds = new Set(Array.isArray(nation?.territory) ? nation.territory : []);
+  for (const tile of game.map.tiles) {
+    if (tile.unit?.nationId === nationId) sourceIds.add(tile.id);
+  }
+  return [...sourceIds];
+}
+
+function hasDiscoveredNation(game: ServerGameState, nationId: string, targetId: string) {
+  if (!game.settings.fogOfWarEnabled) return true;
+  return Array.isArray(game.nations[nationId]?.discoveredNations) && game.nations[nationId].discoveredNations.includes(targetId);
+}
+
+function establishDiplomaticContact(game: ServerGameState, a: string, b: string) {
+  discoverNation(game, a, b);
+  discoverNation(game, b, a);
+}
+
+function discoverNation(game: ServerGameState, nationId: string, targetId: string) {
+  const nation = game.nations[nationId];
+  if (!nation || !targetId || !game.nations[targetId]) return;
+  const discovered = new Set(Array.isArray(nation.discoveredNations) ? nation.discoveredNations : []);
+  discovered.add(nationId);
+  discovered.add(targetId);
+  nation.discoveredNations = [...discovered];
+}
+
+function requireTradeDiscovery(game: ServerGameState, fromId: string, toId: string): ActionResult {
+  if (hasDiscoveredNation(game, fromId, toId)) return { ok: true };
+  return { ok: false, reason: "You cannot trade with an undiscovered nation." };
 }
 
 function normalizeMaxActionPoints(value: unknown) {

@@ -23,12 +23,16 @@ import {
   eraLabel,
   productionForTile,
   researchCost,
-  transportHappinessBonus,
-  transportGrowthMultiplier,
-  transportUnlockForTier,
   trainingOptionsForNation,
   workerAdminCost,
 } from "./tech.js";
+import {
+  INFRASTRUCTURE_BUILD_COSTS,
+  INFRASTRUCTURE_LABELS,
+  INFRASTRUCTURE_TYPES,
+  infrastructureLabel,
+  transportUnlockForTier,
+} from "./infrastructure.js";
 import { ALLIANCE_TYPES, getDiplomacy, projectTradeRouteYield, relationLabel } from "./trade.js";
 import { computeScore, militaryPower } from "./nation.js";
 import { warUpkeep } from "./war.js";
@@ -173,6 +177,8 @@ class GameUI {
     this.scenarioObjectivesPanel = document.getElementById("scenario-objectives-panel");
     this.scenarioObjectivesContent = document.getElementById("scenario-objectives-content");
     this.scenarioObjectivesCloseBtn = document.getElementById("scenario-objectives-close-btn");
+    this.victoryProgressPanel = document.getElementById("victory-progress-panel");
+    this.victoryProgressContent = document.getElementById("victory-progress-content");
   }
 
   bindEvents() {
@@ -361,6 +367,7 @@ class GameUI {
 	    }
 	    this.renderStatus();
 	    this.renderResources();
+	    this.renderVictoryProgress();
 	    this.renderScenarioObjectives();
 	    this.refreshBoardDialogs();
 	    this.refreshTechDialog();
@@ -556,7 +563,7 @@ class GameUI {
 	    this.actionCounter.classList.toggle("no-actions", remaining <= 0);
 	  }
 
-	  renderActionSummaryHtml() {
+  renderActionSummaryHtml() {
 	    const player = this.game.player;
 	    const remaining = Math.max(0, Number(player.actionPoints ?? player.actionsRemaining) || 0);
 	    const used = Math.max(0, Number(player.actionsUsedThisTurn) || 0);
@@ -572,10 +579,26 @@ class GameUI {
 	        ${metric("Used", used)}
 	      </div>
 	      <p class="${remaining <= 0 ? "bad" : "muted"}">${escapeHtml(nextAction)}</p>
+        ${this.renderLogisticsSummaryHtml(player)}
         ${activeEvents.length ? `<div class="summary-row"><strong>Active Events</strong>${activeEvents.map((event) => `<div class="muted">${escapeHtml(event.name)}: ${escapeHtml(event.effect)} ${event.duration} turn${event.duration === 1 ? "" : "s"} left.</div>`).join("")}</div>` : ""}
         ${this.renderTurnSummaryHtml()}
 	    `;
 	  }
+
+  renderLogisticsSummaryHtml(player = this.game.player) {
+    const logistics = this.game.logisticsSummaryFor(player.id);
+    return `
+      <div class="summary-row">
+        <strong>National Logistics</strong>
+        <div class="metric-grid">
+          ${metric("Transport Efficiency", formatPercent(logistics.transportEfficiency))}
+          ${metric("Infrastructure Coverage", formatPercent(logistics.connectedCoverage))}
+          ${metric("Distance Penalty", formatPercent(logistics.distancePenalty))}
+        </div>
+        <div class="muted">Road coverage ${formatPercent(logistics.roadCoverage)} · Rail coverage ${formatPercent(logistics.railCoverage)} · Advanced coverage ${formatPercent(logistics.advancedCoverage)}</div>
+      </div>
+    `;
+  }
 
   actionCost(actionType) {
     return BALANCE.actions?.costs?.[actionType] ?? 1;
@@ -636,6 +659,7 @@ class GameUI {
 
   renderResources() {
     const player = this.game.player;
+    const logistics = this.game.logisticsSummaryFor(player.id);
     if (isAdvancedMode(this.game)) normalizeAdvancedResources(player);
     const flows = this.projectResourceFlows(player);
     const foodClass = flows.food < 0 || player.resources.food + flows.food < 0 ? "bad" : "good";
@@ -724,7 +748,7 @@ class GameUI {
         rate: `${signed(flows.population)}/turn`,
         tooltip: isAdvancedMode(this.game)
           ? `Population supplies workers and soldiers. In Advanced mode it grows from fruit surplus while food still covers survival. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`
-          : `Population supplies workers and soldiers. It grows when food production beats consumption and territory has capacity. Transportation multiplier: ${formatPercent(transportGrowthMultiplier(player))}. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`,
+          : `Population supplies workers and soldiers. It grows when food production beats consumption and territory has capacity. Logistics growth multiplier: ${formatPercent(logistics.growthMultiplier)}. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`,
       })}
       ${resourceRow({
         id: "happiness",
@@ -735,7 +759,7 @@ class GameUI {
         note: happinessEnabled ? `${happinessBand(player).label} · ${formatPercent(happinessBand(player).workRate)} work rate` : "Mechanic disabled",
         rate: happinessEnabled ? happinessRiskText(player) : "No happiness effects",
         tooltip: happinessEnabled
-          ? `Happiness reflects food security, upkeep pressure, war, losses, diplomatic stability, and transportation supply chains. ${happinessEffectText(player)}`
+          ? `Happiness reflects food security, upkeep pressure, war, losses, diplomatic stability, and transportation supply chains. Logistics currently add ${signed(logistics.happinessDelta)} happiness pressure per turn. ${happinessEffectText(player)}`
           : "Citizen happiness is disabled for this game.",
       })}
       ${resourceRow({
@@ -776,6 +800,7 @@ class GameUI {
   }
 
   projectResourceFlows(player) {
+    const logistics = this.game.logisticsSummaryFor(player.id);
     if (isAdvancedMode(this.game)) normalizeAdvancedResources(player);
     const foodFlow = this.game.foodFlowFor(player.id);
     const advancedUpkeep = isAdvancedMode(this.game) ? calculateAdvancedResourceUpkeep(this.game, player.id) : null;
@@ -818,7 +843,10 @@ class GameUI {
       }
       for (const resource of ["food", "materials", "education", "industry"]) {
         if (!production[resource]) continue;
-        const produced = applyProjectedHappiness(player, production[resource], happinessEnabled);
+        let amount = production[resource];
+        if (resource === "food") amount = Math.ceil(amount * logistics.foodModifier);
+        if (resource === "materials") amount = Math.ceil(amount * logistics.materialsModifier);
+        const produced = applyProjectedHappiness(player, amount, happinessEnabled);
         flows[resource] += produced;
         available[resource] += produced;
         if (resource === "food") flows.foodProduced += produced;
@@ -837,7 +865,7 @@ class GameUI {
     flows.moneyNet = flows.money - flows.upkeep;
     flows.population += isAdvancedMode(this.game)
       ? projectedFruitGrowth(this.game, player, flows)
-      : projectedFoodGrowth(this.game, player, flows);
+      : projectedFoodGrowth(this.game, player, flows, logistics);
     return flows;
   }
 
@@ -937,7 +965,10 @@ class GameUI {
 
   diplomacyTargetIds() {
     return Object.values(this.game.nations)
-      .filter((nation) => nation.id !== this.game.playerId && nation.active)
+      .filter((nation) => {
+        if (nation.id === this.game.playerId || !nation.active) return false;
+        return this.game.hasDiscoveredNation(this.game.playerId, nation.id);
+      })
       .map((nation) => nation.id);
   }
 
@@ -979,7 +1010,7 @@ class GameUI {
       const check = canResearch(this.game, player, id);
       const tier = player.tech[id] || 0;
       const cost = researchCost(id, tier);
-      const transportDetails = id === "infrastructure" ? `<div class="muted">${escapeHtml(transportTechSummary(player, tier))}</div>` : "";
+      const transportDetails = id === "infrastructure" ? `<div class="muted">${escapeHtml(transportTechSummary(this.game, player, tier))}</div>` : "";
       const description = techDescriptionForMode(this.game, id, config.description);
       return `
         <div class="tech-row">
@@ -1076,6 +1107,7 @@ class GameUI {
     const buildRows = this.renderBuildButtons(tile);
     const workerRows = isPlayerTile && workerRole ? this.renderWorkerControls(tile, active) : "";
     const militaryRows = isPlayerTile ? this.renderMilitaryControls(tile) : "";
+    const infrastructureRows = isPlayerTile ? this.renderInfrastructureControls(tile) : "";
     const advancedResource = isAdvancedMode(this.game) ? advancedResourceForTile(tile) : null;
     this.tilePopupContent.innerHTML = `
       <h2>${escapeHtml(TILE_LABELS[tile.type] || tile.type)} ${tile.isCapital ? "Capital" : ""}</h2>
@@ -1084,6 +1116,7 @@ class GameUI {
         ${metric("Region", tile.regionId || "Sea")}
         ${metric("Biome", biomeLabel(tile))}
         ${metric("Status", tile.type === TILE_TYPES.WATER ? "Water" : active ? "Active" : "Inactive")}
+        ${metric("Infrastructure", infrastructureLabel(tile.infrastructure))}
         ${advancedResource ? metric("Special Resource", RESOURCE_METADATA[advancedResource].label) : ""}
         ${advancedResource ? metric("Output", `${RESOURCE_BASE_YIELD_PER_TILE}/turn`) : ""}
       </div>
@@ -1091,8 +1124,26 @@ class GameUI {
       ${tile.effects.disabledTurns || tile.effects.floodedTurns ? `<p class="warn">Temporary effect active on this tile.</p>` : ""}
       <div class="row-actions"><button class="secondary-btn" data-tile-action="details">Tile Details</button></div>
       ${buildRows}
+      ${infrastructureRows}
       ${workerRows}
       ${militaryRows}
+    `;
+  }
+
+  renderInfrastructureControls(tile) {
+    const options = [INFRASTRUCTURE_TYPES.ROAD, INFRASTRUCTURE_TYPES.RAIL, INFRASTRUCTURE_TYPES.ADVANCED].map((type) => {
+      const check = this.game.canBuildInfrastructure(tile.id, type, this.game.playerId);
+      const cost = `$${formatNumber(INFRASTRUCTURE_BUILD_COSTS[type] || 0)}`;
+      return `<div>${this.actionPreview("buildInfrastructure", check, cost)}<button class="secondary-btn" data-tile-action="buildInfrastructure" data-type="${type}" ${this.actionDisabledAttribute("buildInfrastructure", check)} title="${escapeHtml(this.actionDisabledReason("buildInfrastructure", check))}">${escapeHtml(INFRASTRUCTURE_LABELS[type])} ${escapeHtml(cost)}</button></div>`;
+    }).join("");
+    return `
+      <div class="stack">
+        <strong>Infrastructure</strong>
+        <div class="metric-grid">
+          ${metric("Current", infrastructureLabel(tile.infrastructure))}
+        </div>
+        <div class="action-grid">${options}</div>
+      </div>
     `;
   }
 
@@ -1185,7 +1236,7 @@ class GameUI {
       return;
     }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId]?.name : "Unowned";
-    this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(biomeLabel(tile))} · ${escapeHtml(owner)}`;
+    this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(biomeLabel(tile))} · ${escapeHtml(owner)}<br />${escapeHtml(infrastructureLabel(tile.infrastructure))}`;
     this.tooltip.style.left = `${event.clientX + 14}px`;
     this.tooltip.style.top = `${event.clientY + 14}px`;
     this.tooltip.hidden = false;
@@ -1212,6 +1263,7 @@ class GameUI {
       // Multiplayer/server-authoritative logic: UI sends intent only. The
       // Colyseus room validates and mutates, then returns a fresh snapshot.
       if (action === "build") this.sendPlayerAction({ type: "buildTile", tileId, buildingType: button.dataset.type });
+      if (action === "buildInfrastructure") this.sendPlayerAction({ type: "buildInfrastructure", tileId, infrastructureType: button.dataset.type });
       if (action === "workers") this.sendPlayerAction({ type: "assignWorkers", tileId, amount: Number(button.dataset.amount) });
       if (action === "destroy") this.sendPlayerAction({ type: "destroyTile", tileId });
       if (action === "train") this.sendPlayerAction({
@@ -1229,6 +1281,7 @@ class GameUI {
     // Local/offline logic: solo games keep mutating the local GameState directly.
     let result = null;
     if (action === "build") result = this.game.buildTile(tileId, button.dataset.type);
+    if (action === "buildInfrastructure") result = this.game.buildInfrastructure(tileId, button.dataset.type);
     if (action === "workers") result = this.game.assignWorkers(tileId, Number(button.dataset.amount));
     if (action === "destroy") result = this.game.destroyTile(tileId);
     if (action === "train") result = this.game.trainUnit(tileId, Number(button.dataset.amount), this.game.playerId, { branch: button.dataset.branch || "infantry" });
@@ -1257,6 +1310,7 @@ class GameUI {
     this.openDialog("Tile Details", `
       <div class="metric-grid">
         ${metric("Owner", owner ? owner.name : "Unowned")}
+        ${metric("Infrastructure", infrastructureLabel(tile.infrastructure))}
         ${metric("Resource", resourceText)}
         ${advancedResource ? metric("Special Resource", `${RESOURCE_METADATA[advancedResource].label} (${RESOURCE_BASE_YIELD_PER_TILE}/turn)`) : ""}
         ${metric("Workers", tile.workers)}
@@ -1276,6 +1330,8 @@ class GameUI {
 
     if (actionType === "buildTile") {
       this.showActionDeltas("build", payload.tileId, null, result, { buildingType: payload.buildingType });
+    } else if (actionType === "buildInfrastructure") {
+      this.showActionDeltas("buildInfrastructure", payload.tileId, null, result);
     } else if (actionType === "assignWorkers") {
       this.showActionDeltas("workers", payload.tileId, null, result);
     } else if (actionType === "destroyTile") {
@@ -1314,6 +1370,8 @@ class GameUI {
       if (result.advancedCost?.hardwood) deltas.push({ resource: "hardwood", delta: -result.advancedCost.hardwood });
       if (result.advancedCost?.iron) deltas.push({ resource: "iron", delta: -result.advancedCost.iron });
       deltas.push(...this.buildingProductionDeltas(tile, context.buildingType));
+    } else if (action === "buildInfrastructure") {
+      deltas.push({ resource: "money", delta: -result.cost });
     } else if (action === "workers") {
       if (result.cost) deltas.push({ resource: "money", delta: -result.cost });
       deltas.push({ resource: "population", delta: -result.changed });
@@ -1411,6 +1469,10 @@ class GameUI {
 
   openTradeDialog(partnerId) {
     const partner = this.game.nations[partnerId];
+    if (!this.game.hasDiscoveredNation(this.game.playerId, partnerId)) {
+      this.showNotice("Trade blocked", "You cannot trade with an undiscovered nation.");
+      return;
+    }
     this.openDialog(`Trade with ${partner.name}`, `
       <form id="trade-form" class="form-grid">
         ${tradeField("offer-money", "Offer money", 0)}
@@ -1603,6 +1665,58 @@ class GameUI {
     this.scenarioObjectivesPanel.hidden = false;
   }
 
+  renderVictoryProgress() {
+    if (!this.victoryProgressPanel || !this.victoryProgressContent) return;
+    const progress = this.game.victoryProgress;
+    const player = this.game.player;
+    const playerProgress = progress?.nations?.[player?.id];
+    if (!progress || !player || !playerProgress) {
+      this.victoryProgressPanel.hidden = true;
+      return;
+    }
+
+    const totalCapitals = Number(progress.totalDomination?.totalCapitals) || 0;
+    const capitalsControlled = Number(playerProgress.capitalsControlled) || 0;
+    const capitalReady = totalCapitals > 0 && capitalsControlled >= totalCapitals;
+    const techTurnsRemaining = Math.max(0, Number(playerProgress.techTurnsRemaining) || 0);
+    const diplomacyTurnsRemaining = Math.max(0, Number(playerProgress.diplomaticTurnsRemaining) || 0);
+    const techReady = Boolean(playerProgress.meetsTechCondition) && techTurnsRemaining <= 0;
+    const diplomacyReady = Boolean(playerProgress.meetsDiplomaticCondition) && diplomacyTurnsRemaining <= 0;
+
+    const techStatus = playerProgress.finalTierComplete
+      ? (playerProgress.meetsTechCondition
+        ? `${formatSigned(playerProgress.techLead)} lead · ${techTurnsRemaining} turn${techTurnsRemaining === 1 ? "" : "s"} remaining`
+        : `${formatSigned(playerProgress.techLead)} lead · ${formatSigned(playerProgress.requiredTechLead)} needed`)
+      : `${playerProgress.linearTiersCompleted}/${playerProgress.requiredLinearTiers} final-tier tracks complete`;
+    const diplomacyStatus = playerProgress.meetsDiplomaticCondition
+      ? `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · ${diplomacyTurnsRemaining} turn${diplomacyTurnsRemaining === 1 ? "" : "s"} remaining`
+      : `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · build a larger bloc`;
+
+    this.victoryProgressContent.innerHTML = `
+      <div class="objective-item ${capitalReady ? "completed" : ""}">
+        <div class="objective-title">Total Domination</div>
+        <div class="objective-description">Control every capital on the map.</div>
+        <div class="objective-progress">${capitalsControlled} / ${totalCapitals} capitals controlled</div>
+        ${capitalReady ? '<div class="objective-badge">Ready</div>' : ""}
+      </div>
+      <div class="objective-item ${techReady ? "completed" : ""}">
+        <div class="objective-title">Technological Supremacy</div>
+        <div class="objective-description">Finish every final-tier track and keep a decisive research lead.</div>
+        <div class="objective-progress">Score ${formatNumber(playerProgress.techScore)} · ${escapeHtml(techStatus)}</div>
+        ${playerProgress.meetsTechCondition && !techReady ? '<div class="objective-badge pending">Holding Lead</div>' : ""}
+        ${techReady ? '<div class="objective-badge">Ready</div>' : ""}
+      </div>
+      <div class="objective-item ${diplomacyReady ? "completed" : ""}">
+        <div class="objective-title">Diplomatic Hegemony</div>
+        <div class="objective-description">Maintain formal alliances with a majority bloc for 10 full turns.</div>
+        <div class="objective-progress">${escapeHtml(diplomacyStatus)}</div>
+        ${playerProgress.meetsDiplomaticCondition && !diplomacyReady ? '<div class="objective-badge pending">Qualifying</div>' : ""}
+        ${diplomacyReady ? '<div class="objective-badge">Ready</div>' : ""}
+      </div>
+    `;
+    this.victoryProgressPanel.hidden = false;
+  }
+
   isObjectiveCompleted(objective, player) {
     if (objective.type === "terrain") {
       const count = this.game.map.tiles.filter(
@@ -1683,6 +1797,11 @@ function phaseLabel(phase, processing) {
 
 function pill(text) {
   return `<span class="status-pill">${escapeHtml(text)}</span>`;
+}
+
+function formatSigned(value) {
+  const amount = Number(value) || 0;
+  return `${amount >= 0 ? "+" : ""}${formatNumber(amount)}`;
 }
 
 function resourceRow({
@@ -1844,7 +1963,8 @@ function projectedFoodGrowth(game, player, flows) {
     surplusRatio >= growth.thrivingSurplusRatio ? growth.thrivingGrowth :
     surplusRatio >= growth.comfortableSurplusRatio ? growth.comfortableGrowth :
     growth.marginalGrowth;
-  return Math.round(baseGrowth * headroomFraction * transportGrowthMultiplier(player));
+  const logistics = game.logisticsSummaryFor(player.id);
+  return Math.round(baseGrowth * headroomFraction * logistics.growthMultiplier);
 }
 
 function projectedFruitGrowth(game, player, flows) {
@@ -1857,10 +1977,13 @@ function projectedFruitGrowth(game, player, flows) {
   return Math.min(headroom, Math.floor(surplus * 0.18));
 }
 
-function transportTechSummary(player, tier) {
-  const current = transportUnlockForTier(tier)?.label || "No transport network";
-  const next = transportUnlockForTier(tier + 1);
-  const currentEffect = `Current: ${current}, ${formatPercent(transportGrowthMultiplier(player))} population growth multiplier, +${transportHappinessBonus(player)} happiness recovery.`;
+function transportTechSummary(game, player, tier) {
+  const logistics = game?.logisticsSummaryFor ? game.logisticsSummaryFor(player.id) : null;
+  const current = transportUnlockForTier(Math.min(tier, 3))?.label || "No transport network";
+  const next = tier >= 3 ? null : transportUnlockForTier(tier + 1);
+  const currentEffect = logistics
+    ? `Current: ${current}, ${formatPercent(logistics.transportEfficiency)} transport efficiency, ${formatPercent(logistics.connectedCoverage)} connected coverage.`
+    : `Current: ${current}.`;
   if (!next) return currentEffect;
   return `${currentEffect} Next: ${next.label} in Era ${next.era}.`;
 }
@@ -1914,6 +2037,7 @@ function normalizeAcceptedActionType(type) {
   return {
     ASSIGN_WORKERS: "assignWorkers",
     BUILD_TILE: "buildTile",
+    BUILD_INFRASTRUCTURE: "buildInfrastructure",
     DESTROY_TILE: "destroyTile",
     TRAIN_UNIT: "trainUnit",
     MOVE_OR_ATTACK_UNIT: "moveOrAttackUnit",

@@ -46,6 +46,8 @@ export function canUseDiplomacy(game, a, b) {
 export function evaluateTrade(game, fromId, toId, offer, request) {
   const gate = canUseDiplomacy(game, fromId, toId);
   if (!gate.ok) return gate;
+  const discoveryGate = requireTradeDiscovery(game, fromId, toId);
+  if (!discoveryGate.ok) return discoveryGate;
   const from = game.nations[fromId];
   const to = game.nations[toId];
   const record = getDiplomacy(game, fromId, toId);
@@ -78,6 +80,7 @@ export function applyTrade(game, fromId, toId, offer, request) {
   const result = evaluateTrade(game, fromId, toId, offer, request);
   const record = getDiplomacy(game, fromId, toId);
   if (!result.ok) return result;
+  game.establishDiplomaticContact?.(fromId, toId);
   if (!result.accepted) {
     record.relation = Math.max(0, record.relation - BALANCE.trade.rejectedRelationPenalty);
     return result;
@@ -109,6 +112,7 @@ export function proposeAlliance(game, fromId, toId, type = "trade") {
   if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   const gate = canUseDiplomacy(game, fromId, toId);
   if (!gate.ok) return gate;
+  game.establishDiplomaticContact?.(fromId, toId);
   const config = ALLIANCE_TYPES[type] || ALLIANCE_TYPES.trade;
   const from = game.nations[fromId];
   const to = game.nations[toId];
@@ -180,6 +184,7 @@ export function embargoNation(game, fromId, targetId) {
   if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   const gate = canUseDiplomacy(game, fromId, targetId);
   if (!gate.ok) return gate;
+  game.establishDiplomaticContact?.(fromId, targetId);
   if (fromId === targetId) return { ok: false, reason: "A nation cannot embargo itself." };
   if (isPairAtWar(game, fromId, targetId)) return { ok: false, reason: "War already blocks direct trade." };
   const from = game.nations[fromId];
@@ -366,6 +371,15 @@ function transferBundle(from, to, bundle) {
 
 function tradeThreshold(personality) {
   return BALANCE.trade.thresholds[personality] || BALANCE.trade.thresholds.default;
+}
+
+function requireTradeDiscovery(game, fromId, toId) {
+  if (!game?.settings?.fogOfWarEnabled) return { ok: true };
+  if (game?.hasDiscoveredNation?.(fromId, toId)) return { ok: true };
+  if (Array.isArray(game?.nations?.[fromId]?.discoveredNations) && game.nations[fromId].discoveredNations.includes(toId)) {
+    return { ok: true };
+  }
+  return { ok: false, reason: "You cannot trade with an undiscovered nation." };
 }
 
 function normalizeDiplomacyRecord(record, a, b) {

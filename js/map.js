@@ -20,6 +20,11 @@ import {
   tileId,
 } from "./utils.js";
 import { normalizeGameMode } from "./advanced.js";
+import {
+  INFRASTRUCTURE_TYPES,
+  computeInfrastructureState,
+  tileInfrastructureType,
+} from "./infrastructure.js";
 import { STARTING_PROFILES, militaryPower } from "./nation.js";
 import { createRenderer, setupScene, setupCamera } from "./rendering/renderer.js";
 import { getTileMaterial, colorFromHex } from "./rendering/config.js";
@@ -162,6 +167,7 @@ export function createMapData(settings) {
       landform: land ? coord.nearestKind : "sea",
       biome: land ? "grassland" : "water",
       type: land ? TILE_TYPES.EMPTY : TILE_TYPES.WATER,
+      infrastructure: "none",
       ownerId: null,
       workers: 0,
       unit: null,
@@ -1007,11 +1013,11 @@ export class HexMapRenderer {
 
   _renderTransportOverlay() {
     if (!this.map) return;
-    const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false && (nation.tech?.infrastructure || 0) > 0);
+    const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false && this.map.tiles.some((tile) => tile.ownerId === nation.id && tileInfrastructureType(tile) !== INFRASTRUCTURE_TYPES.NONE));
     const signature = [
       this._visibilitySignature(),
-      activeNations.map((nation) => `${nation.id}:${nation.tech?.infrastructure || 0}:${nation.capitalTileId || ""}:${nation.color}`).sort().join("|"),
-      this.map.tiles.filter((tile) => tile.ownerId && this._isTileVisible(tile.id)).map((tile) => `${tile.id}:${tile.ownerId}`).sort().join("|"),
+      activeNations.map((nation) => `${nation.id}:${nation.capitalTileId || ""}:${nation.color}`).sort().join("|"),
+      this.map.tiles.filter((tile) => tile.ownerId && this._isTileVisible(tile.id)).map((tile) => `${tile.id}:${tile.ownerId}:${tileInfrastructureType(tile)}`).sort().join("|"),
     ].join("::");
     if (signature === this.transportSignature) return;
     this.transportSignature = signature;
@@ -1019,52 +1025,62 @@ export class HexMapRenderer {
 
     const segmentsByNation = this._transportSegmentsByNation();
     for (const nation of activeNations) {
-      const tier = Math.max(0, Math.min(4, Math.floor(Number(nation.tech?.infrastructure) || 0)));
-      const segments = segmentsByNation.get(nation.id) || [];
-      if (!segments.length) {
-        if (tier >= 4) this._addAirportOverlay(nation);
+      const segments = segmentsByNation.get(nation.id) || { road: [], rail: [], advanced: 0 };
+      if (!segments.road.length && !segments.rail.length) {
+        if (segments.advanced > 0) this._addAirportOverlay(nation);
         continue;
       }
-
-      const roadSegments = [];
-      const railSegments = [];
-      for (const segment of segments) {
-        const rail = tier >= 2 && hash2d(segment.tile.q + segment.neighbor.q * 3, segment.tile.r + segment.neighbor.r * 5, (this.map?.seed || 1) + 5501) > 0.5;
-        if (rail) railSegments.push(segment);
-        else roadSegments.push(segment);
-      }
-
-      for (const segment of roadSegments) this._addRoadSegment(segment, nation, tier);
-      for (const segment of railSegments) this._addRailSegment(segment, nation);
+      for (const segment of segments.road) this._addRoadSegment(segment, nation, 1);
+      for (const segment of segments.rail) this._addRailSegment(segment, nation);
       if (!this.animationManager.reducedMotion) {
-        this._addTrafficOverlays(roadSegments, nation, tier);
-        this._addTrainOverlay(railSegments, nation);
+        this._addTrafficOverlays(segments.road, nation, 1);
+        this._addTrainOverlay(segments.rail, nation);
       }
-      if (tier >= 4) this._addAirportOverlay(nation);
+      if (segments.advanced > 0) this._addAirportOverlay(nation);
     }
   }
 
   _transportSegmentsByNation() {
     const index = buildTileIndex(this.map.tiles);
     const segmentsByNation = new Map();
+    const statesByNation = new Map();
+    for (const nation of Object.values(this.nations)) {
+      if (!nation?.active) continue;
+      const infrastructure = computeInfrastructureState(this.map.tiles, nation);
+      statesByNation.set(nation.id, infrastructure);
+      segmentsByNation.set(nation.id, {
+        road: [],
+        rail: [],
+        advanced: infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ADVANCED].size,
+      });
+    }
     for (const tile of this.map.tiles) {
       if (!tile.ownerId || !isLand(tile) || !this._isTileVisible(tile.id)) continue;
       const nation = this.nations[tile.ownerId];
-      if (!nation || (nation.tech?.infrastructure || 0) <= 0) continue;
+      if (!nation?.active) continue;
+      const bucket = segmentsByNation.get(tile.ownerId);
+      const infrastructure = statesByNation.get(tile.ownerId);
       const corners = hexCorners(tile);
       for (const direction of HEX_DIRECTIONS) {
         const neighbor = index.get(tileId(tile.q + direction.q, tile.r + direction.r));
         if (!neighbor || neighbor.ownerId !== tile.ownerId || !isLand(neighbor) || tile.id > neighbor.id || !this._isTileVisible(neighbor.id)) continue;
+        const type = tileInfrastructureType(tile);
+        if (type !== tileInfrastructureType(neighbor)) continue;
         const [fromIndex, toIndex] = edgeCornersForDirection(direction);
         const from = corners[fromIndex];
         const to = corners[toIndex];
         const segment = { tile, neighbor, from, to };
-        if (!segmentsByNation.has(tile.ownerId)) segmentsByNation.set(tile.ownerId, []);
-        segmentsByNation.get(tile.ownerId).push(segment);
+        if (type === INFRASTRUCTURE_TYPES.ROAD && infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ROAD].has(tile.id) && infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ROAD].has(neighbor.id)) {
+          bucket.road.push(segment);
+        }
+        if (type === INFRASTRUCTURE_TYPES.RAIL && infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(tile.id) && infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(neighbor.id)) {
+          bucket.rail.push(segment);
+        }
       }
     }
     for (const segments of segmentsByNation.values()) {
-      segments.sort((a, b) => `${a.tile.id}:${a.neighbor.id}`.localeCompare(`${b.tile.id}:${b.neighbor.id}`));
+      segments.road.sort((a, b) => `${a.tile.id}:${a.neighbor.id}`.localeCompare(`${b.tile.id}:${b.neighbor.id}`));
+      segments.rail.sort((a, b) => `${a.tile.id}:${a.neighbor.id}`.localeCompare(`${b.tile.id}:${b.neighbor.id}`));
     }
     return segmentsByNation;
   }

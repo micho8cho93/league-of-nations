@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LeagueRoom } from "./LeagueRoom.js";
-import { DEFAULT_VICTORY_CONFIG, SERVER_PLAYER_ACTION_TYPES, processServerRound } from "../game/actions.js";
+import { SERVER_PLAYER_ACTION_TYPES, checkServerVictory, processServerRound } from "../game/actions.js";
 import { expireEvents, maybeTriggerEvent } from "../game/events.js";
 import { createInitialServerGame, serializeGameSnapshot } from "../game/initialGame.js";
 
@@ -104,6 +104,13 @@ function tileAt(gameState: any, q: number, r: number) {
   return gameState.map.tiles.find((tile: any) => tile.q === q && tile.r === r);
 }
 
+function capitalTile(gameState: any, nationId: string) {
+  const tileId = gameState.nations[nationId].capitalTileId;
+  const tile = gameState.map.tiles.find((item: any) => item.id === tileId);
+  assert.ok(tile, `expected ${nationId} to have a capital tile`);
+  return tile;
+}
+
 function neighborsOf(gameState: any, tile: any) {
   const directions = [
     { q: 1, r: 0 },
@@ -121,6 +128,7 @@ function prepareTile(tile: any, values: Record<string, unknown>) {
     terrain: "land",
     landform: "continent",
     type: "empty",
+    infrastructure: "none",
     ownerId: null,
     workers: 0,
     unit: null,
@@ -182,6 +190,21 @@ function makeOwnedAnchorWithNeighbor(gameState: any, neighborValues: Record<stri
   prepareTile(to, neighborValues);
   if (!gameState.nations[nationId].territory.includes(from.id)) gameState.nations[nationId].territory.push(from.id);
   return { anchor: from, target: to };
+}
+
+function findPathFromTile(gameState: any, start: any, length: number, predicate: (tile: any) => boolean = () => true) {
+  const visit = (tile: any, path: any[], seen: Set<string>): any[] | null => {
+    if (path.length === length) return path;
+    for (const neighbor of neighborsOf(gameState, tile)) {
+      if (seen.has(neighbor.id) || !predicate(neighbor)) continue;
+      const result = visit(neighbor, [...path, neighbor], new Set([...seen, neighbor.id]));
+      if (result) return result;
+    }
+    return null;
+  };
+  const result = visit(start, [start], new Set([start.id]));
+  assert.ok(result, `expected a path of length ${length} from ${start.id}`);
+  return result;
 }
 
 function clientGameplayActionTypes() {
@@ -629,6 +652,29 @@ test("transport buildings are rejected as tile builds", async () => {
     assert.match(latestRejection(creator), /Unknown building type/);
     assert.equal(tile.type, "empty");
   }
+});
+
+test("buildInfrastructure works online as a separate tile improvement", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+  nation.tech.infrastructure = 3;
+  const tile = makeOwnedTile(gameState, "nation-1", "farm", 2);
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildInfrastructure",
+    nationId: "nation-1",
+    tileId: tile.id,
+    infrastructureType: "road",
+  });
+
+  assert.equal(tile.infrastructure, "road");
+  assert.equal(nation.money, 4910);
+  assert.equal(nation.actionsRemaining, 4);
+  assert.equal(latestRejection(creator), "");
 });
 
 test("active player can assign workers for their own nation", async () => {
@@ -1111,7 +1157,7 @@ test("advanced units require oil", async () => {
   nation.money = 5000;
   nation.population.available = 40;
   nation.tech.branches.tanks = 1;
-  setResources(nation, { materials: 200, education: 200, industry: 200, oil: 0 });
+  setResources(nation, { materials: 200, education: 200, industry: 200, iron: 4, oil: 0 });
 
   await room.messages.playerAction(creator.client, {
     type: "trainUnit",
@@ -1161,6 +1207,165 @@ test("moveOrAttackUnit movement works online", async () => {
   assert.equal(to.ownerId, "nation-1");
   assert.equal(to.unit?.strength, 4);
   assert.equal(gameState.nations["nation-1"].actionsRemaining, 4);
+  assert.equal(latestRejection(creator), "");
+});
+
+test("roads only extend infantry movement while rail extends tanks", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+  nation.tech.infrastructure = 3;
+  nation.tech.branches.tanks = 1;
+  gameState.era = 4;
+
+  const capital = capitalTile(gameState, "nation-1");
+  const infantryPath = findPathFromTile(gameState, capital, 3, (tile) => !tile.isCapital);
+  const [_, infantryMid, infantryTarget] = infantryPath;
+  prepareTile(capital, {
+    ownerId: "nation-1",
+    type: "military",
+    infrastructure: "road",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 4, branch: "infantry", movedTurn: 0, branches: { infantry: 4 } },
+    isCapital: true,
+  });
+  prepareTile(infantryMid, { ownerId: "nation-1", type: "empty", infrastructure: "road" });
+  prepareTile(infantryTarget, { ownerId: "nation-1", type: "empty", infrastructure: "road" });
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: capital.id,
+    toTileId: infantryTarget.id,
+  });
+
+  assert.equal(infantryTarget.unit?.strength, 4);
+  assert.equal(capital.unit, null);
+
+  resetActions(gameState);
+  clearMessages(creator);
+  const tankPath = findPathFromTile(gameState, infantryTarget, 4, (tile) => !tile.isCapital);
+  const [tankFrom, tankRoadA, tankRoadB, tankRoadTarget] = tankPath;
+  prepareTile(tankFrom, {
+    ownerId: "nation-1",
+    type: "military",
+    infrastructure: "road",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 8, branch: "tanks", movedTurn: 0, branches: { tanks: 8 } },
+  });
+  prepareTile(tankRoadA, { ownerId: "nation-1", type: "empty", infrastructure: "road" });
+  prepareTile(tankRoadB, { ownerId: "nation-1", type: "empty", infrastructure: "road" });
+  prepareTile(tankRoadTarget, { ownerId: "nation-1", type: "empty", infrastructure: "road" });
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: tankFrom.id,
+    toTileId: tankRoadTarget.id,
+  });
+  assert.match(latestRejection(creator), /out of range/);
+
+  resetActions(gameState);
+  clearMessages(creator);
+  prepareTile(capital, {
+    ownerId: "nation-1",
+    type: "military",
+    infrastructure: "rail",
+    workers: 4,
+    unit: null,
+    isCapital: true,
+  });
+  prepareTile(infantryMid, { ownerId: "nation-1", type: "empty", infrastructure: "rail" });
+  prepareTile(tankFrom, {
+    ownerId: "nation-1",
+    type: "military",
+    infrastructure: "rail",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 8, branch: "tanks", movedTurn: 0, branches: { tanks: 8 } },
+  });
+  prepareTile(tankRoadA, { ownerId: "nation-1", type: "empty", infrastructure: "rail" });
+  prepareTile(tankRoadB, { ownerId: "nation-1", type: "empty", infrastructure: "rail" });
+  prepareTile(tankRoadTarget, { ownerId: "nation-1", type: "empty", infrastructure: "rail" });
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: tankFrom.id,
+    toTileId: tankRoadTarget.id,
+  });
+
+  assert.equal(tankRoadTarget.unit?.branch, "tanks");
+  assert.equal(latestRejection(creator), "");
+});
+
+test("advanced networks extend air and naval movement", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+  nation.tech.infrastructure = 3;
+  nation.tech.branches.air = 1;
+  nation.tech.branches.naval = 1;
+  gameState.era = 4;
+
+  const capital = capitalTile(gameState, "nation-1");
+  const airPath = findPathFromTile(gameState, capital, 6, (tile) => !tile.isCapital);
+  const airSupport = airPath[1];
+  const airTarget = airPath[5];
+  prepareTile(capital, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 7, branch: "air", movedTurn: 0, branches: { air: 7 } },
+    isCapital: true,
+  });
+  prepareTile(airSupport, { ownerId: "nation-1", type: "empty", infrastructure: "advanced" });
+  for (const tile of airPath.slice(2)) {
+    prepareTile(tile, { ownerId: "nation-1", type: "empty" });
+  }
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: capital.id,
+    toTileId: airTarget.id,
+  });
+
+  assert.equal(airTarget.unit?.branch, "air");
+  assert.equal(latestRejection(creator), "");
+
+  resetActions(gameState);
+  clearMessages(creator);
+  const navalPath = findPathFromTile(gameState, capital, 5, (tile) => !tile.isCapital);
+  const navalSupport = navalPath[1];
+  const navalA = navalPath[2];
+  const navalB = navalPath[3];
+  const navalTarget = navalPath[4];
+  prepareTile(capital, {
+    ownerId: "nation-1",
+    type: "military",
+    workers: 4,
+    unit: { nationId: "nation-1", strength: 7, branch: "naval", movedTurn: 0, branches: { naval: 7 } },
+    isCapital: true,
+  });
+  prepareTile(navalSupport, { ownerId: "nation-1", terrain: "water", type: "water", infrastructure: "advanced" });
+  prepareTile(navalA, { ownerId: "nation-1", terrain: "water", type: "water", infrastructure: "advanced" });
+  prepareTile(navalB, { ownerId: "nation-1", terrain: "water", type: "water", infrastructure: "advanced" });
+  prepareTile(navalTarget, { ownerId: "nation-1", terrain: "water", type: "water", infrastructure: "advanced" });
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: capital.id,
+    toTileId: navalTarget.id,
+  });
+
+  assert.equal(navalTarget.unit?.branch, "naval");
   assert.equal(latestRejection(creator), "");
 });
 
@@ -1528,15 +1733,6 @@ test("infrastructure research uses starter requirements then tech-only era gates
     nationId: "nation-1",
     category: "infrastructure",
   });
-  assert.match(latestRejection(creator), /Era 4/);
-
-  gameState.era = 4;
-  clearMessages(creator);
-  await room.messages.playerAction(creator.client, {
-    type: "researchTech",
-    nationId: "nation-1",
-    category: "infrastructure",
-  });
   assert.equal(nation.tech.infrastructure, 4);
   assert.equal(latestRejection(creator), "");
 });
@@ -1686,6 +1882,63 @@ test("trade proposal can be rejected through the dedicated server message", asyn
   assert.equal(latestRejection(second), "");
 });
 
+test("fog of war blocks trade with undiscovered nations", async () => {
+  const room = await createRoom(2, { fogOfWarEnabled: true });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  gameState.nations["nation-1"].money = 1000;
+  gameState.nations["nation-1"].discoveredNations = ["nation-1"];
+  gameState.nations["nation-2"].discoveredNations = ["nation-2"];
+
+  await room.messages.proposeTrade(creator.client, {
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: 100 },
+    request: {},
+  });
+
+  assert.equal(gameState.tradeProposals.length, 0);
+  assert.equal(gameState.nations["nation-1"].actionsRemaining, 5);
+  assert.match(latestRejection(creator), /undiscovered nation/i);
+});
+
+test("visible contact discovers nations for trade and persists across turns", async () => {
+  const room = await createRoom(2, { fogOfWarEnabled: true });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  gameState.nations["nation-1"].money = 1000;
+
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, { ownerId: "nation-1", type: "empty" });
+  prepareTile(to, { ownerId: "nation-2", type: "empty" });
+  gameState.nations["nation-1"].territory = [from.id];
+  gameState.nations["nation-2"].territory = [to.id];
+  gameState.nations["nation-1"].discoveredNations = ["nation-1"];
+  gameState.nations["nation-2"].discoveredNations = ["nation-2"];
+
+  await room.messages.proposeTrade(creator.client, {
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    offer: { money: 100 },
+    request: {},
+  });
+
+  assert.equal(gameState.tradeProposals.length, 1);
+  assert.ok(gameState.nations["nation-1"].discoveredNations.includes("nation-2"));
+  assert.ok(gameState.nations["nation-2"].discoveredNations.includes("nation-1"));
+
+  processServerRound(gameState);
+  const snapshot = serializeGameSnapshot(gameState);
+
+  assert.ok(gameState.nations["nation-1"].discoveredNations.includes("nation-2"));
+  assert.ok((snapshot.gameState.nations as any)["nation-1"].discoveredNations.includes("nation-2"));
+  assert.equal(latestRejection(creator), "");
+});
+
 test("dedicated attack changes tile ownership, spends action points, and increases war exhaustion", async () => {
   const room = await createRoom(2);
   const creator = join(room, "creator", "Creator");
@@ -1813,25 +2066,126 @@ test("unsupported multiplayer action returns a structured action error", async (
   assert.match(rejection?.payload.message, /Unsupported multiplayer action/);
 });
 
-test("economic victory is set when a nation reaches the configured gold threshold", async () => {
-  const room = await createRoom(2);
-  const creator = join(room, "creator", "Creator");
-  join(room, "second", "Second");
-  const gameState = startGame(room, creator);
-  gameState.nations["nation-1"].money = DEFAULT_VICTORY_CONFIG.economicGoldThreshold;
-  const tile = makeOwnedTile(gameState, "nation-1", "farm", 2);
+test("total domination requires control of every historical capital", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 3, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  const nation1Capital = capitalTile(gameState, "nation-1");
+  const nation2Capital = capitalTile(gameState, "nation-2");
+  const nation3Capital = capitalTile(gameState, "nation-3");
 
-  await room.messages.playerAction(creator.client, {
-    type: "ASSIGN_WORKERS",
-    nationId: "nation-1",
-    tileId: tile.id,
-    amount: -1,
-  });
+  nation1Capital.ownerId = "nation-1";
+  nation2Capital.ownerId = "nation-1";
+  nation3Capital.ownerId = "nation-3";
+
+  checkServerVictory(gameState);
+  assert.equal(gameState.gameOver, null);
+
+  nation3Capital.ownerId = "nation-1";
+  nation3Capital.isCapital = false;
+  checkServerVictory(gameState);
 
   assert.equal(gameState.gameOver?.isGameOver, true);
   assert.equal(gameState.gameOver?.winnerNationId, "nation-1");
-  assert.equal(gameState.gameOver?.victoryType, "economic");
-  assert.equal((room as any).state.status, "finished");
+  assert.equal(gameState.gameOver?.victoryType, "total_domination");
+});
+
+test("technological supremacy requires the lead to persist across multiple turn boundaries", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 3, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  Object.assign(gameState.nations["nation-1"].tech, {
+    farming: 4,
+    mining: 4,
+    education: 4,
+    infrastructure: 4,
+    military: 4,
+    branches: { tanks: 2, air: 2, naval: 1 },
+  });
+  Object.assign(gameState.nations["nation-2"].tech, {
+    farming: 2,
+    mining: 2,
+    education: 2,
+    infrastructure: 2,
+    military: 2,
+    branches: { tanks: 0, air: 0, naval: 0 },
+  });
+  Object.assign(gameState.nations["nation-3"].tech, {
+    farming: 1,
+    mining: 1,
+    education: 1,
+    infrastructure: 1,
+    military: 1,
+    branches: { tanks: 0, air: 0, naval: 0 },
+  });
+
+  for (let turn = 1; turn <= 2; turn += 1) {
+    gameState.turn = turn;
+    gameState.turnNumber = turn;
+    checkServerVictory(gameState, undefined, { turnBoundary: true });
+    assert.equal(gameState.gameOver, null);
+  }
+
+  gameState.turn = 3;
+  gameState.turnNumber = 3;
+  checkServerVictory(gameState, undefined, { turnBoundary: true });
+
+  assert.equal(gameState.gameOver?.isGameOver, true);
+  assert.equal(gameState.gameOver?.winnerNationId, "nation-1");
+  assert.equal(gameState.gameOver?.victoryType, "technological_supremacy");
+});
+
+test("diplomatic hegemony only triggers after 10 consecutive qualifying turns", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 4, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  gameState.alliances = [
+    { id: "a1", active: true, members: ["nation-1", "nation-2"] },
+    { id: "a2", active: true, members: ["nation-1", "nation-3"] },
+    { id: "a3", active: true, members: ["nation-1", "nation-4"] },
+  ] as any;
+
+  for (let turn = 1; turn <= 9; turn += 1) {
+    gameState.turn = turn;
+    gameState.turnNumber = turn;
+    checkServerVictory(gameState, undefined, { turnBoundary: true });
+    assert.equal(gameState.gameOver, null);
+  }
+
+  gameState.turn = 10;
+  gameState.turnNumber = 10;
+  checkServerVictory(gameState, undefined, { turnBoundary: true });
+
+  assert.equal(gameState.gameOver?.isGameOver, true);
+  assert.equal(gameState.gameOver?.winnerNationId, "nation-1");
+  assert.equal(gameState.gameOver?.victoryType, "diplomatic_hegemony");
+});
+
+test("diplomatic hegemony resets immediately when the alliance bloc breaks", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 4, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345 },
+    [],
+  );
+  gameState.alliances = [
+    { id: "a1", active: true, members: ["nation-1", "nation-2"] },
+    { id: "a2", active: true, members: ["nation-1", "nation-3"] },
+    { id: "a3", active: true, members: ["nation-1", "nation-4"] },
+  ] as any;
+
+  for (let turn = 1; turn <= 5; turn += 1) {
+    gameState.turn = turn;
+    gameState.turnNumber = turn;
+    checkServerVictory(gameState, undefined, { turnBoundary: true });
+  }
+  assert.equal(gameState.victoryProgress?.nations?.["nation-1"]?.diplomaticHoldTurns, 5);
+
+  gameState.alliances[2].active = false;
+  checkServerVictory(gameState);
+  assert.equal(gameState.victoryProgress?.nations?.["nation-1"]?.diplomaticHoldTurns, 0);
+  assert.equal(gameState.gameOver, null);
 });
 
 test("server event trigger stores active event and history", () => {
@@ -1895,8 +2249,8 @@ test("actions after game over are rejected", async () => {
     isGameOver: true,
     winnerNationId: "nation-1",
     winnerId: "nation-1",
-    victoryType: "economic",
-    label: "Economic Victory",
+    victoryType: "total_domination",
+    label: "Total Domination Victory",
   };
 
   await room.messages.playerAction(creator.client, {
@@ -2034,6 +2388,21 @@ test("advanced mode factory requires hardwood and iron", async () => {
   const gameState = startGame(room, creator);
   const nation = gameState.nations["nation-1"];
   const tile = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && item.terrain === "land" && item.type === "empty");
+  gameState.era = 3;
+  nation.tech.mining = 2;
+  nation.tech.education = 2;
+  nation.population.total = 40;
+  const supportTiles = gameState.map.tiles.filter((item: any) => (
+    item.terrain === "land" &&
+    !item.isCapital &&
+    item.id !== tile.id
+  )).slice(0, 5);
+  assert.equal(supportTiles.length, 5);
+  prepareTile(supportTiles[0], { ownerId: "nation-1", type: "mine", workers: 3 });
+  prepareTile(supportTiles[1], { ownerId: "nation-1", type: "mine", workers: 3 });
+  prepareTile(supportTiles[2], { ownerId: "nation-1", type: "mine", workers: 3 });
+  prepareTile(supportTiles[3], { ownerId: "nation-1", type: "school", workers: 3 });
+  prepareTile(supportTiles[4], { ownerId: "nation-1", type: "school", workers: 3 });
 
   // Give nation money but no hardwood or iron
   nation.money = 5000;
@@ -2062,16 +2431,12 @@ test("advanced mode advanced units require iron and oil", async () => {
   const nation = gameState.nations["nation-1"];
   gameState.era = 4;
   nation.tech.branches.tanks = 1; // Research tanks
+  nation.money = 5000;
+  nation.population.available = 40;
+  setResources(nation, { materials: 200, education: 200, industry: 200, iron: 0, oil: 0 });
 
   const military = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && item.type === "military");
   assert.ok(military);
-
-  // Give money and population but no iron or oil
-  nation.money = 5000;
-  nation.population.available = 10;
-  nation.resources.materials = 100;
-  nation.resources.iron = 0;
-  nation.resources.oil = 0;
 
   resetActions(gameState, "nation-1");
 
@@ -2079,7 +2444,7 @@ test("advanced mode advanced units require iron and oil", async () => {
     type: "trainUnit",
     nationId: "nation-1",
     tileId: military.id,
-    amount: 2,
+    amount: 8,
     branch: "tanks",
   });
 

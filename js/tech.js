@@ -6,6 +6,10 @@ import {
 } from "./utils.js";
 import { activeTiles, countTiles } from "./nation.js";
 import { BALANCE } from "./balance.js";
+import {
+  INFRASTRUCTURE_UNLOCKS,
+  transportUnlockForTier as infrastructureUnlockForTier,
+} from "./infrastructure.js";
 
 export const ERAS = {
   1: {
@@ -65,7 +69,7 @@ export const TECH_CATEGORIES = {
     tileTypes: [],
     baseCost: BALANCE.tech.categories.infrastructure.baseCost,
     resource: "materials",
-    description: "Unlocks national transportation networks that improve growth and supply-chain happiness.",
+    description: "Unlocks road, rail, and advanced logistics networks for large empires.",
   },
   military: {
     label: "Military",
@@ -76,13 +80,6 @@ export const TECH_CATEGORIES = {
     description: "Improves training, defense, and late-era specialization.",
   },
 };
-
-export const INFRASTRUCTURE_UNLOCKS = [
-  { tier: 1, tileType: TILE_TYPES.ROAD, label: "Road", era: 1 },
-  { tier: 2, tileType: TILE_TYPES.RAILROAD, label: "Railroad", era: 2 },
-  { tier: 3, tileType: TILE_TYPES.HIGHWAY, label: "Highway", era: 3 },
-  { tier: 4, tileType: TILE_TYPES.AIRPORT, label: "Airport", era: 4 },
-];
 
 export const MILITARY_BRANCHES = {
   tanks: {
@@ -409,7 +406,7 @@ export function transportHappinessBonus(nation) {
 }
 
 export function transportUnlockForTier(tier) {
-  return INFRASTRUCTURE_UNLOCKS.find((item) => item.tier === tier) || null;
+  return infrastructureUnlockForTier(tier);
 }
 
 export function checkEraAdvancement(game) {
@@ -450,7 +447,7 @@ export function buildingTechRequirement(type, nation, era) {
   if (type === TILE_TYPES.FISHERY && (nation.tech.farming || 0) < 1) return { ok: false, reason: "Requires Farming tier 1." };
   if (type === TILE_TYPES.MOUNTAIN_MINE && (nation.tech.mining || 0) < 2) return { ok: false, reason: "Requires Mining tier 2." };
   if (type === TILE_TYPES.UNIVERSITY && (nation.tech.education || 0) < 3) return { ok: false, reason: "Requires Education tier 3." };
-  const unlock = INFRASTRUCTURE_UNLOCKS.find((item) => item.tileType === type);
+  const unlock = INFRASTRUCTURE_UNLOCKS.find((item) => item.type === type);
   if (unlock) {
     if (era < unlock.era) return { ok: false, reason: `${unlock.label}s unlock in Era ${unlock.era}.` };
     if ((nation.tech.infrastructure || 0) < unlock.tier) return { ok: false, reason: `Requires Infrastructure tier ${unlock.tier}.` };

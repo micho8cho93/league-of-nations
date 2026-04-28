@@ -8,6 +8,12 @@ import {
   pairKey,
   tileId,
 } from "./utils.js";
+import {
+  INFRASTRUCTURE_TYPES,
+  advancedNetworkSupport,
+  canUseInfrastructureEdge,
+  computeNationLogistics,
+} from "./infrastructure.js";
 import { applyWarDiplomacyPenalty, areAllied, disruptTradeRoutes, getDiplomacy } from "./trade.js";
 import { militaryPower } from "./nation.js";
 import { BALANCE } from "./balance.js";
@@ -141,6 +147,7 @@ export function declareWar(game, attackerId, defenderId, reason = "Strategic con
   if (isServerAuthoritative(game)) return serverAuthoritativeRejection();
   if (game.era < 3) return { ok: false, reason: "War unlocks in Era 3." };
   if (attackerId === defenderId) return { ok: false, reason: "A nation cannot declare war on itself." };
+  game.establishDiplomaticContact?.(attackerId, defenderId);
   const attacker = game.nations[attackerId];
   const defender = game.nations[defenderId];
   normalizeWarReadiness(attacker);
@@ -215,7 +222,7 @@ export function getValidMilitaryActionsFromTile(game, fromTileId, nationId) {
     nationId,
     unitType,
     unitTypeLabel: config.label,
-    moveRange: config.moveRange,
+    moveRange: effectiveMoveRange(game, from, nationId, unitType),
     attackRange: config.attackRange,
     moveTargets: [],
     attackTargets: [],
@@ -578,31 +585,39 @@ export function adjacentOwnedMilitaryBases(game, tile, nationId) {
 
 function reachableMoveTargets(game, from, nationId, unitType) {
   const config = unitTypeConfig(unitType);
+  const logistics = computeNationLogistics(game.tiles, game.nations[nationId]);
+  const sourceBonus = movementBonusAvailable(logistics, from, unitType);
   if (config.ignoresTerrainForMovement) {
     return game.tiles
-      .filter((tile) => tile.id !== from.id && hexDistance(from, tile) <= config.moveRange)
+      .filter((tile) => tile.id !== from.id && hexDistance(from, tile) <= config.moveRange + sourceBonus)
       .filter((tile) => canMoveDestination(game, from, tile, nationId, unitType))
       .map((tile) => ({ ...tile, path: [from.id, tile.id] }));
   }
 
-  const queue = [{ tile: from, path: [from.id], distance: 0 }];
-  const seen = new Map([[from.id, 0]]);
+  const useEdgeBonus = unitType === "infantry" || unitType === "tanks";
+  const maxDistance = config.moveRange + (useEdgeBonus ? 0 : sourceBonus);
+  const queue = [{ tile: from, path: [from.id], distance: 0, bonusRemaining: useEdgeBonus ? sourceBonus : 0 }];
+  const seen = new Map([[`${from.id}:${useEdgeBonus ? sourceBonus : 0}`, 0]]);
   const targets = [];
   while (queue.length) {
     const current = queue.shift();
-    if (current.distance >= config.moveRange) continue;
+    if (!current || current.distance >= maxDistance) continue;
     for (const coord of axialNeighbors(current.tile.q, current.tile.r)) {
       const next = game.tileAt(coord.q, coord.r);
       if (!next) continue;
-      const nextDistance = current.distance + 1;
-      if ((seen.get(next.id) ?? Infinity) <= nextDistance) continue;
+      const useNetworkEdge = useEdgeBonus && current.bonusRemaining > 0 && canUseInfrastructureEdge(logistics, current.tile.id, next.id, unitType);
+      const nextDistance = current.distance + (useNetworkEdge ? 0 : 1);
+      const nextBonusRemaining = useNetworkEdge ? current.bonusRemaining - 1 : current.bonusRemaining;
+      if (nextDistance > maxDistance) continue;
+      const stateKey = `${next.id}:${nextBonusRemaining}`;
+      if ((seen.get(stateKey) ?? Infinity) <= nextDistance) continue;
       if (!canUnitEnterTile(game, nationId, next, unitType).ok) continue;
       if (next.ownerId && next.ownerId !== nationId && !areAllied(game, nationId, next.ownerId)) continue;
       const path = [...current.path, next.id];
-      seen.set(next.id, nextDistance);
+      seen.set(stateKey, nextDistance);
       if (!next.ownerId || next.ownerId === nationId) targets.push({ ...next, path });
       if (next.ownerId === nationId || areAllied(game, nationId, next.ownerId) || (config.canEnterWater && isWaterLike(next))) {
-        queue.push({ tile: next, path, distance: nextDistance });
+        queue.push({ tile: next, path, distance: nextDistance, bonusRemaining: nextBonusRemaining });
       }
     }
   }
@@ -633,6 +648,19 @@ function canUnitAttackTile(game, nationId, tile, unitType) {
   if (unitType === "tanks" && isWaterLike(tile)) return false;
   if (unitType === "infantry" && isWaterLike(tile)) return false;
   return true;
+}
+
+function movementBonusAvailable(logistics, from, unitType) {
+  if (unitType === "infantry") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ROAD].has(from.id) ? 1 : 0;
+  if (unitType === "tanks") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(from.id) ? 1 : 0;
+  if (unitType === "air" || unitType === "naval") return advancedNetworkSupport(logistics, from.id) ? 1 : 0;
+  return 0;
+}
+
+function effectiveMoveRange(game, from, nationId, unitType) {
+  const config = unitTypeConfig(unitType);
+  const logistics = computeNationLogistics(game.tiles, game.nations[nationId]);
+  return config.moveRange + movementBonusAvailable(logistics, from, unitType);
 }
 
 function isCoastalTile(game, tile) {
