@@ -36,7 +36,9 @@ import { BALANCE, RESOURCE_BASE_YIELD_PER_TILE, RESOURCE_METADATA } from "./bala
 import {
   advancedFruitDemand,
   advancedResourceForTile,
+  calculateAdvancedResourceUpkeep,
   hardwoodCostForBuilding,
+  ironCostForBranch,
   ironCostForFactory,
   isAdvancedMode,
   normalizeAdvancedResources,
@@ -647,30 +649,30 @@ class GameUI {
         label: "Hardwood",
         icon: "🪵",
         value: player.resources.hardwood,
-        className: "warn",
-        note: "Buildings",
+        className: flows.advancedUpkeep?.deficit.hardwood > 0 ? "bad" : (flows.hardwood < 0 ? "warn" : "good"),
+        note: `Upkeep ${flows.advancedUpkeep?.required.hardwood || 0}/turn`,
         rate: `${signed(flows.hardwood)}/turn`,
-        tooltip: "Hardwood comes from jungle and is consumed by construction in Advanced mode.",
+        tooltip: flows.advancedUpkeep?.deficit.hardwood > 0 ? `Shortage detected! Building efficiency reduced by ${Math.round((1 - (flows.advancedUpkeep?.penalties?.buildingEfficiencyModifier || 1)) * 100)}%.` : "Hardwood comes from jungle, supports construction and building upkeep.",
       })}
       ${resourceRow({
         id: "iron",
         label: "Iron",
         icon: "⛓️",
         value: player.resources.iron,
-        className: "blue",
-        note: "Factories",
+        className: flows.advancedUpkeep?.deficit.iron > 0 ? "bad" : (flows.iron < 0 ? "warn" : "good"),
+        note: `Upkeep ${flows.advancedUpkeep?.required.iron || 0}/turn`,
         rate: `${signed(flows.iron)}/turn`,
-        tooltip: "Iron comes from arctic terrain and gates factory construction in Advanced mode.",
+        tooltip: flows.advancedUpkeep?.deficit.iron > 0 ? `Shortage detected! Factory efficiency reduced by ${Math.round((1 - (flows.advancedUpkeep?.penalties?.factoryEfficiencyModifier || 1)) * 100)}%.` : "Iron comes from arctic, supports factories and unit construction.",
       })}
       ${resourceRow({
         id: "oil",
         label: "Oil",
         icon: "🛢️",
         value: player.resources.oil,
-        className: "bad",
-        note: "Advanced units",
+        className: flows.advancedUpkeep?.deficit.oil > 0 ? "bad" : (flows.oil < 0 ? "warn" : "good"),
+        note: `Upkeep ${flows.advancedUpkeep?.required.oil || 0}/turn`,
         rate: `${signed(flows.oil)}/turn`,
-        tooltip: "Oil comes from desert terrain and is spent on advanced unit deployments in Advanced mode.",
+        tooltip: flows.advancedUpkeep?.deficit.oil > 0 ? `Shortage detected! Advanced unit readiness reduced by ${Math.round((1 - (flows.advancedUpkeep?.penalties?.advancedUnitReadinessModifier || 1)) * 100)}%.` : "Oil comes from desert, supports advanced unit deployments.",
       })}
     ` : "";
     document.querySelectorAll(".ui-tooltip[data-floating-tooltip='true']").forEach((tooltip) => tooltip.remove());
@@ -769,6 +771,7 @@ class GameUI {
   projectResourceFlows(player) {
     if (isAdvancedMode(this.game)) normalizeAdvancedResources(player);
     const foodFlow = this.game.foodFlowFor(player.id);
+    const advancedUpkeep = isAdvancedMode(this.game) ? calculateAdvancedResourceUpkeep(this.game, player.id) : null;
     const flows = {
       money: 0,
       moneyNet: 0,
@@ -785,6 +788,7 @@ class GameUI {
       oil: 0,
       population: 0,
       capacity: foodFlow.capacity,
+      advancedUpkeep,
     };
     const available = { ...player.resources };
     const happinessEnabled = this.game.settings.happinessEnabled !== false;
@@ -1136,7 +1140,10 @@ class GameUI {
     const visibility = this.getFogVisibility();
     const train = tile.type === TILE_TYPES.MILITARY
       ? trainingOptionsForNation(player, this.game.era).map((option) => {
-          const cost = formatCost(option.cost, isAdvancedMode(this.game) && option.branch !== "infantry" ? { oil: oilCostForBranch(option.branch) } : null);
+          const advancedCost = isAdvancedMode(this.game)
+            ? { ...(ironCostForBranch(option.branch) && { iron: ironCostForBranch(option.branch) }), ...(oilCostForBranch(option.branch) && { oil: oilCostForBranch(option.branch) }) }
+            : null;
+          const cost = formatCost(option.cost, advancedCost);
           return `<div>${this.actionPreview("trainUnit", { ok: true }, cost)}<button class="secondary-btn" data-tile-action="train" data-amount="${option.strength}" data-branch="${option.branch}" ${this.actionDisabledAttribute("trainUnit")} title="${escapeHtml(option.description)}">${escapeHtml(option.label)} (${cost})</button></div>`;
         }).join("")
       : "";

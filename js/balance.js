@@ -59,6 +59,26 @@ export const ADVANCED_UNIT_OIL_COSTS = Object.freeze({
   naval: 2,
 });
 
+// Advanced mode resource upkeep (per turn per building/unit/etc.)
+export const ADVANCED_UPKEEP_COSTS = Object.freeze({
+  buildings: {
+    [TILE_TYPES.FARM]: { hardwood: 0.05 },
+    [TILE_TYPES.FISHERY]: { hardwood: 0.05 },
+    [TILE_TYPES.MINE]: { hardwood: 0.08, iron: 0.02 },
+    [TILE_TYPES.MOUNTAIN_MINE]: { hardwood: 0.1, iron: 0.03 },
+    [TILE_TYPES.SCHOOL]: { hardwood: 0.06, iron: 0.04 },
+    [TILE_TYPES.UNIVERSITY]: { hardwood: 0.08, iron: 0.06 },
+    [TILE_TYPES.MILITARY]: { hardwood: 0.1, iron: 0.08, oil: 0.05 },
+    [TILE_TYPES.FACTORY]: { hardwood: 0.15, iron: 0.2, oil: 0.1 },
+  },
+  units: {
+    infantry: { iron: 0.03 },
+    tanks: { iron: 0.1, oil: 0.08 },
+    air: { iron: 0.08, oil: 0.15 },
+    naval: { iron: 0.07, oil: 0.1 },
+  },
+});
+
 export const BALANCE = {
   actions: {
     defaultActionPoints: 5,

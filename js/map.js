@@ -2162,6 +2162,7 @@ export class HexMapRenderer {
     this.dragMode = null;
     this.lastPointer = { x: 0, y: 0 };
     this.dragDistance = 0;
+    this.touchDistance = 0;
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.canvas.addEventListener("pointerdown", (event) => {
       this.canvas.setPointerCapture(event.pointerId);
@@ -2218,11 +2219,36 @@ export class HexMapRenderer {
       this.hoveredTileId = null;
       if (this.onHover) this.onHover(null, null);
     });
+    this.canvas.addEventListener("touchstart", (event) => {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        this.touchDistance = this._getTouchDistance(event.touches);
+      }
+    }, { passive: false });
+    this.canvas.addEventListener("touchmove", (event) => {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        const newDistance = this._getTouchDistance(event.touches);
+        const ratio = this.touchDistance / newDistance;
+        this.camRadius = clamp(this.camRadius * ratio, this.minCamRadius, this.maxCamRadius);
+        this._updateCamera();
+        this.touchDistance = newDistance;
+      }
+    }, { passive: false });
+    this.canvas.addEventListener("touchend", () => {
+      this.touchDistance = 0;
+    });
   }
 
   _handleSelect(event) {
     const id = this._pickTile(event);
     if (this.onSelect) this.onSelect(id);
+  }
+
+  _getTouchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
   }
 
   _pickTile(event) {

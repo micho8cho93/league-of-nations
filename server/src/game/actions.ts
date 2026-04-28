@@ -6,6 +6,7 @@ import {
   advancedFruitDemand,
   collectAdvancedResourcesForNation,
   hardwoodCostForBuilding,
+  ironCostForBranch,
   ironCostForFactory,
   isAdvancedMode,
   normalizeAdvancedResources,
@@ -866,10 +867,17 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
     const required = cost[resource] || 0;
     if (required && resourceCount(nation, resource) < required) return { ok: false, reason: `Requires ${required} ${resource}.` };
   }
+  const ironCost = isAdvancedMode(game) ? ironCostForBranch(branch) : 0;
   const oilCost = isAdvancedMode(game) && branch !== "infantry" ? oilCostForBranch(branch) : 0;
-  if (oilCost > 0) {
+
+  if (ironCost > 0 || oilCost > 0) {
     normalizeAdvancedResources(nation);
-    if (resourceCount(nation, "oil") < oilCost) return { ok: false, reason: `Requires ${oilCost} oil.` };
+    if (ironCost > 0 && resourceCount(nation, "iron") < ironCost) {
+      return { ok: false, reason: `Advanced units require ${ironCost} iron.` };
+    }
+    if (oilCost > 0 && resourceCount(nation, "oil") < oilCost) {
+      return { ok: false, reason: `${branch} units require ${oilCost} oil.` };
+    }
   }
 
   const action = spendAction(game, nationId, SERVER_GAME_ACTION_TYPES.TRAIN_UNIT);
@@ -880,7 +888,8 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
   for (const resource of ["materials", "education", "industry"] as const) {
     nation.resources[resource] = resourceCount(nation, resource) - (cost[resource] || 0);
   }
-  if (oilCost) nation.resources.oil = resourceCount(nation, "oil") - oilCost;
+  if (ironCost > 0) nation.resources.iron = resourceCount(nation, "iron") - ironCost;
+  if (oilCost > 0) nation.resources.oil = resourceCount(nation, "oil") - oilCost;
   nation.workers.soldiers = workerCount(nation, WORKER_ROLES.SOLDIERS) + cost.people;
   nation.military.unitsTrained = numberValue(nation.military.unitsTrained) + strength;
   tile.unit = tile.unit || { nationId, strength: 0, branch, movedTurn: 0, branches: {} };
@@ -892,7 +901,8 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
     tileId: tile.id,
   });
 
-  return { ok: true, cost, advancedCost: oilCost ? { oil: oilCost } : null };
+  const advancedCost = ironCost || oilCost ? { ...(ironCost && { iron: ironCost }), ...(oilCost && { oil: oilCost }) } : null;
+  return { ok: true, cost, advancedCost };
 }
 
 function moveOrAttackUnit(

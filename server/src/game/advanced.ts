@@ -19,6 +19,7 @@ export const BUILDING_HARDWOOD_COSTS: Record<string, number> = {
 export const FACTORY_HARDWOOD_COST = 2;
 export const FACTORY_IRON_COST = 3;
 
+export const ADVANCED_UNIT_IRON_COST = 2; // Iron cost per advanced unit
 export const ADVANCED_UNIT_OIL_COSTS: Record<string, number> = {
   tanks: 2,
   air: 3,
@@ -49,6 +50,10 @@ export function hardwoodCostForBuilding(type: string) {
 
 export function ironCostForFactory(type: string) {
   return type === "factory" ? FACTORY_IRON_COST : 0;
+}
+
+export function ironCostForBranch(branch: string) {
+  return branch !== "infantry" ? ADVANCED_UNIT_IRON_COST : 0;
 }
 
 export function oilCostForBranch(branch: string) {

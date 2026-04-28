@@ -2026,3 +2026,93 @@ test("action points cannot go below zero", async () => {
   assert.equal(nation.actionsRemaining, 0);
   assert.ok(nation.actionPoints >= 0);
 });
+
+test("advanced mode factory requires hardwood and iron", async () => {
+  const room = await createRoom(2, { mode: "advanced" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  const tile = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && item.terrain === "land" && item.type === "empty");
+
+  // Give nation money but no hardwood or iron
+  nation.money = 5000;
+  nation.resources.hardwood = 0;
+  nation.resources.iron = 0;
+
+  resetActions(gameState, "nation-1");
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "factory",
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.match(rejection?.message, /hardwood|iron/i);
+  assert.ok(!rejection?.ok);
+});
+
+test("advanced mode advanced units require iron and oil", async () => {
+  const room = await createRoom(2, { mode: "advanced" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  gameState.era = 4;
+  nation.tech.branches.tanks = 1; // Research tanks
+
+  const military = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && item.type === "military");
+  assert.ok(military);
+
+  // Give money and population but no iron or oil
+  nation.money = 5000;
+  nation.population.available = 10;
+  nation.resources.materials = 100;
+  nation.resources.iron = 0;
+  nation.resources.oil = 0;
+
+  resetActions(gameState, "nation-1");
+
+  await room.messages.playerAction(creator.client, {
+    type: "trainUnit",
+    nationId: "nation-1",
+    tileId: military.id,
+    amount: 2,
+    branch: "tanks",
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  assert.match(rejection?.message, /iron|oil/i);
+  assert.ok(!rejection?.ok);
+});
+
+test("lite mode building flow does not require advanced resources", async () => {
+  const room = await createRoom(2, { mode: "lite" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+
+  const tile = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && item.terrain === "land" && item.type === "empty");
+  assert.ok(tile);
+
+  // In lite mode, should be able to build without advanced resources
+  nation.money = 5000;
+  nation.resources.hardwood = 0;
+  nation.resources.iron = 0;
+
+  resetActions(gameState, "nation-1");
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "farm",
+  });
+
+  const rejection = latestRejectionPayload(creator);
+  // Should not reject for missing advanced resources in lite mode
+  assert.ok(!rejection?.message?.match(/hardwood|iron|oil/) || rejection?.message?.match(/money/));
+});

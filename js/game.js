@@ -27,8 +27,12 @@ import {
 import {
   ADVANCED_RESOURCE_KEYS,
   advancedFruitDemand,
+  applyAdvancedResourceDeficits,
+  applyAdvancedResourceUpkeep,
+  calculateAdvancedResourceUpkeep,
   collectAdvancedResourcesForNation,
   hardwoodCostForBuilding,
+  ironCostForBranch,
   ironCostForFactory,
   isAdvancedMode,
   normalizeAdvancedResources,
@@ -612,10 +616,16 @@ export class GameState {
     if (nation.resources.materials < cost.materials) return { ok: false, reason: `Requires ${cost.materials} materials.` };
     if (cost.education && nation.resources.education < cost.education) return { ok: false, reason: `Requires ${cost.education} education.` };
     if (cost.industry && nation.resources.industry < cost.industry) return { ok: false, reason: `Requires ${cost.industry} industry.` };
+    const ironCost = isAdvancedMode(this) ? ironCostForBranch(unitBranch) : 0;
     const oilCost = isAdvancedMode(this) && unitBranch !== "infantry" ? oilCostForBranch(unitBranch) : 0;
-    if (oilCost > 0) {
+    if (ironCost > 0 || oilCost > 0) {
       normalizeAdvancedResources(nation);
-      if (nation.resources.oil < oilCost) return { ok: false, reason: `Requires ${oilCost} oil.` };
+      if (ironCost > 0 && nation.resources.iron < ironCost) {
+        return { ok: false, reason: `Advanced units require ${ironCost} iron.` };
+      }
+      if (oilCost > 0 && nation.resources.oil < oilCost) {
+        return { ok: false, reason: `${unitBranch} units require ${oilCost} oil.` };
+      }
     }
     const action = this.spendAction("train", nationId);
     if (!action.ok) return action;
@@ -624,7 +634,8 @@ export class GameState {
     nation.resources.materials -= cost.materials;
     if (cost.education) nation.resources.education -= cost.education;
     if (cost.industry) nation.resources.industry -= cost.industry;
-    if (oilCost) nation.resources.oil -= oilCost;
+    if (ironCost > 0) nation.resources.iron -= ironCost;
+    if (oilCost > 0) nation.resources.oil -= oilCost;
     nation.workers.soldiers += cost.people;
     nation.stats.moneySpent += cost.money;
     nation.military.unitsTrained += amount;
@@ -633,7 +644,8 @@ export class GameState {
     addUnitBranch(tile.unit, unitBranch, amount);
     if (!silent) this.addEvent(`${nation.name} ${unitBranch === "infantry" ? "trained" : "deployed"} ${amount} ${unitBranch} strength.`, { nationId, type: "military", tileId: tile.id });
     this.changed("train");
-    return { ok: true, cost, advancedCost: oilCost ? { oil: oilCost } : null };
+    const advancedCost = ironCost || oilCost ? { ...(ironCost && { iron: ironCost }), ...(oilCost && { oil: oilCost }) } : null;
+    return { ok: true, cost, advancedCost };
   }
 
   moveUnitToward(fromTileId, targetTileId, nationId = this.playerId, options = {}) {
@@ -1220,7 +1232,10 @@ export class GameState {
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
       const routeFood = tradeResult.foodProduced[nation.id] || 0;
       this.consumeFood(nation, summary, (foodProducedByNation[nation.id] || 0) + routeFood, happinessContexts[nation.id] || {});
-      if (isAdvancedMode(this)) this.applyAdvancedFruitEffects(nation, summary);
+      if (isAdvancedMode(this)) {
+        this.applyAdvancedFruitEffects(nation, summary);
+        this.applyAdvancedResourceUpkeepAndDeficits(nation, summary);
+      }
     }
 
     for (const alliance of expireAlliances(this)) {
@@ -1430,6 +1445,27 @@ export class GameState {
       nation.population.happiness = normalizeHappiness(before - FRUIT_DEFICIT_STABILITY_PENALTY);
       summary.happiness += nation.population.happiness - before;
       this.addEvent(`${nation.name} lacked ${deficit} fruit and faced population strain.`, { nationId: nation.id, type: "resource" });
+    }
+  }
+
+  applyAdvancedResourceUpkeepAndDeficits(nation, summary) {
+    // Apply resource upkeep for hardwood, iron, and oil
+    const upkeepResult = applyAdvancedResourceUpkeep(this, nation.id);
+    if (!upkeepResult) return; // Not in Advanced mode or nation not active
+
+    // Apply deficit penalties
+    applyAdvancedResourceDeficits(this, nation.id);
+
+    // Report upkeep in events
+    const { deficit } = upkeepResult;
+    if (deficit.hardwood > 0) {
+      this.addEvent(`${nation.name} suffered hardwood shortage, reducing building efficiency.`, { nationId: nation.id, type: "resource" });
+    }
+    if (deficit.iron > 0) {
+      this.addEvent(`${nation.name} suffered iron shortage, reducing factory efficiency.`, { nationId: nation.id, type: "resource" });
+    }
+    if (deficit.oil > 0) {
+      this.addEvent(`${nation.name} suffered oil shortage, reducing unit readiness.`, { nationId: nation.id, type: "resource" });
     }
   }
 
