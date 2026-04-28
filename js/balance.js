@@ -3,6 +3,7 @@ import { TILE_TYPES } from "./utils.js";
 export const GAME_MODES = Object.freeze({
   LITE: "lite",
   ADVANCED: "advanced",
+  SCENARIO: "scenario",
 });
 
 export const SPECIAL_RESOURCES = Object.freeze({

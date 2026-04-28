@@ -170,6 +170,9 @@ class GameUI {
     this.dialogBody = document.getElementById("dialog-body");
     this.dialogCloseBtn = document.getElementById("dialog-close-btn");
     this.serverErrorDisplay = document.getElementById("server-error-display");
+    this.scenarioObjectivesPanel = document.getElementById("scenario-objectives-panel");
+    this.scenarioObjectivesContent = document.getElementById("scenario-objectives-content");
+    this.scenarioObjectivesCloseBtn = document.getElementById("scenario-objectives-close-btn");
   }
 
   bindEvents() {
@@ -199,6 +202,9 @@ class GameUI {
     this.dialogBody.addEventListener("click", (event) => this.handleTechClick(event));
     this.dialogBody.addEventListener("click", (event) => this.handleDiplomacyClick(event));
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
+    if (this.scenarioObjectivesCloseBtn) {
+      this.scenarioObjectivesCloseBtn.addEventListener("click", () => this.closeScenarioObjectives());
+    }
   }
 
   toggleMenuCollapse() {
@@ -355,6 +361,7 @@ class GameUI {
 	    }
 	    this.renderStatus();
 	    this.renderResources();
+	    this.renderScenarioObjectives();
 	    this.refreshBoardDialogs();
 	    this.refreshTechDialog();
 	    this.renderTilePopup(visibility);
@@ -1566,6 +1573,104 @@ class GameUI {
     const minutes = Math.floor(remaining / 60);
     const seconds = remaining % 60;
     return `Turn timer ${minutes}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  renderScenarioObjectives() {
+    if (!this.game.objectives || this.game.objectives.length === 0 || !this.scenarioObjectivesPanel) {
+      if (this.scenarioObjectivesPanel) this.scenarioObjectivesPanel.hidden = true;
+      return;
+    }
+
+    const player = this.game.player;
+    if (!player) return;
+
+    let html = "";
+    for (const obj of this.game.objectives) {
+      const completed = this.isObjectiveCompleted(obj, player);
+      const progressText = this.getObjectiveProgress(obj, player);
+      const completedClass = completed ? "completed" : "";
+      html += `
+        <div class="objective-item ${completedClass}">
+          <div class="objective-title">${escapeHtml(obj.title)}</div>
+          <div class="objective-description">${escapeHtml(obj.description)}</div>
+          <div class="objective-progress">${escapeHtml(progressText)}</div>
+          ${completed ? '<div class="objective-badge">✓ Complete</div>' : ""}
+        </div>
+      `;
+    }
+
+    this.scenarioObjectivesContent.innerHTML = html;
+    this.scenarioObjectivesPanel.hidden = false;
+  }
+
+  isObjectiveCompleted(objective, player) {
+    if (objective.type === "terrain") {
+      const count = this.game.map.tiles.filter(
+        (t) => t.ownerId === player.id && t.biome === objective.terrain
+      ).length;
+      return count >= objective.target;
+    } else if (objective.type === "buildings") {
+      const count = this.game.map.tiles.filter(
+        (t) => t.ownerId === player.id && t.type !== "empty" && t.type !== "water"
+      ).length;
+      return count >= objective.target;
+    } else if (objective.type === "factories") {
+      const count = this.game.map.tiles.filter(
+        (t) => t.ownerId === player.id && t.type === "factory"
+      ).length;
+      return count >= objective.target;
+    } else if (objective.type === "resources") {
+      return objective.resources.every((res) => {
+        const count = this.game.map.tiles.filter(
+          (t) => t.ownerId === player.id && this.getTileResource(t) === res
+        ).length;
+        return count > 0;
+      });
+    }
+    return false;
+  }
+
+  getObjectiveProgress(objective, player) {
+    if (objective.type === "terrain") {
+      const count = this.game.map.tiles.filter(
+        (t) => t.ownerId === player.id && t.biome === objective.terrain
+      ).length;
+      return `${count} / ${objective.target}`;
+    } else if (objective.type === "buildings") {
+      const count = this.game.map.tiles.filter(
+        (t) => t.ownerId === player.id && t.type !== "empty" && t.type !== "water"
+      ).length;
+      return `${count} / ${objective.target}`;
+    } else if (objective.type === "factories") {
+      const count = this.game.map.tiles.filter(
+        (t) => t.ownerId === player.id && t.type === "factory"
+      ).length;
+      return `${count} / ${objective.target}`;
+    } else if (objective.type === "resources") {
+      const controlled = objective.resources.filter((res) => {
+        return this.game.map.tiles.some(
+          (t) => t.ownerId === player.id && this.getTileResource(t) === res
+        );
+      }).length;
+      return `${controlled} / ${objective.resources.length} resources controlled`;
+    }
+    return "";
+  }
+
+  getTileResource(tile) {
+    const RESOURCES = {
+      grassland: "fruit",
+      jungle: "hardwood",
+      arctic: "iron",
+      desert: "oil",
+    };
+    return RESOURCES[tile.biome] || null;
+  }
+
+  closeScenarioObjectives() {
+    if (this.scenarioObjectivesPanel) {
+      this.scenarioObjectivesPanel.hidden = true;
+    }
   }
 }
 

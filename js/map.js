@@ -176,7 +176,7 @@ export function createMapData(settings) {
   });
 
   carveWaterFeatures(tiles, radius, seed, Math.round(scored.length * targetLandRatio));
-  if (mode === "advanced") assignAdvancedBiomes(tiles, radius, seed, settings.landscapeDiversity);
+  if (mode === "advanced" || mode === "scenario") assignAdvancedBiomes(tiles, radius, seed, settings.landscapeDiversity);
   else assignBiomes(tiles, radius, seed, settings.landscapeDiversity);
   addMountainRanges(tiles, radius, seed, nationCount);
 

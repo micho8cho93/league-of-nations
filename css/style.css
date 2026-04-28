@@ -1159,6 +1159,114 @@ textarea {
     flex-basis: 134px;
   }
 
+  .scenario-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .scenario-card {
+    min-height: 160px;
+    display: grid;
+    align-content: center;
+    justify-items: start;
+    gap: 10px;
+    padding: 22px;
+    text-align: left;
+  }
+
+  .scenario-card strong {
+    font-size: 1.5rem;
+  }
+
+  .scenario-card span {
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .scenario-objectives-panel {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: min(350px, calc(100% - 40px));
+    max-height: 50vh;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 16px var(--shadow);
+  }
+
+  .scenario-objectives-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+    gap: 12px;
+  }
+
+  .scenario-objectives-head h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .scenario-objectives-close-btn {
+    padding: 4px 8px;
+    font-size: 1.5rem;
+  }
+
+  .scenario-objectives-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .objective-item {
+    padding: 12px;
+    background: var(--panel-2);
+    border-left: 3px solid var(--blue);
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+
+  .objective-item.completed {
+    border-left-color: var(--green);
+    opacity: 0.8;
+  }
+
+  .objective-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .objective-description {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 4px;
+  }
+
+  .objective-progress {
+    color: var(--gold);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  .objective-badge {
+    margin-top: 6px;
+    padding: 2px 6px;
+    background: var(--green);
+    color: var(--bg);
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    display: inline-block;
+  }
+
   .map-section {
     min-height: 100vh;
   }

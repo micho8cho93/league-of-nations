@@ -21,7 +21,24 @@
           <strong>Advanced</strong>
           <span>New terrain resources, gated construction, and advanced units.</span>
         </button>
+        <button id="mode-scenario-btn" type="button" class="mode-card tertiary-btn">
+          <strong>Scenario</strong>
+          <span>Pre-designed maps and objectives with advanced rules.</span>
+        </button>
       </div>
+    </section>
+  </div>
+
+  <div id="scenario-screen" class="setup-screen" hidden>
+    <section class="setup-panel" aria-labelledby="scenario-title">
+      <div class="setup-head">
+        <div>
+          <div id="scenario-title" class="setup-title">Choose a Scenario</div>
+          <div class="setup-subtitle">Select a scenario with pre-designed map and objectives.</div>
+        </div>
+        <button id="scenario-back-btn" type="button" class="secondary-btn">Back</button>
+      </div>
+      <div id="scenario-grid" class="scenario-grid"></div>
     </section>
   </div>
 
@@ -226,6 +243,13 @@
 	        <section id="tile-popup" class="tile-popup" hidden>
 	          <button id="tile-close-btn" class="icon-btn close-btn" aria-label="Close tile popup">×</button>
 	          <div id="tile-popup-content"></div>
+	        </section>
+	        <section id="scenario-objectives-panel" class="scenario-objectives-panel" hidden>
+	          <div class="scenario-objectives-head">
+	            <h3 id="scenario-objectives-title">Objectives</h3>
+	            <button id="scenario-objectives-close-btn" class="icon-btn close-btn" aria-label="Close objectives panel">×</button>
+	          </div>
+	          <div id="scenario-objectives-content" class="scenario-objectives-content"></div>
 	        </section>
 	      </section>
 	    </main>

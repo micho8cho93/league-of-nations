@@ -16,10 +16,15 @@ import {
 import { setQualityLevel, detectRecommendedQuality } from "./rendering/quality.js";
 import { preloadAll, exposeDebug } from "./rendering/assetLoader.js";
 import { MusicManager, isPlayerInBattle } from "./music.js";
+import { getAllScenarios, getScenario } from "./scenarios.js";
 
 const modeScreen = document.getElementById("mode-screen");
 const modeLiteBtn = document.getElementById("mode-lite-btn");
 const modeAdvancedBtn = document.getElementById("mode-advanced-btn");
+const modeScenarioBtn = document.getElementById("mode-scenario-btn");
+const scenarioScreen = document.getElementById("scenario-screen");
+const scenarioBackBtn = document.getElementById("scenario-back-btn");
+const scenarioGrid = document.getElementById("scenario-grid");
 const setupScreen = document.getElementById("setup-screen");
 const setupForm = document.getElementById("setup-form");
 const setupSubtitle = document.getElementById("setup-subtitle");
@@ -79,6 +84,7 @@ let multiplayerStartHandled = false;
 let syncingLobbyInputs = false;
 let musicManager = null;
 let currentSetupMode = "lite";
+let currentScenarioId = null;
 
 setSessionOnlyNote();
 populateLandscapeOptions(inputs.landscapeDiversity, currentSetupMode);
@@ -86,8 +92,17 @@ populateLandscapeOptions(lobbyInputs.landscapeDiversity, currentSetupMode);
 
 modeLiteBtn.addEventListener("click", () => openSetupMode("lite"));
 modeAdvancedBtn.addEventListener("click", () => openSetupMode("advanced"));
+modeScenarioBtn.addEventListener("click", () => showScenarioSelection());
 backToModeBtn.addEventListener("click", () => {
   modeScreen.hidden = false;
+  setupScreen.hidden = true;
+  scenarioScreen.hidden = true;
+  lobbyScreen.hidden = true;
+  app.hidden = true;
+});
+scenarioBackBtn.addEventListener("click", () => {
+  modeScreen.hidden = false;
+  scenarioScreen.hidden = true;
   setupScreen.hidden = true;
   lobbyScreen.hidden = true;
   app.hidden = true;
@@ -165,19 +180,23 @@ for (const input of Object.values(lobbyInputs)) {
 
 function readSetup() {
   const mode = normalizeGameMode(currentSetupMode);
-  return {
+  const setup = {
     playerName: inputs.playerName.value,
     mode,
     mapSize: inputs.mapSize.value,
     waterLevel: inputs.waterLevel.value,
     landscapeDiversity: normalizeLandscapeDiversity(inputs.landscapeDiversity.value, mode),
     fogOfWarEnabled: inputs.fogOfWarEnabled.checked,
-    nationCount: clampInt(inputs.nationCount.value, 2, 16, 5),
+    nationCount: currentScenarioId ? 4 : clampInt(inputs.nationCount.value, 2, 16, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: inputs.unlimitedMode.checked,
     happinessEnabled: inputs.happinessEnabled.checked,
   };
+  if (currentScenarioId) {
+    setup.scenarioId = currentScenarioId;
+  }
+  return setup;
 }
 
 function setSessionOnlyNote() {
@@ -489,11 +508,60 @@ function deepClone(value) {
 
 function openSetupMode(mode) {
   currentSetupMode = normalizeGameMode(mode);
+  currentScenarioId = null;
   configureSetupScreen(currentSetupMode);
   modeScreen.hidden = true;
   setupScreen.hidden = false;
+  scenarioScreen.hidden = true;
   lobbyScreen.hidden = true;
   app.hidden = true;
+}
+
+function showScenarioSelection() {
+  currentScenarioId = null;
+  modeScreen.hidden = true;
+  setupScreen.hidden = true;
+  scenarioScreen.hidden = false;
+  lobbyScreen.hidden = true;
+  app.hidden = true;
+  populateScenarioGrid();
+}
+
+function populateScenarioGrid() {
+  scenarioGrid.innerHTML = "";
+  const scenarios = getAllScenarios();
+  for (const scenario of scenarios) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "scenario-card secondary-btn";
+    card.innerHTML = `
+      <strong>${scenario.name}</strong>
+      <span>${scenario.description}</span>
+    `;
+    card.addEventListener("click", () => startScenario(scenario.id));
+    scenarioGrid.appendChild(card);
+  }
+}
+
+function startScenario(scenarioId) {
+  const scenario = getScenario(scenarioId);
+  if (!scenario) return;
+  currentScenarioId = scenarioId;
+  currentSetupMode = scenario.mode;
+  configureScenarioSetupScreen(scenario);
+  scenarioScreen.hidden = true;
+  setupScreen.hidden = false;
+}
+
+function configureScenarioSetupScreen(scenario) {
+  setupSubtitle.textContent = `${scenario.name}: ${scenario.description}`;
+  // Hide certain options for scenario mode
+  const mapSizeField = inputs.mapSize?.closest?.(".field");
+  const waterLevelField = inputs.waterLevel?.closest?.(".field");
+  const landscapeDiversityField = inputs.landscapeDiversity?.closest?.(".field");
+  if (mapSizeField) mapSizeField.style.display = "none";
+  if (waterLevelField) waterLevelField.style.display = "none";
+  if (landscapeDiversityField) landscapeDiversityField.style.display = "none";
 }
 
 function configureSetupScreen(mode) {
@@ -501,6 +569,17 @@ function configureSetupScreen(mode) {
   setupSubtitle.textContent = advanced
     ? "Advanced mode: terrain resources gate growth, construction, factories, and advanced units."
     : "Lite mode: current simple flow and current gameplay rules.";
+
+  // Show/hide map configuration fields for non-scenario modes
+  if (!currentScenarioId) {
+    const mapSizeField = inputs.mapSize?.closest?.(".field");
+    const waterLevelField = inputs.waterLevel?.closest?.(".field");
+    const landscapeDiversityField = inputs.landscapeDiversity?.closest?.(".field");
+    if (mapSizeField) mapSizeField.style.display = "";
+    if (waterLevelField) waterLevelField.style.display = "";
+    if (landscapeDiversityField) landscapeDiversityField.style.display = "";
+  }
+
   populateLandscapeOptions(inputs.landscapeDiversity, mode);
   inputs.landscapeDiversity.value = normalizeLandscapeDiversity(inputs.landscapeDiversity.value, mode);
 }

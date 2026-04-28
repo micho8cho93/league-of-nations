@@ -20,6 +20,11 @@ import {
   tileId,
 } from "./utils.js";
 import {
+  getScenarioMap,
+  getScenarioObjectives,
+  getScenarioStartingPositions,
+} from "./scenarios.js";
+import {
   BALANCE,
   FRUIT_DEFICIT_STABILITY_PENALTY,
   FRUIT_SURPLUS_GROWTH_RATE,
@@ -200,6 +205,7 @@ export class GameState {
     this.eraReports = data.eraReports || [];
     this.pendingEraReport = data.pendingEraReport || null;
     this.globalEvents = data.globalEvents || {};
+    this.objectives = data.objectives || [];
     this.gameOver = data.gameOver || null;
     this.selectedTileId = data.selectedTileId || null;
     this.lastSummary = data.lastSummary || null;
@@ -220,7 +226,18 @@ export class GameState {
   static newGame(rawSettings = {}) {
     const settings = normalizeSettings(rawSettings);
     const rng = mulberry32(settings.seed);
-    const map = createMapData(settings);
+
+    // Get map - use scenario map if available, otherwise generate
+    let map;
+    let scenarioStartPositions = null;
+    if (settings.scenarioId) {
+      map = getScenarioMap(settings.scenarioId);
+      scenarioStartPositions = getScenarioStartingPositions(settings.scenarioId);
+    }
+    if (!map) {
+      map = createMapData(settings);
+    }
+
     const profiles = profileSequence(settings.nationCount);
     const nations = {};
     const botIds = [];
@@ -248,13 +265,46 @@ export class GameState {
       botIds.push(bot.id);
     }
 
-    assignStartingTerritories(map, Object.values(nations), rng);
+    // Assign starting territories - use scenario positions if available
+    if (scenarioStartPositions && scenarioStartPositions.length > 0) {
+      // Scenario-based starting positions
+      for (const posData of scenarioStartPositions.slice(0, settings.nationCount)) {
+        const nationId = posData.nationIndex === 0 ? "player" : `bot-${posData.nationIndex}`;
+        const nation = nations[nationId];
+        if (nation && posData.startTiles) {
+          for (const [q, r] of posData.startTiles) {
+            const tile = map.tiles.find((t) => t.q === q && t.r === r);
+            if (tile) {
+              tile.ownerId = nationId;
+            }
+          }
+          // Set starting resources if provided
+          if (posData.startingResources) {
+            nation.resources = nation.resources || {};
+            for (const [res, amount] of Object.entries(posData.startingResources)) {
+              nation.resources[res] = amount;
+            }
+          }
+        }
+      }
+    } else {
+      // Normal starting territory assignment
+      assignStartingTerritories(map, Object.values(nations), rng);
+    }
+
+    // Get objectives if scenario
+    let objectives = [];
+    if (settings.scenarioId) {
+      objectives = getScenarioObjectives(settings.scenarioId);
+    }
+
     const game = new GameState({
       settings,
       map,
       nations,
       playerId: player.id,
       botIds,
+      objectives,
     });
     game.addEvent(`Game started with ${settings.nationCount} nations on a ${settings.mapSize.toLowerCase()} map.`, { type: "system" });
     for (const botId of botIds) {
@@ -1668,6 +1718,7 @@ function normalizeSettings(raw) {
     unlimitedMode,
     happinessEnabled: raw.happinessEnabled !== false,
     seed: Math.floor(Number(raw.seed) || randomSeed()),
+    scenarioId: raw.scenarioId || null,
   };
 }
 

@@ -17,16 +17,21 @@ export const ADVANCED_RESOURCE_BIOMES = Object.freeze(["grassland", "jungle", "a
 export const ADVANCED_DIVERSITY_LEVELS = Object.freeze(["high", "superHigh"]);
 
 export function normalizeGameMode(value) {
-  return value === GAME_MODES.ADVANCED ? GAME_MODES.ADVANCED : GAME_MODES.LITE;
+  if (value === GAME_MODES.ADVANCED || value === GAME_MODES.SCENARIO) {
+    return value;
+  }
+  return GAME_MODES.LITE;
 }
 
 export function isAdvancedMode(gameOrSettings) {
   const settings = gameOrSettings?.settings || gameOrSettings || {};
-  return normalizeGameMode(settings.mode || gameOrSettings?.mode) === GAME_MODES.ADVANCED;
+  const mode = normalizeGameMode(settings.mode || gameOrSettings?.mode);
+  return mode === GAME_MODES.ADVANCED || mode === GAME_MODES.SCENARIO;
 }
 
 export function normalizeLandscapeDiversity(value, mode = GAME_MODES.LITE) {
-  if (normalizeGameMode(mode) === GAME_MODES.ADVANCED) {
+  const normalizedMode = normalizeGameMode(mode);
+  if (normalizedMode === GAME_MODES.ADVANCED || normalizedMode === GAME_MODES.SCENARIO) {
     return value === "superHigh" ? "superHigh" : "high";
   }
   if (value === "Low" || value === "Balanced" || value === "High") return value;
@@ -34,7 +39,8 @@ export function normalizeLandscapeDiversity(value, mode = GAME_MODES.LITE) {
 }
 
 export function landscapeDiversityLabel(value, mode = GAME_MODES.LITE) {
-  if (normalizeGameMode(mode) === GAME_MODES.ADVANCED) {
+  const normalizedMode = normalizeGameMode(mode);
+  if (normalizedMode === GAME_MODES.ADVANCED || normalizedMode === GAME_MODES.SCENARIO) {
     return value === "superHigh" ? "Super High" : "High";
   }
   return String(value || "Balanced");
