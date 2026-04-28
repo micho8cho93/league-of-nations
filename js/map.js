@@ -40,6 +40,12 @@ const LABEL_FULL_RADIUS = 14;
 const TAU = Math.PI * 2;
 const FOG_COLOR = 0x13202a;
 const FOG_EMISSIVE = 0x081018;
+const CAMERA_ZOOM_DAMPING = 12;
+const PINCH_MIN_DISTANCE = 36;
+const PINCH_DISTANCE_EPSILON = 4;
+const PINCH_MAX_STEP = 0.12;
+const PINCH_SPIKE_THRESHOLD = 0.42;
+const PINCH_PAN_SCALE = 0.0032;
 
 const UNIT_MODEL_KEYS = Object.freeze({
   infantry: "infantry",
@@ -742,6 +748,10 @@ export class HexMapRenderer {
     this.nations = {};
     this.minCamRadius = 8.5;
     this.maxCamRadius = 78;
+    this.touchDistance = 0;
+    this.isPinching = false;
+    this.pinchCenter = null;
+    this.suppressPointerSelectionUntil = 0;
     this._initThree();
     this._bindInput();
     this._animate = this._animate.bind(this);
@@ -765,6 +775,7 @@ export class HexMapRenderer {
 
     this.target = new THREE.Vector3(0, 0, 0);
     this.camRadius = 24;
+    this.targetCamRadius = this.camRadius;
     this.camAzimuth = Math.PI / 4;
     this.camPolar = Math.PI / 3.1;
     this._updateCamera();
@@ -800,6 +811,7 @@ export class HexMapRenderer {
     this.target.set(0, 0, 0);
     this._setZoomBoundsForMap(map);
     this.camRadius = this.maxCamRadius;
+    this.targetCamRadius = this.maxCamRadius;
     this._updateCamera();
     this._clearGroups();
 
@@ -2178,9 +2190,9 @@ export class HexMapRenderer {
     this.dragMode = null;
     this.lastPointer = { x: 0, y: 0 };
     this.dragDistance = 0;
-    this.touchDistance = 0;
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.canvas.addEventListener("pointerdown", (event) => {
+      if (this.isPinching && event.pointerType === "touch") return;
       this.canvas.setPointerCapture(event.pointerId);
       this.dragMode = event.button === 2 ? "pan" : "orbit";
       this.lastPointer = { x: event.clientX, y: event.clientY };
@@ -2190,11 +2202,13 @@ export class HexMapRenderer {
       try {
         this.canvas.releasePointerCapture(event.pointerId);
       } catch (_) {}
-      const clicked = this.dragDistance < 5 && event.button === 0;
+      const suppressTouchClick = event.pointerType === "touch" && performance.now() < this.suppressPointerSelectionUntil;
+      const clicked = !suppressTouchClick && this.dragDistance < 5 && event.button === 0;
       this.dragMode = null;
       if (clicked) this._handleSelect(event);
     });
     this.canvas.addEventListener("pointermove", (event) => {
+      if (this.isPinching && event.pointerType === "touch") return;
       const dx = event.clientX - this.lastPointer.x;
       const dy = event.clientY - this.lastPointer.y;
       this.lastPointer = { x: event.clientX, y: event.clientY };
@@ -2205,14 +2219,7 @@ export class HexMapRenderer {
         this._updateCamera();
       } else if (this.dragMode === "pan") {
         this.dragDistance += Math.hypot(dx, dy);
-        const forward = new window.THREE.Vector3();
-        this.camera.getWorldDirection(forward);
-        forward.y = 0;
-        forward.normalize();
-        const right = new window.THREE.Vector3().crossVectors(forward, new window.THREE.Vector3(0, 1, 0)).normalize();
-        const scale = this.camRadius * 0.0018;
-        this.target.addScaledVector(right, -dx * scale);
-        this.target.addScaledVector(forward, dy * scale);
+        this._panCamera(dx, dy, this.camRadius * 0.0018);
         this._updateCamera();
       } else {
         const tileIdValue = this._pickTile(event);
@@ -2226,8 +2233,7 @@ export class HexMapRenderer {
       "wheel",
       (event) => {
 	        event.preventDefault();
-	        this.camRadius = clamp(this.camRadius * Math.exp(event.deltaY * 0.0014), this.minCamRadius, this.maxCamRadius);
-	        this._updateCamera();
+	        this._setTargetCamRadius(this.targetCamRadius * Math.exp(event.deltaY * 0.0014));
 	      },
       { passive: false }
     );
@@ -2238,22 +2244,60 @@ export class HexMapRenderer {
     this.canvas.addEventListener("touchstart", (event) => {
       if (event.touches.length === 2) {
         event.preventDefault();
+        this.dragMode = null;
+        this.isPinching = true;
         this.touchDistance = this._getTouchDistance(event.touches);
+        this.pinchCenter = this._getTouchCenter(event.touches);
+        this.suppressPointerSelectionUntil = performance.now() + 240;
       }
     }, { passive: false });
     this.canvas.addEventListener("touchmove", (event) => {
       if (event.touches.length === 2) {
         event.preventDefault();
         const newDistance = this._getTouchDistance(event.touches);
-        const ratio = this.touchDistance / newDistance;
-        this.camRadius = clamp(this.camRadius * ratio, this.minCamRadius, this.maxCamRadius);
-        this._updateCamera();
+        const newCenter = this._getTouchCenter(event.touches);
+        if (!this.touchDistance || this.touchDistance < PINCH_MIN_DISTANCE || newDistance < PINCH_MIN_DISTANCE) {
+          this.touchDistance = newDistance;
+          this.pinchCenter = newCenter;
+          return;
+        }
+        const pinchDelta = newDistance - this.touchDistance;
+        if (Math.abs(pinchDelta) <= PINCH_DISTANCE_EPSILON) {
+          this.pinchCenter = newCenter;
+          return;
+        }
+        const rawZoomDelta = Math.log(this.touchDistance / newDistance);
+        if (Math.abs(rawZoomDelta) > PINCH_SPIKE_THRESHOLD) {
+          this.touchDistance = newDistance;
+          this.pinchCenter = newCenter;
+          return;
+        }
+        const smoothedZoomDelta = clamp(rawZoomDelta * 0.58, -PINCH_MAX_STEP, PINCH_MAX_STEP);
+        this._setTargetCamRadius(this.targetCamRadius * Math.exp(smoothedZoomDelta));
+        if (this.pinchCenter) {
+          const centerDx = newCenter.x - this.pinchCenter.x;
+          const centerDy = newCenter.y - this.pinchCenter.y;
+          if (Math.hypot(centerDx, centerDy) > 1.5) {
+            this._panCamera(centerDx, centerDy, this.camRadius * PINCH_PAN_SCALE);
+            this._updateCamera();
+          }
+        }
         this.touchDistance = newDistance;
+        this.pinchCenter = newCenter;
       }
     }, { passive: false });
-    this.canvas.addEventListener("touchend", () => {
+    this.canvas.addEventListener("touchend", (event) => {
+      if (event.touches.length < 2) this.isPinching = false;
       this.touchDistance = 0;
+      this.pinchCenter = null;
+      this.suppressPointerSelectionUntil = performance.now() + 180;
     });
+    this.canvas.addEventListener("touchcancel", () => {
+      this.isPinching = false;
+      this.touchDistance = 0;
+      this.pinchCenter = null;
+      this.dragMode = null;
+    }, { passive: true });
   }
 
   _handleSelect(event) {
@@ -2265,6 +2309,23 @@ export class HexMapRenderer {
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
     return Math.hypot(dx, dy);
+  }
+
+  _getTouchCenter(touches) {
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    };
+  }
+
+  _panCamera(dx, dy, scale) {
+    const forward = new window.THREE.Vector3();
+    this.camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    const right = new window.THREE.Vector3().crossVectors(forward, new window.THREE.Vector3(0, 1, 0)).normalize();
+    this.target.addScaledVector(right, -dx * scale);
+    this.target.addScaledVector(forward, dy * scale);
   }
 
   _pickTile(event) {
@@ -2282,7 +2343,7 @@ export class HexMapRenderer {
   }
 
 	  _resize() {
-	    const wasAtFit = !this.maxCamRadius || Math.abs(this.camRadius - this.maxCamRadius) < 0.5;
+	    const wasAtFit = !this.maxCamRadius || Math.abs(this.targetCamRadius - this.maxCamRadius) < 0.5;
 	    const width = Math.max(1, this.canvas.clientWidth);
 	    const height = Math.max(1, this.canvas.clientHeight);
 	    this.renderer.setSize(width, height, false);
@@ -2290,13 +2351,18 @@ export class HexMapRenderer {
 	    this.camera.updateProjectionMatrix();
 	    if (this.map) {
 	      this._setZoomBoundsForMap(this.map);
-	      if (wasAtFit || this.camRadius > this.maxCamRadius) this.camRadius = this.maxCamRadius;
-	      if (this.camRadius < this.minCamRadius) this.camRadius = this.minCamRadius;
+	      if (wasAtFit || this.targetCamRadius > this.maxCamRadius) this.targetCamRadius = this.maxCamRadius;
+	      if (this.targetCamRadius < this.minCamRadius) this.targetCamRadius = this.minCamRadius;
+	      this.camRadius = clamp(this.camRadius, this.minCamRadius, this.maxCamRadius);
 	      this._updateCamera();
 	      return;
 	    }
 	    this._updateNationLabels();
 	  }
+
+  _setTargetCamRadius(nextRadius) {
+    this.targetCamRadius = clamp(nextRadius, this.minCamRadius, this.maxCamRadius);
+  }
 	
 	  _updateCamera() {
 	    this._positionCamera(this.camRadius);
@@ -2318,6 +2384,7 @@ export class HexMapRenderer {
 	    const fitRadius = this._fitCameraRadiusToMap(map);
 	    this.maxCamRadius = fitRadius;
 	    this.minCamRadius = Math.max(6.5, Math.min(18, fitRadius * 0.22));
+      this.targetCamRadius = clamp(this.targetCamRadius || fitRadius, this.minCamRadius, this.maxCamRadius);
 	  }
 	
 	  _fitCameraRadiusToMap(map) {
@@ -2410,6 +2477,12 @@ export class HexMapRenderer {
     const time = now * 0.001;
     const deltaSeconds = this.lastAnimationFrameAt ? Math.min(0.05, Math.max(0, (now - this.lastAnimationFrameAt) * 0.001)) : 0.016;
     this.lastAnimationFrameAt = now;
+    const zoomBlend = 1 - Math.exp(-CAMERA_ZOOM_DAMPING * deltaSeconds);
+    if (Math.abs(this.camRadius - this.targetCamRadius) > 0.002) {
+      this.camRadius += (this.targetCamRadius - this.camRadius) * zoomBlend;
+      if (Math.abs(this.camRadius - this.targetCamRadius) < 0.01) this.camRadius = this.targetCamRadius;
+      this._updateCamera();
+    }
     for (let i = this.animated.length - 1; i >= 0; i -= 1) {
       const item = this.animated[i];
       if (!item.object.parent || (item.root && !item.root.parent)) {

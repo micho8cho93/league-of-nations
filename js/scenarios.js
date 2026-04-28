@@ -113,6 +113,7 @@ export const GLOBAL_OBJECTIVES = Object.freeze([
 ]);
 
 const SCENARIO_MAP_RADIUS = 32;
+const OCEANIA_SCENARIO_RADIUS = 26;
 const WORLD_SCENARIO_SEED = 54321;
 const OCEANIA_SCENARIO_SEED = 12345;
 const SQRT3 = Math.sqrt(3);
@@ -483,6 +484,22 @@ function createWorldMap() {
     worldProject(168, -46, 0),
   ], "land", "grassland");
 
+  // Antarctica
+  map.paintPath([
+    worldProject(-130, -60, 1),
+    worldProject(-90, -63, 1),
+    worldProject(-40, -65, 1),
+    worldProject(20, -66, 1),
+    worldProject(80, -64, 1),
+    worldProject(140, -61, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    worldProject(-102, -67, 0),
+    worldProject(-42, -69, 0),
+    worldProject(28, -69, 0),
+    worldProject(96, -66, 0),
+  ], "land", "arctic");
+
   return map.finalize("Large", SCENARIO_MAP_RADIUS, WORLD_SCENARIO_SEED);
 }
 
@@ -598,6 +615,19 @@ function createOceaniaMap() {
     oceaniaProject(175, -45, 0),
   ], "land", "arctic");
 
+  // Southern polar shelf
+  map.paintPath([
+    oceaniaProject(118, -54, 1),
+    oceaniaProject(136, -56, 1),
+    oceaniaProject(154, -57, 1),
+    oceaniaProject(172, -56, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    oceaniaProject(134, -60, 0),
+    oceaniaProject(154, -61, 0),
+    oceaniaProject(174, -60, 0),
+  ], "land", "arctic");
+
   // Central Pacific
   map.paintPoints([
     oceaniaProject(178, -17, 0),
@@ -610,23 +640,19 @@ function createOceaniaMap() {
     oceaniaProject(-159, -21, 0),
   ], "land", "grassland");
 
-  // French Polynesia and remote Pacific
+  // Western and central Pacific islands
   map.paintPoints([
     oceaniaProject(-149, -17, 0),
-    oceaniaProject(-140, -9, 0),
     oceaniaProject(-145, -18, 0),
-    oceaniaProject(-109, -27, 0),
   ], "land", "grassland");
   map.paintPoints([
-    oceaniaProject(144, 15, 0),
     oceaniaProject(134, 7, 0),
     oceaniaProject(158, 7, 0),
     oceaniaProject(171, 7, 0),
     oceaniaProject(173, 1, 0),
-    oceaniaProject(-157, 2, 0),
   ], "land", "grassland");
 
-  return map.finalize("Large", SCENARIO_MAP_RADIUS, OCEANIA_SCENARIO_SEED);
+  return map.finalize("Large", OCEANIA_SCENARIO_RADIUS, OCEANIA_SCENARIO_SEED);
 }
 
 // Starting positions for Oceania scenario

@@ -163,6 +163,7 @@ class GameUI {
     this.boardDiplomacyBtn = document.getElementById("board-diplomacy-btn");
     this.boardTradeBtn = document.getElementById("board-trade-btn");
     this.endTurnBtn = document.getElementById("end-turn-btn");
+    this.floatingEndTurnBtn = document.getElementById("floating-end-turn-btn");
     this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
     this.resourcePanel = document.getElementById("resource-panel");
     this.tilePopup = document.getElementById("tile-popup");
@@ -189,15 +190,8 @@ class GameUI {
       this.clearMilitarySelection();
       this.game.selectTile(null);
     });
-    this.endTurnBtn.addEventListener("click", () => {
-      if (this.isServerAuthoritative()) {
-        this.clearMilitarySelection();
-        this.sendPlayerAction({ type: "endTurn" });
-        return;
-      }
-      this.clearMilitarySelection();
-      this.game.endTurn();
-    });
+    this.endTurnBtn.addEventListener("click", () => this.requestEndTurn());
+    this.floatingEndTurnBtn?.addEventListener("click", () => this.requestEndTurn());
     this.actionCounter.addEventListener("click", () => this.openActionDialog());
     this.replayTutorialBtn.addEventListener("click", () => this.startTutorial({ replay: true }));
     this.techTreeBtn.addEventListener("click", () => this.openTechDialog());
@@ -222,6 +216,24 @@ class GameUI {
       this.topPanel.classList.add("collapsed");
       this.menuToggleBtn.setAttribute("aria-expanded", "true");
     }
+    this.syncFloatingEndTurnButton();
+  }
+
+  requestEndTurn() {
+    if (this.isServerAuthoritative()) {
+      this.clearMilitarySelection();
+      this.sendPlayerAction({ type: "endTurn" });
+      return;
+    }
+    this.clearMilitarySelection();
+    this.game.endTurn();
+  }
+
+  syncFloatingEndTurnButton() {
+    if (!this.floatingEndTurnBtn || !this.topPanel) return;
+    const showButton = this.topPanel.classList.contains("collapsed");
+    this.floatingEndTurnBtn.hidden = !showButton;
+    this.floatingEndTurnBtn.setAttribute("aria-hidden", showButton ? "false" : "true");
   }
 
   scheduleMapResize() {
@@ -501,9 +513,16 @@ class GameUI {
   renderStatus() {
     const player = this.game.player;
     const waitingForTurn = this.isServerAuthoritative() && !this.isPlayersTurn();
+    const endTurnDisabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn;
+    const endTurnLabel = waitingForTurn ? "Waiting" : "End Turn";
     this.phaseLabel.textContent = phaseLabel(this.game.phase, this.game.isProcessingTurn);
-    this.endTurnBtn.disabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn;
-    this.endTurnBtn.textContent = waitingForTurn ? "Waiting" : "End Turn";
+    this.endTurnBtn.disabled = endTurnDisabled;
+    this.endTurnBtn.textContent = endTurnLabel;
+    if (this.floatingEndTurnBtn) {
+      this.floatingEndTurnBtn.disabled = endTurnDisabled;
+      this.floatingEndTurnBtn.textContent = endTurnLabel;
+      this.syncFloatingEndTurnButton();
+    }
     this.renderActionCounter();
     const turnLimit = this.game.settings.unlimitedMode ? "Unlimited" : `${this.game.turn}/${this.game.settings.maxTurns}`;
     const statusPills = [

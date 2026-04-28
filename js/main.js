@@ -86,6 +86,17 @@ let musicManager = null;
 let currentSetupMode = "lite";
 let currentScenarioId = null;
 
+function syncAppViewportHeight() {
+  const viewportHeight = window.visualViewport?.height || window.innerHeight || 0;
+  if (viewportHeight > 0) {
+    document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
+  }
+}
+
+syncAppViewportHeight();
+window.addEventListener("resize", syncAppViewportHeight);
+window.visualViewport?.addEventListener("resize", syncAppViewportHeight);
+
 setSessionOnlyNote();
 populateLandscapeOptions(inputs.landscapeDiversity, currentSetupMode);
 populateLandscapeOptions(lobbyInputs.landscapeDiversity, currentSetupMode);
@@ -397,6 +408,7 @@ async function start(nextGame, { multiplayerSnapshot = null } = {}) {
   setupScreen.hidden = true;
   lobbyScreen.hidden = true;
   app.hidden = false;
+  syncAppViewportHeight();
 
   // Initialize rendering quality based on device capabilities
   // Can be overridden via console: window.__quality.setQualityLevel('high')
