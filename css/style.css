@@ -448,6 +448,13 @@ button:disabled {
   background: #2d3b4f;
 }
 
+.tool-circle-ready {
+  border-color: #b18a2f;
+  background: #3b3018;
+  color: #ffe8a3;
+  box-shadow: inset 0 0 0 1px rgba(255, 214, 102, 0.2);
+}
+
 .tool-icon {
   width: 20px;
   height: 20px;
@@ -1105,20 +1112,6 @@ textarea {
   box-shadow: 0 8px 16px var(--shadow);
 }
 
-.victory-progress-panel {
-  position: fixed;
-  bottom: 20px;
-  left: 20px;
-  width: min(360px, calc(100% - 40px));
-  max-height: 50vh;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 8px 16px var(--shadow);
-}
-
 .scenario-objectives-head,
 .victory-progress-head {
   display: flex;
@@ -1148,6 +1141,10 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.victory-progress-dialog-content {
+  padding: 0;
 }
 
 .objective-item {
@@ -1316,22 +1313,6 @@ textarea {
     right: 20px;
     width: min(350px, calc(100% - 40px));
     max-height: 50vh;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 8px 16px var(--shadow);
-  }
-
-  .victory-progress-panel {
-    position: fixed;
-    top: 96px;
-    left: 12px;
-    right: 12px;
-    bottom: auto;
-    width: auto;
-    max-height: 34vh;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 8px;

@@ -162,6 +162,7 @@ class GameUI {
     this.leaderboardBtn = document.getElementById("leaderboard-btn");
     this.boardDiplomacyBtn = document.getElementById("board-diplomacy-btn");
     this.boardTradeBtn = document.getElementById("board-trade-btn");
+    this.boardVictoryBtn = document.getElementById("board-victory-btn");
     this.endTurnBtn = document.getElementById("end-turn-btn");
     this.floatingEndTurnBtn = document.getElementById("floating-end-turn-btn");
     this.replayTutorialBtn = document.getElementById("replay-tutorial-btn");
@@ -178,8 +179,6 @@ class GameUI {
     this.scenarioObjectivesPanel = document.getElementById("scenario-objectives-panel");
     this.scenarioObjectivesContent = document.getElementById("scenario-objectives-content");
     this.scenarioObjectivesCloseBtn = document.getElementById("scenario-objectives-close-btn");
-    this.victoryProgressPanel = document.getElementById("victory-progress-panel");
-    this.victoryProgressContent = document.getElementById("victory-progress-content");
   }
 
   bindEvents() {
@@ -198,6 +197,7 @@ class GameUI {
     this.leaderboardBtn.addEventListener("click", () => this.openLeaderboardDialog());
     this.boardDiplomacyBtn.addEventListener("click", () => this.openDiplomacyDialog());
     this.boardTradeBtn.addEventListener("click", () => this.openTradeRoutesDialog());
+    this.boardVictoryBtn?.addEventListener("click", () => this.openVictoryProgressDialog());
     this.dialogCloseBtn.addEventListener("click", () => this.closeDialog());
     this.dialogBody.addEventListener("click", (event) => this.handleTechClick(event));
     this.dialogBody.addEventListener("click", (event) => this.handleDiplomacyClick(event));
@@ -1087,12 +1087,17 @@ class GameUI {
     this.openDialog("Trade", this.renderTradeRoutesHtml());
   }
 
+  openVictoryProgressDialog() {
+    this.openDialog("Victory Progress", this.renderVictoryProgressHtml());
+  }
+
   refreshBoardDialogs() {
     if (this.dialogBackdrop.hidden) return;
     if (this.dialogTitle.textContent === "Actions") this.dialogBody.innerHTML = this.renderActionSummaryHtml();
     if (this.dialogTitle.textContent === "Nation Leaderboard") this.dialogBody.innerHTML = this.renderLeaderboardHtml();
     if (this.dialogTitle.textContent === "Diplomacy") this.dialogBody.innerHTML = this.renderDiplomacyHtml();
     if (this.dialogTitle.textContent === "Trade") this.dialogBody.innerHTML = this.renderTradeRoutesHtml();
+    if (this.dialogTitle.textContent === "Victory Progress") this.dialogBody.innerHTML = this.renderVictoryProgressHtml();
   }
 
   refreshTechDialog() {
@@ -1685,22 +1690,40 @@ class GameUI {
   }
 
   renderVictoryProgress() {
-    if (!this.victoryProgressPanel || !this.victoryProgressContent) return;
+    const progress = this.game.victoryProgress;
+    const player = this.game.player;
+    const playerProgress = progress?.nations?.[player?.id];
+    if (!this.boardVictoryBtn) return;
+    if (!progress || !player || !playerProgress) {
+      this.boardVictoryBtn.hidden = true;
+      return;
+    }
+
+    this.boardVictoryBtn.hidden = false;
+    const readyStates = this.getVictoryProgressState(progress, playerProgress);
+    const readyCount = Number(readyStates.capitalReady) + Number(readyStates.techReady) + Number(readyStates.diplomacyReady);
+    this.boardVictoryBtn.setAttribute("aria-label", readyCount ? `Victory progress (${readyCount} victory path${readyCount === 1 ? "" : "s"} ready)` : "Victory progress");
+    this.boardVictoryBtn.title = readyCount ? `Victory Progress (${readyCount} ready)` : "Victory Progress";
+    this.boardVictoryBtn.classList.toggle("tool-circle-ready", readyCount > 0);
+  }
+
+  renderVictoryProgressHtml() {
     const progress = this.game.victoryProgress;
     const player = this.game.player;
     const playerProgress = progress?.nations?.[player?.id];
     if (!progress || !player || !playerProgress) {
-      this.victoryProgressPanel.hidden = true;
-      return;
+      return `<p class="muted">Victory progress is not available yet.</p>`;
     }
 
-    const totalCapitals = Number(progress.totalDomination?.totalCapitals) || 0;
-    const capitalsControlled = Number(playerProgress.capitalsControlled) || 0;
-    const capitalReady = totalCapitals > 0 && capitalsControlled >= totalCapitals;
-    const techTurnsRemaining = Math.max(0, Number(playerProgress.techTurnsRemaining) || 0);
-    const diplomacyTurnsRemaining = Math.max(0, Number(playerProgress.diplomaticTurnsRemaining) || 0);
-    const techReady = Boolean(playerProgress.meetsTechCondition) && techTurnsRemaining <= 0;
-    const diplomacyReady = Boolean(playerProgress.meetsDiplomaticCondition) && diplomacyTurnsRemaining <= 0;
+    const {
+      totalCapitals,
+      capitalsControlled,
+      capitalReady,
+      techTurnsRemaining,
+      diplomacyTurnsRemaining,
+      techReady,
+      diplomacyReady,
+    } = this.getVictoryProgressState(progress, playerProgress);
 
     const techStatus = playerProgress.finalTierComplete
       ? (playerProgress.meetsTechCondition
@@ -1711,29 +1734,49 @@ class GameUI {
       ? `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · ${diplomacyTurnsRemaining} turn${diplomacyTurnsRemaining === 1 ? "" : "s"} remaining`
       : `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · build a larger bloc`;
 
-    this.victoryProgressContent.innerHTML = `
-      <div class="objective-item ${capitalReady ? "completed" : ""}">
-        <div class="objective-title">Total Domination</div>
-        <div class="objective-description">Control every capital on the map.</div>
-        <div class="objective-progress">${capitalsControlled} / ${totalCapitals} capitals controlled</div>
-        ${capitalReady ? '<div class="objective-badge">Ready</div>' : ""}
-      </div>
-      <div class="objective-item ${techReady ? "completed" : ""}">
-        <div class="objective-title">Technological Supremacy</div>
-        <div class="objective-description">Finish every final-tier track and keep a decisive research lead.</div>
-        <div class="objective-progress">Score ${formatNumber(playerProgress.techScore)} · ${escapeHtml(techStatus)}</div>
-        ${playerProgress.meetsTechCondition && !techReady ? '<div class="objective-badge pending">Holding Lead</div>' : ""}
-        ${techReady ? '<div class="objective-badge">Ready</div>' : ""}
-      </div>
-      <div class="objective-item ${diplomacyReady ? "completed" : ""}">
-        <div class="objective-title">Diplomatic Hegemony</div>
-        <div class="objective-description">Maintain formal alliances with a majority bloc for 10 full turns.</div>
-        <div class="objective-progress">${escapeHtml(diplomacyStatus)}</div>
-        ${playerProgress.meetsDiplomaticCondition && !diplomacyReady ? '<div class="objective-badge pending">Qualifying</div>' : ""}
-        ${diplomacyReady ? '<div class="objective-badge">Ready</div>' : ""}
+    return `
+      <div class="victory-progress-content victory-progress-dialog-content">
+        <div class="objective-item ${capitalReady ? "completed" : ""}">
+          <div class="objective-title">Total Domination</div>
+          <div class="objective-description">Control every capital on the map.</div>
+          <div class="objective-progress">${capitalsControlled} / ${totalCapitals} capitals controlled</div>
+          ${capitalReady ? '<div class="objective-badge">Ready</div>' : ""}
+        </div>
+        <div class="objective-item ${techReady ? "completed" : ""}">
+          <div class="objective-title">Technological Supremacy</div>
+          <div class="objective-description">Finish every final-tier track and keep a decisive research lead.</div>
+          <div class="objective-progress">Score ${formatNumber(playerProgress.techScore)} · ${escapeHtml(techStatus)}</div>
+          ${playerProgress.meetsTechCondition && !techReady ? '<div class="objective-badge pending">Holding Lead</div>' : ""}
+          ${techReady ? '<div class="objective-badge">Ready</div>' : ""}
+        </div>
+        <div class="objective-item ${diplomacyReady ? "completed" : ""}">
+          <div class="objective-title">Diplomatic Hegemony</div>
+          <div class="objective-description">Maintain formal alliances with a majority bloc for 10 full turns.</div>
+          <div class="objective-progress">${escapeHtml(diplomacyStatus)}</div>
+          ${playerProgress.meetsDiplomaticCondition && !diplomacyReady ? '<div class="objective-badge pending">Qualifying</div>' : ""}
+          ${diplomacyReady ? '<div class="objective-badge">Ready</div>' : ""}
+        </div>
       </div>
     `;
-    this.victoryProgressPanel.hidden = false;
+  }
+
+  getVictoryProgressState(progress, playerProgress) {
+    const totalCapitals = Number(progress.totalDomination?.totalCapitals) || 0;
+    const capitalsControlled = Number(playerProgress.capitalsControlled) || 0;
+    const capitalReady = totalCapitals > 0 && capitalsControlled >= totalCapitals;
+    const techTurnsRemaining = Math.max(0, Number(playerProgress.techTurnsRemaining) || 0);
+    const diplomacyTurnsRemaining = Math.max(0, Number(playerProgress.diplomaticTurnsRemaining) || 0);
+    const techReady = Boolean(playerProgress.meetsTechCondition) && techTurnsRemaining <= 0;
+    const diplomacyReady = Boolean(playerProgress.meetsDiplomaticCondition) && diplomacyTurnsRemaining <= 0;
+    return {
+      totalCapitals,
+      capitalsControlled,
+      capitalReady,
+      techTurnsRemaining,
+      diplomacyTurnsRemaining,
+      techReady,
+      diplomacyReady,
+    };
   }
 
   isObjectiveCompleted(objective, player) {

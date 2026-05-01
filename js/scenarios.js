@@ -112,11 +112,12 @@ export const GLOBAL_OBJECTIVES = Object.freeze([
   },
 ]);
 
-const SCENARIO_MAP_RADIUS = 32;
+const SCENARIO_MAP_RADIUS = 36;
 const OCEANIA_SCENARIO_RADIUS = 26;
 const WORLD_SCENARIO_SEED = 54321;
 const OCEANIA_SCENARIO_SEED = 12345;
 const SQRT3 = Math.sqrt(3);
+const HEX_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]];
 
 function createScenarioTileBuilder() {
   const tiles = new Map();
@@ -218,11 +219,42 @@ function createScenarioTileBuilder() {
     }
   };
 
-  const finalize = (size, radius, seed) => {
+  const trimWaterBeyond = (threshold) => {
+    if (!Number.isFinite(threshold) || threshold < 0) return;
+    const keep = new Set();
+    const queue = [];
+    for (const tile of tiles.values()) {
+      if (tile.terrain === "land") {
+        keep.add(tile.id);
+        queue.push({ q: tile.q, r: tile.r, d: 0 });
+      }
+    }
+    let head = 0;
+    while (head < queue.length) {
+      const node = queue[head++];
+      if (node.d >= threshold) continue;
+      for (const [dq, dr] of HEX_DIRS) {
+        const nq = node.q + dq;
+        const nr = node.r + dr;
+        const id = tileId(nq, nr);
+        if (!tiles.has(id) || keep.has(id)) continue;
+        keep.add(id);
+        queue.push({ q: nq, r: nr, d: node.d + 1 });
+      }
+    }
+    for (const id of [...tiles.keys()]) {
+      if (!keep.has(id)) tiles.delete(id);
+    }
+  };
+
+  const finalize = (size, radius, seed, options = {}) => {
     for (let q = -radius; q <= radius; q += 1) {
       for (let r = -radius; r <= radius; r += 1) {
         if (!tiles.has(tileId(q, r))) setTile(q, r, "water", "water", TILE_TYPES.WATER);
       }
+    }
+    if (options.trimWaterBeyond != null) {
+      trimWaterBeyond(options.trimWaterBeyond);
     }
     const list = [...tiles.values()];
     return {
@@ -269,10 +301,10 @@ function wrapPacificLongitude(lon) {
 function oceaniaProject(lon, lat, brush = 0) {
   return {
     ...projectToAxial(wrapPacificLongitude(lon), lat, {
-      centerLon: 178,
-      centerLat: -8,
-      scaleX: 0.58,
-      scaleY: 0.56,
+      centerLon: 175,
+      centerLat: -22,
+      scaleX: 0.50,
+      scaleY: 0.50,
     }),
     brush,
   };
@@ -458,49 +490,198 @@ function createWorldMap() {
     worldProject(144, 44, 0),
   ], "land", "grassland");
 
-  // Australia and New Zealand
+  // Australia
   map.paintPath([
-    worldProject(113, -22, 1),
-    worldProject(124, -21, 1),
-    worldProject(135, -23, 2),
-    worldProject(146, -24, 1),
-    worldProject(151, -30, 1),
+    worldProject(114, -22, 1),
+    worldProject(124, -18, 1),
+    worldProject(134, -14, 2),
+    worldProject(143, -16, 2),
+    worldProject(150, -22, 1),
+    worldProject(153, -28, 1),
+    worldProject(151, -34, 1),
   ], "land", "grassland");
   map.paintPath([
     worldProject(116, -32, 0),
-    worldProject(128, -35, 1),
+    worldProject(126, -34, 1),
+    worldProject(135, -34, 1),
     worldProject(140, -37, 1),
-    worldProject(148, -39, 0),
+    worldProject(146, -38, 0),
   ], "land", "grassland");
   map.paintPath([
-    worldProject(123, -25, 1),
-    worldProject(134, -26, 1),
-    worldProject(141, -24, 1),
+    worldProject(124, -25, 1),
+    worldProject(133, -26, 2),
+    worldProject(141, -25, 1),
   ], "land", "desert");
+  map.paintPath([
+    worldProject(131, -14, 1),
+    worldProject(141, -16, 1),
+  ], "land", "jungle");
+  // Tasmania
   map.paintPoints([
+    worldProject(146, -41, 0),
     worldProject(147, -42, 0),
-    worldProject(173, -39, 0),
-    worldProject(171, -43, 0),
-    worldProject(168, -46, 0),
   ], "land", "grassland");
 
-  // Antarctica
+  // New Zealand - North Island
   map.paintPath([
-    worldProject(-130, -60, 1),
-    worldProject(-90, -63, 1),
-    worldProject(-40, -65, 1),
-    worldProject(20, -66, 1),
-    worldProject(80, -64, 1),
-    worldProject(140, -61, 1),
+    worldProject(173, -35, 0),
+    worldProject(175, -38, 1),
+    worldProject(177, -40, 0),
+  ], "land", "grassland");
+  // New Zealand - South Island
+  map.paintPath([
+    worldProject(169, -42, 0),
+    worldProject(171, -44, 1),
+    worldProject(173, -45, 0),
+  ], "land", "grassland");
+
+  // New Guinea
+  map.paintPath([
+    worldProject(133, -3, 1),
+    worldProject(140, -5, 1),
+    worldProject(146, -7, 1),
+    worldProject(150, -10, 0),
+  ], "land", "jungle");
+  // Indonesian archipelago
+  map.paintPath([
+    worldProject(95, 4, 0),
+    worldProject(99, 1, 1),
+    worldProject(102, -3, 1),
+    worldProject(106, -6, 1),
+  ], "land", "jungle"); // Sumatra
+  map.paintPath([
+    worldProject(106, -6, 1),
+    worldProject(112, -7, 1),
+    worldProject(114, -8, 0),
+  ], "land", "jungle"); // Java
+  map.paintPath([
+    worldProject(110, 1, 1),
+    worldProject(114, -1, 1),
+    worldProject(117, -3, 1),
+  ], "land", "jungle"); // Borneo
+  map.paintPoints([
+    worldProject(120, -2, 0),
+    worldProject(122, -4, 0),
+    worldProject(125, -2, 0),
+    worldProject(128, 0, 0),
+    worldProject(125, -8, 0),
+    worldProject(128, -9, 0),
+  ], "land", "jungle"); // Sulawesi, Halmahera, Timor, lesser Sundas
+  // Philippines
+  map.paintPath([
+    worldProject(121, 18, 0),
+    worldProject(122, 14, 1),
+    worldProject(124, 11, 0),
+    worldProject(125, 7, 0),
+  ], "land", "jungle");
+
+  // Japan
+  map.paintPath([
+    worldProject(131, 32, 0),
+    worldProject(135, 35, 1),
+    worldProject(140, 37, 1),
+    worldProject(142, 41, 0),
+    worldProject(144, 44, 0),
+  ], "land", "grassland");
+
+  // British Isles
+  map.paintPath([
+    worldProject(-3, 51, 0),
+    worldProject(-2, 55, 1),
+    worldProject(-4, 58, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    worldProject(-9, 52, 0),
+    worldProject(-7, 55, 0),
+  ], "land", "grassland");
+  // Iceland
+  map.paintPoints([
+    worldProject(-19, 65, 0),
+    worldProject(-17, 65, 0),
+  ], "land", "arctic");
+  // Mediterranean islands
+  map.paintPoints([
+    worldProject(9, 40, 0),
+    worldProject(15, 38, 0),
+    worldProject(25, 35, 0),
+  ], "land", "grassland");
+  // Madagascar
+  map.paintPath([
+    worldProject(46, -16, 0),
+    worldProject(47, -20, 1),
+    worldProject(49, -24, 0),
+  ], "land", "grassland");
+  // Sri Lanka
+  map.paintPoints([
+    worldProject(81, 7, 0),
+  ], "land", "jungle");
+  // Caribbean
+  map.paintPath([
+    worldProject(-83, 22, 0),
+    worldProject(-78, 21, 1),
+    worldProject(-72, 20, 0),
+  ], "land", "grassland");
+  map.paintPoints([
+    worldProject(-71, 19, 0),
+    worldProject(-66, 18, 0),
+    worldProject(-77, 18, 0),
+  ], "land", "jungle");
+  // Hawaiian Islands
+  map.paintPoints([
+    worldProject(-160, 22, 0),
+    worldProject(-156, 20, 0),
+  ], "land", "jungle");
+  // Pacific island chains - Melanesia, Polynesia, Micronesia
+  map.paintPoints([
+    worldProject(160, -9, 0),
+    worldProject(165, -11, 0),
+    worldProject(168, -17, 0),
+    worldProject(166, -22, 0),
+    worldProject(178, -17, 0),
+    worldProject(-172, -14, 0),
+    worldProject(-175, -21, 0),
+    worldProject(-149, -17, 0),
+    worldProject(170, 7, 0),
+    worldProject(158, 7, 0),
+    worldProject(173, 1, 0),
+  ], "land", "grassland");
+
+  // Antarctica - thick polar block (multiple latitude bands)
+  map.paintPath([
+    worldProject(-150, -64, 1),
+    worldProject(-120, -67, 2),
+    worldProject(-90, -69, 2),
+    worldProject(-50, -70, 2),
+    worldProject(-10, -69, 2),
+    worldProject(30, -67, 2),
+    worldProject(70, -66, 2),
+    worldProject(110, -65, 2),
+    worldProject(145, -66, 1),
   ], "land", "arctic");
   map.paintPath([
-    worldProject(-102, -67, 0),
-    worldProject(-42, -69, 0),
-    worldProject(28, -69, 0),
-    worldProject(96, -66, 0),
+    worldProject(-110, -73, 2),
+    worldProject(-70, -75, 2),
+    worldProject(-30, -75, 2),
+    worldProject(10, -74, 2),
+    worldProject(50, -73, 2),
+    worldProject(90, -72, 2),
+    worldProject(125, -71, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    worldProject(-70, -80, 1),
+    worldProject(-30, -81, 2),
+    worldProject(10, -81, 2),
+    worldProject(50, -79, 1),
+  ], "land", "arctic");
+  map.paintPoints([
+    worldProject(-20, -85, 0),
+    worldProject(0, -86, 0),
+    worldProject(20, -85, 0),
   ], "land", "arctic");
 
-  return map.finalize("Large", SCENARIO_MAP_RADIUS, WORLD_SCENARIO_SEED);
+  return map.finalize("Large", SCENARIO_MAP_RADIUS, WORLD_SCENARIO_SEED, {
+    trimWaterBeyond: 4,
+  });
 }
 
 // Starting positions for Global Resource Rivalry
@@ -535,124 +716,179 @@ export const GLOBAL_STARTING_POSITIONS = [
 function createOceaniaMap() {
   const map = createScenarioTileBuilder();
 
-  // Australia
+  // Australia - main body (north coast through east to south)
   map.paintPath([
-    oceaniaProject(113, -22, 2),
-    oceaniaProject(123, -18, 2),
-    oceaniaProject(134, -16, 3),
-    oceaniaProject(145, -18, 2),
-    oceaniaProject(153, -25, 1),
+    oceaniaProject(114, -22, 2),
+    oceaniaProject(122, -18, 2),
+    oceaniaProject(130, -13, 2),
+    oceaniaProject(138, -14, 2),
+    oceaniaProject(145, -16, 2),
+    oceaniaProject(150, -22, 2),
+    oceaniaProject(153, -28, 2),
+    oceaniaProject(151, -34, 1),
   ], "land", "grassland");
+  // Southern coast
   map.paintPath([
     oceaniaProject(115, -32, 1),
-    oceaniaProject(126, -35, 1),
+    oceaniaProject(122, -34, 1),
+    oceaniaProject(130, -32, 1),
     oceaniaProject(138, -36, 1),
-    oceaniaProject(148, -38, 1),
+    oceaniaProject(145, -38, 1),
+    oceaniaProject(149, -38, 1),
   ], "land", "grassland");
+  // West coast filler
   map.paintPath([
-    oceaniaProject(118, -28, 1),
-    oceaniaProject(120, -20, 1),
-    oceaniaProject(125, -16, 1),
+    oceaniaProject(116, -28, 1),
+    oceaniaProject(115, -22, 1),
+    oceaniaProject(118, -18, 1),
   ], "land", "grassland");
+  // Outback desert core
   map.paintPath([
-    oceaniaProject(123, -25, 2),
-    oceaniaProject(133, -26, 3),
-    oceaniaProject(142, -24, 2),
+    oceaniaProject(124, -25, 2),
+    oceaniaProject(132, -26, 3),
+    oceaniaProject(140, -25, 2),
+    oceaniaProject(144, -28, 1),
   ], "land", "desert");
+  // Northern tropics
   map.paintPath([
-    oceaniaProject(129, -14, 1),
-    oceaniaProject(139, -15, 1),
-    oceaniaProject(145, -16, 1),
+    oceaniaProject(130, -14, 1),
+    oceaniaProject(136, -14, 1),
+    oceaniaProject(143, -16, 1),
   ], "land", "jungle");
+  // Tasmania
   map.paintPath([
-    oceaniaProject(147, -24, 1),
-    oceaniaProject(151, -30, 1),
-    oceaniaProject(147, -35, 1),
-  ], "land", "grassland");
-  map.paintPoints([
-    oceaniaProject(146, -42, 0),
-    oceaniaProject(147, -43, 0),
+    oceaniaProject(145, -41, 0),
+    oceaniaProject(147, -42, 1),
+    oceaniaProject(148, -43, 0),
   ], "land", "grassland");
 
-  // Near north of Australia
+  // New Guinea - large island
   map.paintPath([
-    oceaniaProject(141, -1, 0),
-    oceaniaProject(147, -2, 1),
-    oceaniaProject(152, -1, 0),
-    oceaniaProject(154, -3, 0),
+    oceaniaProject(132, -3, 1),
+    oceaniaProject(138, -5, 2),
+    oceaniaProject(143, -6, 2),
+    oceaniaProject(148, -7, 2),
+    oceaniaProject(151, -10, 1),
   ], "land", "jungle");
+  // Indonesian eastern islands (Halmahera, Sulawesi tips, Timor)
   map.paintPoints([
-    oceaniaProject(126, 0, 0),
-    oceaniaProject(129, 1, 0),
-    oceaniaProject(133, 2, 0),
-    oceaniaProject(136, 1, 0),
-    oceaniaProject(140, 0, 0),
+    oceaniaProject(128, 1, 0),
+    oceaniaProject(126, -3, 0),
+    oceaniaProject(124, -2, 0),
+    oceaniaProject(120, -2, 0),
+    oceaniaProject(125, -8, 0),
+    oceaniaProject(128, -9, 0),
   ], "land", "jungle");
 
-  // Melanesia
+  // Solomon Islands
   map.paintPath([
-    oceaniaProject(160, -9, 0),
+    oceaniaProject(157, -8, 0),
+    oceaniaProject(160, -9, 1),
     oceaniaProject(163, -10, 0),
     oceaniaProject(166, -11, 0),
   ], "land", "jungle");
-  map.paintPath([
-    oceaniaProject(167, -16, 0),
-    oceaniaProject(168, -18, 0),
-  ], "land", "grassland");
+  // Vanuatu
   map.paintPoints([
-    oceaniaProject(165, -21, 0),
-    oceaniaProject(166, -22, 0),
+    oceaniaProject(167, -15, 0),
+    oceaniaProject(168, -17, 0),
+    oceaniaProject(169, -19, 0),
+  ], "land", "jungle");
+  // New Caledonia
+  map.paintPath([
+    oceaniaProject(164, -21, 0),
+    oceaniaProject(167, -22, 1),
   ], "land", "grassland");
-
-  // New Zealand
-  map.paintPath([
-    oceaniaProject(174, -38, 1),
-    oceaniaProject(176, -39, 1),
-  ], "land", "grassland");
-  map.paintPath([
-    oceaniaProject(170, -43, 1),
-    oceaniaProject(173, -44, 1),
-    oceaniaProject(175, -45, 0),
-  ], "land", "arctic");
-
-  // Southern polar shelf
-  map.paintPath([
-    oceaniaProject(118, -54, 1),
-    oceaniaProject(136, -56, 1),
-    oceaniaProject(154, -57, 1),
-    oceaniaProject(172, -56, 1),
-  ], "land", "arctic");
-  map.paintPath([
-    oceaniaProject(134, -60, 0),
-    oceaniaProject(154, -61, 0),
-    oceaniaProject(174, -60, 0),
-  ], "land", "arctic");
-
-  // Central Pacific
+  // Fiji
   map.paintPoints([
     oceaniaProject(178, -17, 0),
-    oceaniaProject(-179, -16, 0),
-    oceaniaProject(-178, -18, 0),
+    oceaniaProject(179, -18, 0),
+    oceaniaProject(-179, -17, 0),
+  ], "land", "jungle");
+  // Samoa, Tonga, Cook
+  map.paintPoints([
     oceaniaProject(-172, -14, 0),
-    oceaniaProject(-171, -13, 0),
+    oceaniaProject(-170, -14, 0),
     oceaniaProject(-175, -21, 0),
-    oceaniaProject(-173, -19, 0),
-    oceaniaProject(-159, -21, 0),
+    oceaniaProject(-174, -19, 0),
+    oceaniaProject(-160, -21, 0),
+    oceaniaProject(-158, -22, 0),
   ], "land", "grassland");
-
-  // Western and central Pacific islands
+  // French Polynesia (Society, Tuamotu)
   map.paintPoints([
     oceaniaProject(-149, -17, 0),
     oceaniaProject(-145, -18, 0),
+    oceaniaProject(-141, -17, 0),
   ], "land", "grassland");
+  // Micronesia (Marshall, Caroline, Kiribati)
   map.paintPoints([
-    oceaniaProject(134, 7, 0),
-    oceaniaProject(158, 7, 0),
-    oceaniaProject(171, 7, 0),
-    oceaniaProject(173, 1, 0),
+    oceaniaProject(165, 7, 0),
+    oceaniaProject(170, 7, 0),
+    oceaniaProject(173, 6, 0),
+    oceaniaProject(172, 1, 0),
+    oceaniaProject(176, 1, 0),
+    oceaniaProject(-173, 0, 0),
+  ], "land", "grassland");
+  // Hawaiian Islands
+  map.paintPath([
+    oceaniaProject(-160, 22, 0),
+    oceaniaProject(-156, 20, 1),
+    oceaniaProject(-155, 19, 0),
+  ], "land", "jungle");
+
+  // New Zealand - North Island
+  map.paintPath([
+    oceaniaProject(173, -35, 1),
+    oceaniaProject(175, -37, 2),
+    oceaniaProject(177, -39, 1),
+    oceaniaProject(178, -41, 1),
+  ], "land", "grassland");
+  // New Zealand - South Island
+  map.paintPath([
+    oceaniaProject(168, -42, 1),
+    oceaniaProject(170, -43, 2),
+    oceaniaProject(172, -44, 2),
+    oceaniaProject(174, -46, 1),
   ], "land", "grassland");
 
-  return map.finalize("Large", OCEANIA_SCENARIO_RADIUS, OCEANIA_SCENARIO_SEED);
+  // Antarctica - thick block across the bottom (Pacific-facing sector)
+  // Northernmost coastal band
+  map.paintPath([
+    oceaniaProject(132, -65, 2),
+    oceaniaProject(145, -66, 2),
+    oceaniaProject(160, -67, 2),
+    oceaniaProject(175, -68, 2),
+    oceaniaProject(-170, -72, 2),
+    oceaniaProject(-150, -74, 2),
+    oceaniaProject(-130, -73, 2),
+    oceaniaProject(-110, -73, 2),
+  ], "land", "arctic");
+  // Middle band
+  map.paintPath([
+    oceaniaProject(135, -71, 2),
+    oceaniaProject(150, -72, 2),
+    oceaniaProject(170, -74, 2),
+    oceaniaProject(-170, -77, 2),
+    oceaniaProject(-145, -79, 2),
+    oceaniaProject(-115, -78, 2),
+  ], "land", "arctic");
+  // Deep interior band
+  map.paintPath([
+    oceaniaProject(140, -77, 2),
+    oceaniaProject(160, -79, 2),
+    oceaniaProject(180, -82, 2),
+    oceaniaProject(-160, -83, 2),
+    oceaniaProject(-130, -82, 2),
+  ], "land", "arctic");
+  // Inner core for thickness
+  map.paintPath([
+    oceaniaProject(150, -82, 1),
+    oceaniaProject(170, -85, 1),
+    oceaniaProject(-160, -86, 1),
+  ], "land", "arctic");
+
+  return map.finalize("Large", OCEANIA_SCENARIO_RADIUS, OCEANIA_SCENARIO_SEED, {
+    trimWaterBeyond: 3,
+  });
 }
 
 // Starting positions for Oceania scenario

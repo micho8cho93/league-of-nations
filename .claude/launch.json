@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "local-server",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd /Users/Michel/Desktop/league-of-nations; exec python3 -m http.server 8000"],
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["/tmp/lon-server.py"],
       "port": 8000
     }
   ]
