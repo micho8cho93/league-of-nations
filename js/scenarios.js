@@ -117,7 +117,6 @@ const OCEANIA_SCENARIO_RADIUS = 26;
 const WORLD_SCENARIO_SEED = 54321;
 const OCEANIA_SCENARIO_SEED = 12345;
 const SQRT3 = Math.sqrt(3);
-const HEX_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]];
 
 function createScenarioTileBuilder() {
   const tiles = new Map();
@@ -219,47 +218,49 @@ function createScenarioTileBuilder() {
     }
   };
 
-  const trimWaterBeyond = (threshold) => {
-    if (!Number.isFinite(threshold) || threshold < 0) return;
-    const keep = new Set();
-    const queue = [];
+  const tileBounds = () => {
+    let minQ = Infinity;
+    let maxQ = -Infinity;
+    let minR = Infinity;
+    let maxR = -Infinity;
     for (const tile of tiles.values()) {
-      if (tile.terrain === "land") {
-        keep.add(tile.id);
-        queue.push({ q: tile.q, r: tile.r, d: 0 });
-      }
+      minQ = Math.min(minQ, tile.q);
+      maxQ = Math.max(maxQ, tile.q);
+      minR = Math.min(minR, tile.r);
+      maxR = Math.max(maxR, tile.r);
     }
-    let head = 0;
-    while (head < queue.length) {
-      const node = queue[head++];
-      if (node.d >= threshold) continue;
-      for (const [dq, dr] of HEX_DIRS) {
-        const nq = node.q + dq;
-        const nr = node.r + dr;
-        const id = tileId(nq, nr);
-        if (!tiles.has(id) || keep.has(id)) continue;
-        keep.add(id);
-        queue.push({ q: nq, r: nr, d: node.d + 1 });
-      }
+    if (!Number.isFinite(minQ)) {
+      return {
+        minQ: 0,
+        maxQ: 0,
+        minR: 0,
+        maxR: 0,
+      };
     }
-    for (const id of [...tiles.keys()]) {
-      if (!keep.has(id)) tiles.delete(id);
-    }
+    return { minQ, maxQ, minR, maxR };
   };
 
   const finalize = (size, radius, seed, options = {}) => {
-    for (let q = -radius; q <= radius; q += 1) {
-      for (let r = -radius; r <= radius; r += 1) {
+    const padding = Math.max(0, Math.round(options.waterPadding ?? 0));
+    const bounds = tileBounds();
+    const minQ = bounds.minQ - padding;
+    const maxQ = bounds.maxQ + padding;
+    const minR = bounds.minR - padding;
+    const maxR = bounds.maxR + padding;
+
+    for (let q = minQ; q <= maxQ; q += 1) {
+      for (let r = minR; r <= maxR; r += 1) {
         if (!tiles.has(tileId(q, r))) setTile(q, r, "water", "water", TILE_TYPES.WATER);
       }
     }
-    if (options.trimWaterBeyond != null) {
-      trimWaterBeyond(options.trimWaterBeyond);
-    }
     const list = [...tiles.values()];
+    const effectiveRadius = list.reduce(
+      (max, tile) => Math.max(max, Math.abs(tile.q), Math.abs(tile.r), Math.abs(tile.q + tile.r)),
+      0,
+    );
     return {
       size,
-      radius,
+      radius: Math.max(radius, effectiveRadius),
       seed,
       landRatio: list.filter((tile) => tile.terrain === "land").length / list.length,
       tiles: list,
@@ -680,7 +681,7 @@ function createWorldMap() {
   ], "land", "arctic");
 
   return map.finalize("Large", SCENARIO_MAP_RADIUS, WORLD_SCENARIO_SEED, {
-    trimWaterBeyond: 4,
+    waterPadding: 4,
   });
 }
 
@@ -887,7 +888,7 @@ function createOceaniaMap() {
   ], "land", "arctic");
 
   return map.finalize("Large", OCEANIA_SCENARIO_RADIUS, OCEANIA_SCENARIO_SEED, {
-    trimWaterBeyond: 3,
+    waterPadding: 3,
   });
 }
 

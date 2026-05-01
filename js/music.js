@@ -9,7 +9,6 @@ export class MusicManager {
     this.battleAudioElement = document.getElementById("battle-music");
 
     this.bgPlaylist = [
-      "./bg_music/u_24tqznbjah-ancient-civilisations-507188.mp3",
       "./bg_music/iuvenis-cenizas-del-castigo-infinito-509230.mp3",
       "./bg_music/junipersona-civilization-440796.mp3",
       "./bg_music/melodierealm-secrets-of-the-forgotten-453719.mp3",
