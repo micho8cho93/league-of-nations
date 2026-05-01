@@ -100,6 +100,26 @@ function resetActions(gameState: any, nationId = "nation-1") {
   gameState.nations[nationId].actionsUsedThisTurn = 0;
 }
 
+function setSociety(gameState: any, nationId: string, religionId: string, cultureMix: Record<string, number> = { [nationId]: 100 }) {
+  const nation = gameState.nations[nationId];
+  nation.culture = {
+    homeCultureId: nationId,
+    mix: cultureMix,
+    dominantCultureId: Object.entries(cultureMix).sort((a, b) => b[1] - a[1])[0]?.[0] || nationId,
+  };
+  nation.religion = {
+    stateReligionId: religionId,
+    chosenTurn: gameState.turn,
+    prevalence: {
+      auralis: religionId === "auralis" ? 100 : 0,
+      thalorin: religionId === "thalorin" ? 100 : 0,
+      verdance: religionId === "verdance" ? 100 : 0,
+      pyrelume: religionId === "pyrelume" ? 100 : 0,
+    },
+    dominantReligionId: religionId,
+  };
+}
+
 function tileAt(gameState: any, q: number, r: number) {
   return gameState.map.tiles.find((tile: any) => tile.q === q && tile.r === r);
 }
@@ -218,6 +238,28 @@ test("creator gets the first nation", async () => {
 
   assert.equal(room.state.players.get("creator")?.nationId, "nation-1");
   assert.equal(creator.sent.find((message) => message.type === "joinedLobby")?.payload.nationId, "nation-1");
+});
+
+test("initial nations include normalized culture and religion state", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+
+  assert.deepEqual(nation.culture, {
+    homeCultureId: "nation-1",
+    mix: { "nation-1": 100 },
+    dominantCultureId: "nation-1",
+  });
+  assert.equal(nation.religion.stateReligionId, null);
+  assert.equal(nation.religion.dominantReligionId, null);
+  assert.deepEqual(nation.religion.prevalence, {
+    auralis: 0,
+    thalorin: 0,
+    verdance: 0,
+    pyrelume: 0,
+  });
 });
 
 test("new server nations include default population happiness", () => {
@@ -1778,6 +1820,183 @@ test("trade, alliance, and breakAlliance work online", async () => {
 
   assert.equal(alliance.active, false);
   assert.equal(latestRejection(creator), "");
+});
+
+test("chooseReligion validates era, selection, and does not spend action points", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+
+  await room.messages.playerAction(creator.client, {
+    type: "chooseReligion",
+    nationId: "nation-1",
+    religionId: "auralis",
+  });
+  assert.match(latestRejection(creator), /Era 2/);
+  assert.equal(gameState.nations["nation-1"].religion.stateReligionId, null);
+
+  clearMessages(creator);
+  gameState.era = 2;
+  resetActions(gameState, "nation-1");
+  await room.messages.playerAction(creator.client, {
+    type: "chooseReligion",
+    nationId: "nation-1",
+    religionId: "auralis",
+  });
+
+  assert.equal(gameState.nations["nation-1"].religion.stateReligionId, "auralis");
+  assert.equal(gameState.nations["nation-1"].religion.prevalence.auralis, 100);
+  assert.equal(gameState.nations["nation-1"].actionPoints, 5);
+
+  await room.messages.playerAction(creator.client, {
+    type: "chooseReligion",
+    nationId: "nation-1",
+    religionId: "thalorin",
+  });
+  assert.match(latestRejection(creator), /already chosen/);
+});
+
+test("promoteReligion spends money and shifts prevalence toward the state religion", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  resetActions(gameState, "nation-1");
+  const nation = gameState.nations["nation-1"];
+  nation.money = 500;
+  nation.religion = {
+    stateReligionId: "auralis",
+    chosenTurn: 2,
+    prevalence: { auralis: 70, thalorin: 30, verdance: 0, pyrelume: 0 },
+    dominantReligionId: "auralis",
+  };
+
+  await room.messages.playerAction(creator.client, {
+    type: "promoteReligion",
+    nationId: "nation-1",
+  });
+
+  assert.equal(nation.actionPoints, 4);
+  assert.equal(nation.money, 320);
+  assert.equal(nation.religion.prevalence.auralis, 85);
+  assert.equal(nation.religion.prevalence.thalorin, 15);
+});
+
+test("shared religion improves alliance acceptance", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  resetActions(gameState, "nation-1");
+  gameState.nations["nation-1"].money = 1000;
+  setSociety(gameState, "nation-1", "auralis");
+  setSociety(gameState, "nation-2", "auralis");
+  gameState.diplomacy["nation-1::nation-2"] = {
+    pair: "nation-1::nation-2",
+    relation: 47,
+    trades: 0,
+    alliances: [],
+    atWar: false,
+    wars: 0,
+    brokenAgreements: 0,
+    dependency: { "nation-1": 0, "nation-2": 0 },
+    embargoes: {},
+  };
+
+  await room.messages.playerAction(creator.client, {
+    type: "proposeAlliance",
+    nationId: "nation-1",
+    partnerId: "nation-2",
+    allianceType: "trade",
+  });
+
+  assert.equal(gameState.alliances.length, 1);
+  assert.equal(gameState.alliances[0].active, true);
+});
+
+test("society spreads across active trade routes", async () => {
+  const gameState = createInitialServerGame({
+    mode: "lite",
+    mapSize: "Small",
+    nationCount: 2,
+    maxTurns: 30,
+    turnTimerMinutes: 0,
+    unlimitedMode: false,
+    seed: 12345,
+  }, []);
+  gameState.era = 2;
+  setSociety(gameState, "nation-1", "auralis");
+  setSociety(gameState, "nation-2", "thalorin");
+  gameState.tradeRoutes.push({
+    id: "route-test",
+    members: ["nation-1", "nation-2"],
+    source: "trade",
+    status: "active",
+    createdTurn: 1,
+    lastActiveTurn: 1,
+    disruptedUntil: 0,
+    tradeTurns: 0,
+    tradeCount: 1,
+  });
+
+  processServerRound(gameState);
+
+  assert.ok(gameState.nations["nation-1"].religion.prevalence.thalorin > 0);
+  assert.ok(gameState.nations["nation-2"].religion.prevalence.auralis > 0);
+  assert.ok(gameState.nations["nation-1"].culture.mix["nation-2"] > 0);
+  assert.ok(gameState.nations["nation-2"].culture.mix["nation-1"] > 0);
+});
+
+test("capital conquest blends defeated culture and religion into the winner", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 3;
+  resetActions(gameState, "nation-1");
+  setSociety(gameState, "nation-1", "auralis");
+  setSociety(gameState, "nation-2", "thalorin");
+  const { from, to } = makeAdjacentPair(gameState);
+  prepareTile(from, {
+    ownerId: "nation-1",
+    type: "empty",
+    unit: { nationId: "nation-1", strength: 60, branch: "infantry", movedTurn: 0, branches: { infantry: 60 } },
+  });
+  prepareTile(to, {
+    ownerId: "nation-2",
+    type: "empty",
+    isCapital: true,
+    workers: 0,
+    unit: null,
+  });
+  gameState.nations["nation-1"].territory = [from.id];
+  gameState.nations["nation-2"].territory = [to.id];
+  gameState.nations["nation-2"].capitalTileId = to.id;
+  gameState.nations["nation-1"].money = 1000;
+  gameState.wars["nation-1::nation-2"] = {
+    key: "nation-1::nation-2",
+    attackerId: "nation-1",
+    defenderId: "nation-2",
+    reason: "test",
+    active: true,
+    startedTurn: 1,
+    battles: 0,
+  };
+
+  await room.messages.playerAction(creator.client, {
+    type: "moveOrAttackUnit",
+    nationId: "nation-1",
+    fromTileId: from.id,
+    toTileId: to.id,
+  });
+
+  assert.equal(to.ownerId, "nation-1");
+  assert.equal(gameState.nations["nation-2"].active, false);
+  assert.ok(gameState.nations["nation-1"].culture.mix["nation-2"] >= 15);
+  assert.ok(gameState.nations["nation-1"].religion.prevalence.thalorin >= 8);
 });
 
 test("trade proposal is created through the dedicated server message", async () => {

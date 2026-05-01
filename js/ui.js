@@ -49,6 +49,15 @@ import {
   oilCostForBranch,
 } from "./advanced.js";
 import { activeEventSummaries } from "./events.js";
+import {
+  RELIGIONS,
+  SOCIETY,
+  dominantCultureLabel,
+  normalizeSociety,
+  religionIcon,
+  religionLabel,
+  societyRelationModifier,
+} from "./cultureReligion.js";
 
 export const TUTORIAL_COMPLETED_KEY = "leagueOfNationsTutorialCompleted";
 
@@ -95,6 +104,11 @@ const TUTORIAL_STEPS = [
     target: "#leaderboard-btn",
   },
   {
+    title: "Society",
+    body: "The society button opens culture and religion choices once diplomacy begins in Era 2.",
+    target: "#board-society-btn",
+  },
+  {
     title: "Diplomacy",
     body: "The diplomacy button opens relations, alliances, embargoes, and wars. Diplomacy and trade unlock in Era 2; war unlocks later.",
     target: "#board-diplomacy-btn",
@@ -128,6 +142,7 @@ class GameUI {
     this.victoryShown = false;
     this.militarySelection = null;
     this.tutorial = null;
+    this.religionPromptOpen = false;
     this.turnTimeoutInProgress = false;
     this.lastTileActionSignature = "";
     this.lastTileActionAt = 0;
@@ -160,6 +175,7 @@ class GameUI {
     this.actionCounter = document.getElementById("action-counter");
     this.techTreeBtn = document.getElementById("tech-tree-btn");
     this.leaderboardBtn = document.getElementById("leaderboard-btn");
+    this.boardSocietyBtn = document.getElementById("board-society-btn");
     this.boardDiplomacyBtn = document.getElementById("board-diplomacy-btn");
     this.boardTradeBtn = document.getElementById("board-trade-btn");
     this.boardVictoryBtn = document.getElementById("board-victory-btn");
@@ -195,12 +211,14 @@ class GameUI {
     this.replayTutorialBtn.addEventListener("click", () => this.startTutorial({ replay: true }));
     this.techTreeBtn.addEventListener("click", () => this.openTechDialog());
     this.leaderboardBtn.addEventListener("click", () => this.openLeaderboardDialog());
+    this.boardSocietyBtn.addEventListener("click", () => this.openSocietyDialog());
     this.boardDiplomacyBtn.addEventListener("click", () => this.openDiplomacyDialog());
     this.boardTradeBtn.addEventListener("click", () => this.openTradeRoutesDialog());
     this.boardVictoryBtn?.addEventListener("click", () => this.openVictoryProgressDialog());
     this.dialogCloseBtn.addEventListener("click", () => this.closeDialog());
     this.dialogBody.addEventListener("click", (event) => this.handleTechClick(event));
     this.dialogBody.addEventListener("click", (event) => this.handleDiplomacyClick(event));
+    this.dialogBody.addEventListener("click", (event) => this.handleSocietyClick(event));
     this.tilePopup.addEventListener("click", (event) => this.handleTileClick(event));
     if (this.scenarioObjectivesCloseBtn) {
       this.scenarioObjectivesCloseBtn.addEventListener("click", () => this.closeScenarioObjectives());
@@ -385,7 +403,16 @@ class GameUI {
 	    this.refreshTechDialog();
 	    this.renderTilePopup(visibility);
 	    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights(visibility), visibility);
+    this.maybePromptReligionChoice();
     if (this.game.gameOver) this.showVictory();
+  }
+
+  maybePromptReligionChoice() {
+    const player = this.game.player;
+    if (!player || this.game.era < SOCIETY.unlockEra || player.religion?.stateReligionId || this.game.gameOver) return;
+    if (!this.dialogBackdrop.hidden || this.tutorial || this.religionPromptOpen) return;
+    this.religionPromptOpen = true;
+    this.openSocietyDialog({ prompt: true });
   }
 
   handleMapSelect(tileId) {
@@ -534,6 +561,10 @@ class GameUI {
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
       pill(`Happy ${formatNumber(populationHappiness(player))} ${happinessBand(player).label}`),
     ];
+    normalizeSociety(player);
+    if (this.game.era >= SOCIETY.unlockEra) {
+      statusPills.push(pill(player.religion.stateReligionId ? religionLabel(player.religion.stateReligionId) : "Choose Religion"));
+    }
     const timerText = this.turnTimerText();
     if (timerText) statusPills.push(pill(timerText));
     for (const event of activeEventSummaries(this.game).slice(0, 2)) {
@@ -942,6 +973,60 @@ class GameUI {
     `;
   }
 
+  renderSocietyHtml({ prompt = false } = {}) {
+    const player = this.game.player;
+    normalizeSociety(player);
+    const stateReligion = player.religion.stateReligionId;
+    const dominantReligion = player.religion.dominantReligionId;
+    const dominantCulture = player.culture.dominantCultureId;
+    const cultureRows = Object.entries(player.culture.mix || {})
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, 5)
+      .map(([cultureId, value]) => `
+        <div class="trade-row">
+          <div class="row-head">
+            <strong>${escapeHtml(dominantCultureLabel(this.game, cultureId))}</strong>
+            <span class="mini-pill">${formatPercent(Number(value) / 100)}</span>
+          </div>
+        </div>
+      `).join("");
+    const religionRows = RELIGIONS.map((religion) => {
+      const prevalence = player.religion.prevalence[religion.id] || 0;
+      const selected = stateReligion === religion.id;
+      const chooseDisabled = this.game.era < SOCIETY.unlockEra || stateReligion;
+      return `
+        <div class="trade-row">
+          <div class="row-head">
+            <strong>${escapeHtml(religion.icon)} ${escapeHtml(religion.name)}</strong>
+            <span class="mini-pill ${selected ? "good" : ""}">${formatPercent(prevalence / 100)}</span>
+          </div>
+          ${stateReligion ? "" : `<button class="secondary-btn" data-society-religion="${religion.id}" ${chooseDisabled ? "disabled" : ""}>Choose</button>`}
+        </div>
+      `;
+    }).join("");
+    const statePrevalence = stateReligion ? player.religion.prevalence[stateReligion] || 0 : 0;
+    const promoteAllowed = Boolean(this.canUseAction("promoteReligion") && stateReligion && statePrevalence < 100 && player.money >= SOCIETY.promoteCost);
+    const promptText = prompt && !stateReligion
+      ? `<p class="muted">Choose a society religion to shape trade, diplomacy, and cultural exchange.</p>`
+      : "";
+    return `
+      ${promptText}
+      <div class="trade-row">
+        <div class="row-head">
+          <strong>State Religion</strong>
+          <span class="mini-pill">${stateReligion ? `${religionIcon(stateReligion)} ${religionLabel(stateReligion)}` : "Unchosen"}</span>
+        </div>
+        <div class="muted">Dominant faith: ${dominantReligion ? religionLabel(dominantReligion) : "None"} · Dominant culture: ${escapeHtml(dominantCultureLabel(this.game, dominantCulture))}</div>
+        <button class="secondary-btn" data-society-action="promote" ${promoteAllowed ? "" : "disabled"}>Promote $${SOCIETY.promoteCost}</button>
+        ${stateReligion ? "" : `<div class="muted">Religion unlocks in Era 2 and can be chosen once.</div>`}
+      </div>
+      <div class="tech-row"><strong>Religions</strong></div>
+      ${religionRows}
+      <div class="tech-row"><strong>Culture Mix</strong></div>
+      ${cultureRows}
+    `;
+  }
+
   renderDiplomacyHtml() {
     if (this.game.era < 2) {
       return `<p class="muted">Diplomacy, trade, and alliances unlock in Era 2.</p>`;
@@ -949,12 +1034,19 @@ class GameUI {
     const rows = this.diplomacyTargetIds().map((id) => {
       const nation = this.game.nations[id];
       if (!nation) return "";
+      normalizeSociety(nation);
+      normalizeSociety(this.game.player);
       const diplo = getDiplomacy(this.game, this.game.playerId, id);
       const activeAlliances = this.game.alliances.filter((alliance) => alliance.active && alliance.members.includes(this.game.playerId) && alliance.members.includes(id));
       const war = this.game.wars[`${[this.game.playerId, id].sort().join("|")}`]?.active;
       const route = this.game.tradeRoutes.find((item) => item.status !== "removed" && item.members?.includes(this.game.playerId) && item.members?.includes(id));
       const routeText = route ? `Route ${route.status}${route.status === "disrupted" ? ` until T${route.disruptedUntil}` : ""}` : "No trade route";
       const embargoActive = (diplo.embargoes?.[this.game.playerId] || 0) > this.game.turn;
+      const societyModifier = societyRelationModifier(this.game.player, nation);
+      const religionText = nation.religion.stateReligionId
+        ? `${religionIcon(nation.religion.stateReligionId)} ${religionLabel(nation.religion.stateReligionId)}`
+        : "No religion";
+      const cultureText = dominantCultureLabel(this.game, nation.culture.dominantCultureId);
       return `
         <div class="diplo-row">
           <div class="row-head">
@@ -962,9 +1054,10 @@ class GameUI {
             <span class="mini-pill ${war ? "bad" : ""}">${war ? "War" : relationLabel(diplo.relation)} ${diplo.relation}</span>
           </div>
           <div class="muted">${nation.personality} · ${activeAlliances.length ? activeAlliances.map((a) => a.label).join(", ") : "No active alliance"} · ${routeText}</div>
+          <div class="muted">${escapeHtml(religionText)} · ${escapeHtml(cultureText)} culture · society modifier ${signed(societyModifier)}</div>
           <div class="row-actions">
-            <button class="secondary-btn" data-diplo="trade" data-id="${id}" ${this.actionDisabledAttribute("trade")}>Trade</button>
-            <button class="secondary-btn" data-diplo="alliance" data-id="${id}" ${this.actionDisabledAttribute("proposeAlliance")}>Alliance</button>
+            <button class="secondary-btn" data-diplo="trade" data-id="${id}" ${this.actionDisabledAttribute("trade")} title="Religion and culture currently apply ${signed(societyModifier)} relation-equivalent pressure.">Trade</button>
+            <button class="secondary-btn" data-diplo="alliance" data-id="${id}" ${this.actionDisabledAttribute("proposeAlliance")} title="Religion and culture currently apply ${signed(societyModifier)} relation-equivalent pressure.">Alliance</button>
             <button class="secondary-btn" data-diplo="embargo" data-id="${id}" ${war || embargoActive || !this.canUseAction("embargo") ? "disabled" : ""}>${embargoActive ? "Embargoed" : `Embargo $${BALANCE.trade.embargo.cost}`}</button>
             <button class="danger-btn" data-diplo="war" data-id="${id}" ${this.game.era < 3 || war || !this.canUseAction("declareWar") ? "disabled" : ""}>Declare War</button>
           </div>
@@ -1079,6 +1172,11 @@ class GameUI {
 	    this.openDialog("Nation Leaderboard", this.renderLeaderboardHtml());
   }
 
+  openSocietyDialog(options = {}) {
+    const title = options.prompt ? "Choose Society Religion" : "Society";
+    this.openDialog(title, this.renderSocietyHtml(options));
+  }
+
   openDiplomacyDialog() {
     this.openDialog("Diplomacy", this.renderDiplomacyHtml());
   }
@@ -1095,6 +1193,8 @@ class GameUI {
     if (this.dialogBackdrop.hidden) return;
     if (this.dialogTitle.textContent === "Actions") this.dialogBody.innerHTML = this.renderActionSummaryHtml();
     if (this.dialogTitle.textContent === "Nation Leaderboard") this.dialogBody.innerHTML = this.renderLeaderboardHtml();
+    if (this.dialogTitle.textContent === "Society") this.dialogBody.innerHTML = this.renderSocietyHtml();
+    if (this.dialogTitle.textContent === "Choose Society Religion") this.dialogBody.innerHTML = this.renderSocietyHtml({ prompt: true });
     if (this.dialogTitle.textContent === "Diplomacy") this.dialogBody.innerHTML = this.renderDiplomacyHtml();
     if (this.dialogTitle.textContent === "Trade") this.dialogBody.innerHTML = this.renderTradeRoutesHtml();
     if (this.dialogTitle.textContent === "Victory Progress") this.dialogBody.innerHTML = this.renderVictoryProgressHtml();
@@ -1467,6 +1567,38 @@ class GameUI {
     }
   }
 
+  handleSocietyClick(event) {
+    const chooseButton = event.target.closest("[data-society-religion]");
+    if (chooseButton) {
+      const religionId = chooseButton.dataset.societyReligion;
+      if (this.isServerAuthoritative()) {
+        this.sendPlayerAction({ type: "chooseReligion", religionId });
+        this.religionPromptOpen = false;
+        this.closeDialog();
+        return;
+      }
+      const result = this.game.chooseReligion(religionId);
+      if (!result.ok) this.showNotice("Society", result.reason);
+      if (result.ok) {
+        this.religionPromptOpen = false;
+        this.closeDialog();
+      }
+      return;
+    }
+
+    const actionButton = event.target.closest("[data-society-action]");
+    if (!actionButton) return;
+    if (actionButton.dataset.societyAction === "promote") {
+      if (this.isServerAuthoritative()) {
+        this.sendPlayerAction({ type: "promoteReligion" });
+        return;
+      }
+      const result = this.game.promoteReligion();
+      if (!result.ok) this.showNotice("Society", result.reason);
+      if (result.ok) this.dialogBody.innerHTML = this.renderSocietyHtml();
+    }
+  }
+
   handleTechClick(event) {
     const techButton = event.target.closest("[data-tech]");
     if (techButton) {
@@ -1645,6 +1777,7 @@ class GameUI {
 
   closeDialog() {
     if (this.game.gameOver) return;
+    this.religionPromptOpen = false;
     this.dialogBackdrop.hidden = true;
     this.dialogBody.innerHTML = "";
     this.dialogCloseBtn.hidden = false;

@@ -6,6 +6,7 @@ import {
   isTileActive,
 } from "./utils.js";
 import { BALANCE } from "./balance.js";
+import { createInitialSociety } from "./cultureReligion.js";
 
 export const PERSONALITIES = ["aggressive", "economic", "scientific", "balanced"];
 
@@ -68,6 +69,7 @@ export function createNation({
     capitalTileId: null,
     territory: [],
     discoveredNations: [id],
+    ...createInitialSociety(id),
     warExhaustion: BALANCE.war.exhaustion.min,
     mobilizationLevel: BALANCE.war.mobilization.peacetimeLevel,
     population: {

@@ -35,6 +35,18 @@ import {
   normalizeInfrastructureType,
   tileInfrastructureType,
 } from "./infrastructure.js";
+import {
+  RELIGION_IDS,
+  SOCIETY,
+  blendCultureTowardNation,
+  chooseReligionForNation,
+  processSocietySpread,
+  promoteReligionForNation,
+  religionLabel,
+  shiftReligionToward,
+  normalizeSociety,
+  societyRelationModifier,
+} from "./cultureReligion.js";
 
 type Tile = ServerGameState["map"]["tiles"][number];
 type Nation = ServerGameState["nations"][string];
@@ -60,6 +72,7 @@ type PlayerActionPayload = {
   request?: unknown;
   proposalId?: unknown;
   id?: unknown;
+  religionId?: unknown;
   reason?: unknown;
   text?: unknown;
   typeId?: unknown;
@@ -89,6 +102,8 @@ export const SERVER_GAME_ACTION_TYPES = {
   PROPOSE_ALLIANCE: "PROPOSE_ALLIANCE",
   BREAK_ALLIANCE: "BREAK_ALLIANCE",
   EMBARGO: "EMBARGO",
+  CHOOSE_RELIGION: "CHOOSE_RELIGION",
+  PROMOTE_RELIGION: "PROMOTE_RELIGION",
   RESEARCH: "RESEARCH",
   RESEARCH_TECH: "RESEARCH_TECH",
   RESEARCH_BRANCH: "RESEARCH_BRANCH",
@@ -107,6 +122,8 @@ export const SERVER_PLAYER_ACTION_TYPES = [
   "proposeAlliance",
   "breakAlliance",
   "embargo",
+  "chooseReligion",
+  "promoteReligion",
   "research",
   "researchTech",
   "researchBranch",
@@ -129,6 +146,8 @@ export const SERVER_ACTION_ALIASES: Record<string, string> = {
   proposeAlliance: SERVER_GAME_ACTION_TYPES.PROPOSE_ALLIANCE,
   breakAlliance: SERVER_GAME_ACTION_TYPES.BREAK_ALLIANCE,
   embargo: SERVER_GAME_ACTION_TYPES.EMBARGO,
+  chooseReligion: SERVER_GAME_ACTION_TYPES.CHOOSE_RELIGION,
+  promoteReligion: SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION,
   research: SERVER_GAME_ACTION_TYPES.RESEARCH,
   researchTech: SERVER_GAME_ACTION_TYPES.RESEARCH_TECH,
   researchBranch: SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH,
@@ -149,6 +168,8 @@ export const SERVER_ACTION_ALIASES: Record<string, string> = {
   PROPOSE_ALLIANCE: SERVER_GAME_ACTION_TYPES.PROPOSE_ALLIANCE,
   BREAK_ALLIANCE: SERVER_GAME_ACTION_TYPES.BREAK_ALLIANCE,
   EMBARGO: SERVER_GAME_ACTION_TYPES.EMBARGO,
+  CHOOSE_RELIGION: SERVER_GAME_ACTION_TYPES.CHOOSE_RELIGION,
+  PROMOTE_RELIGION: SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION,
   RESEARCH: SERVER_GAME_ACTION_TYPES.RESEARCH,
   RESEARCH_TECH: SERVER_GAME_ACTION_TYPES.RESEARCH_TECH,
   RESEARCH_BRANCH: SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH,
@@ -173,6 +194,8 @@ export const ACTION_COSTS: Record<string, number> = {
   [SERVER_GAME_ACTION_TYPES.PROPOSE_ALLIANCE]: 1,
   [SERVER_GAME_ACTION_TYPES.BREAK_ALLIANCE]: 1,
   [SERVER_GAME_ACTION_TYPES.EMBARGO]: 1,
+  [SERVER_GAME_ACTION_TYPES.CHOOSE_RELIGION]: 0,
+  [SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION]: 1,
   [SERVER_GAME_ACTION_TYPES.RESEARCH]: 1,
   [SERVER_GAME_ACTION_TYPES.RESEARCH_TECH]: 1,
   [SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH]: 1,
@@ -519,6 +542,12 @@ export function applyServerPlayerAction(
     case SERVER_GAME_ACTION_TYPES.EMBARGO:
       result = embargoAction(game, stringValue(payload.targetId), nationId);
       break;
+    case SERVER_GAME_ACTION_TYPES.CHOOSE_RELIGION:
+      result = chooseReligionAction(game, stringValue(payload.religionId), nationId);
+      break;
+    case SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION:
+      result = promoteReligionAction(game, nationId);
+      break;
     case SERVER_GAME_ACTION_TYPES.RESEARCH:
     case SERVER_GAME_ACTION_TYPES.RESEARCH_TECH:
       result = research(game, stringValue(payload.category), nationId);
@@ -561,6 +590,7 @@ export function processServerRound(game: ServerGameState) {
 
   for (const nation of Object.values(game.nations)) {
     if (!nation.active) continue;
+    ensureAutomaticReligionChoice(game, nation);
     const logistics = computeNationLogistics(game.map.tiles, nation);
     if (isAdvancedMode(game)) {
       const resourceCollection = collectAdvancedResourcesForNation(game, nation.id);
@@ -597,11 +627,20 @@ export function processServerRound(game: ServerGameState) {
     if (isAdvancedMode(game)) applyAdvancedFruitEffects(game, nation, summary);
   }
 
+  processSocietySpread(game);
   game.lastSummary = summary;
   tickEventTileEffects(game);
   addEvent(game, `Turn ${game.turn} production resolved by the server.`, { type: "resource" });
   checkServerVictory(game, DEFAULT_VICTORY_CONFIG, { turnBoundary: true });
   return summary;
+}
+
+function ensureAutomaticReligionChoice(game: ServerGameState, nation: Nation) {
+  normalizeSociety(nation);
+  if (game.era < SOCIETY.unlockEra || nation.religion.stateReligionId) return;
+  if (!nation.bot && nation.controllerType !== "bot") return;
+  const index = Math.abs(hashString(nation.id || nation.name || "nation")) % RELIGION_IDS.length;
+  chooseReligionForNation(nation, RELIGION_IDS[index], game.turn);
 }
 
 export function checkServerVictory(game: ServerGameState, config = DEFAULT_VICTORY_CONFIG, options: { turnBoundary?: boolean } = {}) {
@@ -1216,6 +1255,33 @@ function embargoAction(game: ServerGameState, targetId: string, nationId: string
   return result;
 }
 
+function chooseReligionAction(game: ServerGameState, religionId: string, nationId: string): ActionResult {
+  const nation = game.nations[nationId];
+  if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+  if (game.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
+  const result = chooseReligionForNation(nation, religionId, game.turn);
+  if (!result.ok) return result;
+  const label = religionLabel(religionId);
+  addEvent(game, `${nation.name} embraced ${label} as its society religion.`, { nationId, type: "society" });
+  return result;
+}
+
+function promoteReligionAction(game: ServerGameState, nationId: string): ActionResult {
+  const nation = game.nations[nationId];
+  if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+  if (game.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
+  const action = canSpendAction(game, nationId, SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION);
+  if (!action.ok) return action;
+  if (nation.money < SOCIETY.promoteCost) return { ok: false, reason: `Requires $${SOCIETY.promoteCost}.` };
+  const result = promoteReligionForNation(nation);
+  if (!result.ok) return result;
+  const spend = spendAction(game, nationId, SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION);
+  if (!spend.ok) return spend;
+  spendMoney(nation, SOCIETY.promoteCost);
+  addEvent(game, `${nation.name} promoted ${religionLabel(result.religionId)} across society.`, { nationId, type: "society" });
+  return { ...result, cost: SOCIETY.promoteCost };
+}
+
 function research(game: ServerGameState, category: string, nationId: string): ActionResult {
   const nation = game.nations[nationId];
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
@@ -1636,7 +1702,8 @@ function evaluateTrade(game: ServerGameState, fromId: string, toId: string, offe
   const offerValue = bundleValue(normalizedOffer);
   const requestValue = bundleValue(normalizedRequest);
   const threshold = TRADE.thresholds[to.personality] || TRADE.thresholds.default;
-  const relationFactor = 1 - ((numberValue(record.relation, 50) - 50) / TRADE.relationFactorDivisor);
+  const effectiveRelation = Math.max(0, Math.min(100, numberValue(record.relation, 50) + societyRelationModifier(from, to)));
+  const relationFactor = 1 - ((effectiveRelation - 50) / TRADE.relationFactorDivisor);
   const trustBonus = Math.min(TRADE.maxTrustBonus, numberValue(record.trades) * TRADE.trustBonusPerTrade);
   const required = requestValue * Math.max(TRADE.minimumRequiredFactor, threshold * relationFactor - trustBonus);
   const accepted = requestValue === 0 || offerValue >= required;
@@ -1663,6 +1730,7 @@ function proposeAlliance(game: ServerGameState, fromId: string, toId: string, ty
   const record = getDiplomacy(game, fromId, toId);
   const score =
     numberValue(record.relation, 50) +
+    societyRelationModifier(from, to) +
     (to.personality === "economic" ? TRADE.personalityAllianceBonus.economic : 0) +
     (to.personality === "scientific" && type === "research" ? TRADE.personalityAllianceBonus.scientificResearch : 0) +
     (to.personality === "aggressive" && type === "military" ? TRADE.personalityAllianceBonus.aggressiveMilitary : 0);
@@ -2035,6 +2103,10 @@ function applyCombatOutcome(game: ServerGameState, from: Tile, to: Tile, outcome
     to.unit = { ...from.unit!, nationId: attackerId, movedTurn: game.turn };
     from.unit = null;
     incrementStat(attacker, "tilesCaptured", 1);
+    blendCultureTowardNation(attacker, defender, SOCIETY.tileCaptureCultureShift);
+    if (defender.religion?.dominantReligionId) {
+      shiftReligionToward(attacker, defender.religion.dominantReligionId, SOCIETY.tileCaptureReligionShift);
+    }
     report.territoryChanged = true;
     if (capitalCaptured) {
       to.isCapital = false;
@@ -2058,7 +2130,12 @@ function applyCombatOutcome(game: ServerGameState, from: Tile, to: Tile, outcome
 
 function conquerNation(game: ServerGameState, defenderId: string, winnerId: string) {
   const defender = game.nations[defenderId];
-  if (!defender?.active) return;
+  const winner = game.nations[winnerId];
+  if (!defender?.active || !winner) return;
+  blendCultureTowardNation(winner, defender, SOCIETY.conquestCultureShift);
+  if (defender.religion?.dominantReligionId) {
+    shiftReligionToward(winner, defender.religion.dominantReligionId, SOCIETY.conquestReligionShift);
+  }
   defender.active = false;
   for (const tile of game.map.tiles) {
     if (tile.ownerId === defenderId) {
@@ -2598,6 +2675,14 @@ function numberValue(value: unknown, fallback = 0) {
 
 function stringValue(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return hash;
 }
 
 function pairKey(a: string, b: string) {

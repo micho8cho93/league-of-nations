@@ -1,5 +1,6 @@
 import { pairKey } from "./utils.js";
 import { BALANCE } from "./balance.js";
+import { societyRelationModifier } from "./cultureReligion.js";
 
 export const ALLIANCE_TYPES = BALANCE.trade.alliances;
 
@@ -59,7 +60,8 @@ export function evaluateTrade(game, fromId, toId, offer, request) {
   const offerValue = bundleValueForNation(game, toId, normalizedOffer);
   const requestValue = bundleValueForNation(game, fromId, normalizedRequest);
   const personalityThreshold = tradeThreshold(to.personality);
-  const relationFactor = 1 - ((record.relation - 50) / BALANCE.trade.relationFactorDivisor);
+  const effectiveRelation = Math.max(0, Math.min(100, record.relation + societyRelationModifier(from, to)));
+  const relationFactor = 1 - ((effectiveRelation - 50) / BALANCE.trade.relationFactorDivisor);
   const trustBonus = Math.min(BALANCE.trade.maxTrustBonus, record.trades * BALANCE.trade.trustBonusPerTrade);
   const required = requestValue * Math.max(BALANCE.trade.minimumRequiredFactor, personalityThreshold * relationFactor - trustBonus);
   const accepted = requestValue === 0 || offerValue >= required;
@@ -120,6 +122,7 @@ export function proposeAlliance(game, fromId, toId, type = "trade") {
   const record = getDiplomacy(game, fromId, toId);
   const score =
     record.relation +
+    societyRelationModifier(from, to) +
     (to.personality === "economic" ? BALANCE.trade.personalityAllianceBonus.economic : 0) +
     (to.personality === "scientific" && type === "research" ? BALANCE.trade.personalityAllianceBonus.scientificResearch : 0) +
     (to.personality === "aggressive" && type === "military" ? BALANCE.trade.personalityAllianceBonus.aggressiveMilitary : 0);

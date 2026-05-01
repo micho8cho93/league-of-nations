@@ -4,6 +4,7 @@ import { activeTiles, militaryPower } from "./nation.js";
 import { canResearch, canResearchBranch } from "./tech.js";
 import { getDiplomacy } from "./trade.js";
 import { canStrategicallyDeclare, nearestEnemyTile } from "./war.js";
+import { RELIGION_IDS, SOCIETY, normalizeSociety } from "./cultureReligion.js";
 
 // First type in each list is built first each turn (overridden temporarily by food pressure)
 const PERSONALITY_BUILD_ORDER = {
@@ -19,6 +20,7 @@ export async function processBotTurn(game, botId) {
   game.addEvent(`${bot.name} is planning its turn.`, { nationId: botId, type: "ai" });
 
   staffCriticalTiles(game, bot);
+  if (trySociety(game, bot)) return;
 
   // All personalities advance troops when already at war
   if (game.era >= 3 && tryAdvanceTroops(game, bot)) return;
@@ -56,6 +58,18 @@ export async function processBotTurn(game, botId) {
   }
 
   game.addEvent(`${bot.name} conserved money and resources.`, { nationId: bot.id, type: "ai" });
+}
+
+function trySociety(game, bot) {
+  normalizeSociety(bot);
+  if (game.era < SOCIETY.unlockEra) return false;
+  if (!bot.religion.stateReligionId) {
+    const religionId = RELIGION_IDS[Math.abs(hashString(bot.id || bot.name)) % RELIGION_IDS.length];
+    return game.chooseReligion(religionId, bot.id).ok;
+  }
+  const prevalence = bot.religion.prevalence[bot.religion.stateReligionId] || 0;
+  if (prevalence >= 70 || bot.money < SOCIETY.promoteCost || game.rng() > 0.18) return false;
+  return game.promoteReligion(bot.id).ok;
 }
 
 function staffCriticalTiles(game, bot) {
@@ -253,4 +267,12 @@ function tryDeclareWar(game, bot) {
     return true;
   }
   return false;
+}
+
+function hashString(value) {
+  let hash = 0;
+  for (let i = 0; i < String(value).length; i += 1) {
+    hash = ((hash << 5) - hash + String(value).charCodeAt(i)) | 0;
+  }
+  return hash;
 }

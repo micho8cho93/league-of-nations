@@ -1,5 +1,6 @@
 import { normalizeAdvancedResources } from "./advanced.js";
 import { refreshVictoryProgress } from "./victory.js";
+import { createInitialSociety } from "./cultureReligion.js";
 
 type ControllerType = "human" | "bot";
 type MapOptionLevel = "Low" | "Balanced" | "High";
@@ -53,6 +54,17 @@ interface Nation {
   capitalTileId: string | null;
   territory: string[];
   discoveredNations: string[];
+  culture: {
+    homeCultureId: string;
+    mix: Record<string, number>;
+    dominantCultureId: string;
+  };
+  religion: {
+    stateReligionId: string | null;
+    chosenTurn: number | null;
+    prevalence: Record<string, number>;
+    dominantReligionId: string | null;
+  };
   warExhaustion: number;
   reputation: number;
   mobilizationLevel: number;
@@ -535,6 +547,7 @@ function createNation({
     capitalTileId: null,
     territory: [],
     discoveredNations: [id],
+    ...createInitialSociety(id),
     warExhaustion: 0,
     reputation: 0,
     mobilizationLevel: 0,

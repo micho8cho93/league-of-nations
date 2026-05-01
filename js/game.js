@@ -59,6 +59,16 @@ import {
   spendMoney,
 } from "./nation.js";
 import {
+  SOCIETY,
+  blendCultureTowardNation,
+  chooseReligionForNation,
+  processSocietySpread,
+  promoteReligionForNation,
+  shiftReligionToward,
+  normalizeSociety,
+  religionLabel,
+} from "./cultureReligion.js";
+import {
   INFRASTRUCTURE_BUILD_COSTS,
   INFRASTRUCTURE_LABELS,
   INFRASTRUCTURE_TYPES,
@@ -233,6 +243,7 @@ export class GameState {
     this.normalizeActionStates();
     this.normalizePopulationStates();
     this.normalizeAdvancedNationStates();
+    this.normalizeSocietyStates();
     this.recomputeTerritories();
     this.normalizeDiscoveryStates();
     scheduleEraEvent(this, this.era);
@@ -507,6 +518,10 @@ export class GameState {
   normalizeAdvancedNationStates() {
     if (!isAdvancedMode(this)) return;
     for (const nation of Object.values(this.nations)) normalizeAdvancedResources(nation);
+  }
+
+  normalizeSocietyStates() {
+    for (const nation of Object.values(this.nations)) normalizeSociety(nation);
   }
 
   canSpendAction(nationId = this.playerId, amount = 1) {
@@ -1049,6 +1064,10 @@ export class GameState {
       to.unit = { ...from.unit, nationId: attackerId, movedTurn: this.turn };
       from.unit = null;
       attacker.stats.tilesCaptured += 1;
+      blendCultureTowardNation(attacker, defender, SOCIETY.tileCaptureCultureShift);
+      if (defender.religion?.dominantReligionId) {
+        shiftReligionToward(attacker, defender.religion.dominantReligionId, SOCIETY.tileCaptureReligionShift);
+      }
       report.territoryChanged = true;
       if (capitalCaptured) {
         // Capital capture rule: losing your capital means immediate elimination.
@@ -1154,7 +1173,11 @@ export class GameState {
   conquerNation(defenderId, winnerId) {
     const defender = this.nations[defenderId];
     const winner = this.nations[winnerId];
-    if (!defender?.active) return;
+    if (!defender?.active || !winner) return;
+    blendCultureTowardNation(winner, defender, SOCIETY.conquestCultureShift);
+    if (defender.religion?.dominantReligionId) {
+      shiftReligionToward(winner, defender.religion.dominantReligionId, SOCIETY.conquestReligionShift);
+    }
     defender.active = false;
     for (const tile of this.tiles) {
       if (tile.ownerId === defenderId) {
@@ -1242,6 +1265,35 @@ export class GameState {
       this.changed("embargo");
     }
     return result;
+  }
+
+  chooseReligion(religionId, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    const nation = this.nations[nationId];
+    if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    if (this.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
+    const result = chooseReligionForNation(nation, religionId, this.turn);
+    if (!result.ok) return result;
+    this.addEvent(`${nation.name} embraced ${religionLabel(religionId)} as its society religion.`, { nationId, type: "society" });
+    this.changed("society");
+    return result;
+  }
+
+  promoteReligion(nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    const nation = this.nations[nationId];
+    if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    if (this.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
+    const action = this.canSpendAction(nationId);
+    if (!action.ok) return action;
+    if (nation.money < SOCIETY.promoteCost) return { ok: false, reason: `Requires $${SOCIETY.promoteCost}.` };
+    const result = promoteReligionForNation(nation);
+    if (!result.ok) return result;
+    this.spendAction("promote-religion", nationId);
+    spendMoney(nation, SOCIETY.promoteCost);
+    this.addEvent(`${nation.name} promoted ${religionLabel(result.religionId)} across society.`, { nationId, type: "society" });
+    this.changed("society");
+    return { ...result, cost: SOCIETY.promoteCost };
   }
 
   research(category, nationId = this.playerId) {
@@ -1418,6 +1470,7 @@ export class GameState {
     }
 
     const tradeResult = processTradeRoutes(this, summary);
+    processSocietySpread(this);
 
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
       const routeFood = tradeResult.foodProduced[nation.id] || 0;
