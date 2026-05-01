@@ -808,7 +808,8 @@ export class HexMapRenderer {
     this.map = map;
     this.visibility = null;
     this.hoveredTileId = null;
-    this.target.set(0, 0, 0);
+    this._centerTargetOnMap(map);
+    this._setCameraFarPlaneForMap(map);
     this._setZoomBoundsForMap(map);
     this.camRadius = this.maxCamRadius;
     this.targetCamRadius = this.maxCamRadius;
@@ -2400,6 +2401,34 @@ export class HexMapRenderer {
 	    }
 	    return high;
 	  }
+
+  _centerTargetOnMap(map) {
+    const points = this._mapFitPoints(map);
+    if (!points.length) {
+      this.target.set(0, 0, 0);
+      return;
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minZ = Math.min(minZ, point.z);
+      maxZ = Math.max(maxZ, point.z);
+    }
+    this.target.set((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
+  }
+
+  _setCameraFarPlaneForMap(map) {
+    const minimumFar = 500;
+    const paddedFar = Math.max(minimumFar, (map?.radius || 0) * HEX_SIZE * 14);
+    if (this.camera.far !== paddedFar) {
+      this.camera.far = paddedFar;
+      this.camera.updateProjectionMatrix();
+    }
+  }
 	
 	  _mapFitPoints(map) {
 	    if (!map?.tiles?.length) return [];
