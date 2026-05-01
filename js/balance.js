@@ -49,6 +49,8 @@ export const BUILDING_HARDWOOD_COSTS = Object.freeze({
   [TILE_TYPES.SCHOOL]: 2,
   [TILE_TYPES.UNIVERSITY]: 3,
   [TILE_TYPES.MILITARY]: 2,
+  [TILE_TYPES.CITY]: 3,
+  [TILE_TYPES.CAPITAL_CITY]: 3,
 });
 
 export const FACTORY_IRON_COST = 3;
@@ -70,6 +72,8 @@ export const ADVANCED_UPKEEP_COSTS = Object.freeze({
     [TILE_TYPES.SCHOOL]: { hardwood: 0.06, iron: 0.04 },
     [TILE_TYPES.UNIVERSITY]: { hardwood: 0.08, iron: 0.06 },
     [TILE_TYPES.MILITARY]: { hardwood: 0.1, iron: 0.08, oil: 0.05 },
+    [TILE_TYPES.CITY]: { hardwood: 0.12, iron: 0.06, oil: 0.04 },
+    [TILE_TYPES.CAPITAL_CITY]: { hardwood: 0.16, iron: 0.08, oil: 0.05 },
     [TILE_TYPES.FACTORY]: { hardwood: 0.15, iron: 0.2, oil: 0.1 },
   },
   units: {
@@ -184,6 +188,11 @@ export const BALANCE = {
       water: 60,
     },
     factoryFallbackMoney: 20,
+    city: {
+      materials: 28,
+      people: 4,
+      advancedHardwood: 3,
+    },
     build: {
       [TILE_TYPES.FARM]: 140,
       [TILE_TYPES.FISHERY]: 170,
@@ -192,6 +201,8 @@ export const BALANCE = {
       [TILE_TYPES.SCHOOL]: 230,
       [TILE_TYPES.UNIVERSITY]: 560,
       [TILE_TYPES.MILITARY]: 330,
+      [TILE_TYPES.CITY]: 520,
+      [TILE_TYPES.CAPITAL_CITY]: 0,
       [TILE_TYPES.FACTORY]: 780,
     },
     factoryEra4Build: 1250,
@@ -272,6 +283,22 @@ export const BALANCE = {
       materialsTechTier: 2,
       materials: 2,
     },
+    [TILE_TYPES.CITY]: {
+      moneyBase: 85,
+      foodBase: 5,
+      materialsBase: 3,
+      educationBase: 3,
+      industryBase: 1,
+      techDividend: 1,
+    },
+    [TILE_TYPES.CAPITAL_CITY]: {
+      moneyBase: 110,
+      foodBase: 7,
+      materialsBase: 4,
+      educationBase: 4,
+      industryBase: 2,
+      techDividend: 1,
+    },
   },
 
   war: {
@@ -343,7 +370,7 @@ export const BALANCE = {
       ownedNearbyBonus: 0.045,
       alliedNearbyBonus: 0.03,
       maxNearbyBonus: 0.18,
-      anchorTypes: [TILE_TYPES.MILITARY],
+      anchorTypes: [TILE_TYPES.MILITARY, TILE_TYPES.CITY, TILE_TYPES.CAPITAL_CITY],
       anchorDistancePenaltyStart: 4,
       penaltyPerAnchorDistance: 0.055,
       maxDistancePenalty: 0.32,
@@ -365,12 +392,14 @@ export const BALANCE = {
           TILE_TYPES.UNIVERSITY,
           TILE_TYPES.FACTORY,
           TILE_TYPES.MILITARY,
+          TILE_TYPES.CITY,
+          TILE_TYPES.CAPITAL_CITY,
         ],
         flatBonus: 1,
         multiplierBonus: 0.04,
       },
       highValue: {
-        types: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+        types: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY, TILE_TYPES.CITY, TILE_TYPES.CAPITAL_CITY],
         flatBonus: 2,
         multiplierBonus: 0.08,
       },
@@ -381,7 +410,7 @@ export const BALANCE = {
       progressPerVictory: 1,
       capitalRequiredProgress: 3,
       highValueRequiredProgress: 2,
-      highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+      highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY, TILE_TYPES.CITY],
     },
   },
 
@@ -639,6 +668,8 @@ export const BALANCE = {
       default: 75,
       [TILE_TYPES.FACTORY]: 180,
       [TILE_TYPES.UNIVERSITY]: 150,
+      [TILE_TYPES.CITY]: 170,
+      [TILE_TYPES.CAPITAL_CITY]: 240,
     },
     techTierValue: 220,
     branchTierValue: 260,

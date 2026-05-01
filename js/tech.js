@@ -388,6 +388,17 @@ export function productionForTile(nation, tile, era) {
       materials: military >= config.materialsTechTier ? config.materials : 0,
     };
   }
+  if (tile.type === TILE_TYPES.CITY || tile.type === TILE_TYPES.CAPITAL_CITY) {
+    const config = BALANCE.production[tile.type];
+    const techDividend = (farming + mining + education + military) * (config.techDividend || 0);
+    return {
+      money: Math.ceil((config.moneyBase + techDividend * 5) * eraScale),
+      food: Math.ceil((config.foodBase + farming) * eraScale),
+      materials: Math.ceil((config.materialsBase + mining) * eraScale),
+      education: Math.ceil((config.educationBase + education) * eraScale),
+      industry: Math.ceil((config.industryBase + Math.floor(Math.min(mining, education) / 2)) * eraScale),
+    };
+  }
   return null;
 }
 

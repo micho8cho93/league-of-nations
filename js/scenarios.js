@@ -5,6 +5,7 @@ import { GAME_MODES } from "./balance.js";
 export const SCENARIOS = Object.freeze({
   OCEANIA_RESOURCE_FRONTIERS: "oceania-resource-frontiers",
   GLOBAL_RESOURCE_RIVALRY: "global-resource-rivalry",
+  WW2_GLOBAL: "ww2_global",
 });
 
 // Scenario metadata
@@ -26,6 +27,22 @@ export const SCENARIO_METADATA = Object.freeze({
     maxPlayers: 4,
     minPlayers: 1,
     singlePlayerOnly: true,
+  },
+  [SCENARIOS.WW2_GLOBAL]: {
+    id: "ww2_global",
+    name: "World War II – Global Conflict",
+    subtitle: "Industrial warfare, alliances, and global conquest",
+    description: "A global industrial war scenario beginning in 1939. Players lead one of the major powers and compete through conquest, industrial production, resource control, and alliance strategy.",
+    mode: GAME_MODES.ADVANCED,
+    maxPlayers: 7,
+    minPlayers: 1,
+    singlePlayerOnly: true,
+    difficulty: "Hard",
+    estimatedLength: "60 turns (~60-90 min)",
+    objectiveSummary: "Axis: capture Allied capitals or dominate world territory. Allies: defeat Axis capitals or survive until the turn limit.",
+    introTitle: "Europe, September 1939",
+    introBody: "The world stands on the brink. The Axis (Germany, Italy, Japan) seek to overturn the global order. The Allies (United Kingdom, France) must survive — joined by the Soviet Union and the United States. Build factories, secure oil and steel, and choose your path to victory before turn 60.",
+    turnLimit: 60,
   },
 });
 
@@ -892,6 +909,368 @@ function createOceaniaMap() {
   });
 }
 
+// =====================================================================
+// World War II – Global Conflict
+// Modular scenario data: objectives, faction definitions, starting
+// alliances, rule overrides, and event stubs. The map reuses the
+// existing global projection (createWorldMap) so we don't duplicate
+// terrain logic. Capitals are looked up by lat/lon at game-start time
+// via projectCluster + nearest-land fallback in game.js.
+// =====================================================================
+
+export const WW2_OBJECTIVES = Object.freeze([
+  {
+    id: "ww2-capitals",
+    title: "Strike at Capitals",
+    description: "Capture enemy capital tiles to break their war effort.",
+    type: "capitals",
+    target: 3,
+    progress: 0,
+    completed: false,
+  },
+  {
+    id: "ww2-industrial",
+    title: "Industrial Mobilization",
+    description: "Construct 3 factories to fuel the war machine.",
+    type: "factories",
+    target: 3,
+    progress: 0,
+    completed: false,
+  },
+  {
+    id: "ww2-oil",
+    title: "Secure Oil",
+    description: "Control desert tiles to keep mechanized forces fueled.",
+    type: "terrain",
+    terrain: "desert",
+    target: 4,
+    progress: 0,
+    completed: false,
+  },
+  {
+    id: "ww2-territory",
+    title: "Project Power",
+    description: "Hold 25 tiles across multiple continents.",
+    type: "territory",
+    target: 25,
+    progress: 0,
+    completed: false,
+  },
+]);
+
+// Faction definitions. nationIndex 0 is the human player by convention
+// (matches existing scenario starting-position pattern). Capital coords
+// are lat/lon; runtime resolves to nearest existing land tile.
+export const WW2_FACTIONS = Object.freeze([
+  {
+    nationIndex: 0,
+    factionId: "germany",
+    name: "Germany",
+    bloc: "axis",
+    capital: { lon: 13, lat: 52 },         // Berlin
+    startTiles: [[13, 52], [10, 50], [16, 50]],
+    startingResources: { fruit: 2, hardwood: 1, iron: 4, oil: 1 },
+    startingMilitaryBoost: { land: 3 },
+    note: "Strong land forces, industrial heartland.",
+  },
+  {
+    nationIndex: 1,
+    factionId: "italy",
+    name: "Italy",
+    bloc: "axis",
+    capital: { lon: 12, lat: 44 },         // Rome (nearest painted Mediterranean tile)
+    startTiles: [[12, 44], [15, 38]],
+    startingResources: { fruit: 2, hardwood: 0, iron: 2, oil: 1 },
+    note: "Mediterranean foothold for the Axis.",
+  },
+  {
+    nationIndex: 2,
+    factionId: "japan",
+    name: "Japan",
+    bloc: "axis",
+    capital: { lon: 140, lat: 36 },        // Tokyo
+    startTiles: [[140, 37], [135, 35], [142, 41]],
+    startingResources: { fruit: 1, hardwood: 1, iron: 3, oil: 0 },
+    startingMilitaryBoost: { naval: 3 },
+    note: "Naval/expansion advantage; oil-poor — must conquer to fuel.",
+  },
+  {
+    nationIndex: 3,
+    factionId: "uk",
+    name: "United Kingdom",
+    bloc: "allies",
+    capital: { lon: -1, lat: 52 },         // London
+    startTiles: [[-2, 55], [-3, 51]],
+    startingResources: { fruit: 2, hardwood: 1, iron: 3, oil: 1 },
+    startingMilitaryBoost: { naval: 3 },
+    note: "Naval/trade strength, global colonies.",
+  },
+  {
+    nationIndex: 4,
+    factionId: "france",
+    name: "France",
+    bloc: "allies",
+    capital: { lon: 2, lat: 47 },          // Paris
+    startTiles: [[2, 47], [-10, 44]],
+    startingResources: { fruit: 3, hardwood: 0, iron: 2, oil: 1 },
+    note: "Continental Allied power.",
+  },
+  {
+    nationIndex: 5,
+    factionId: "ussr",
+    name: "Soviet Union",
+    bloc: "comintern", // structurally neutral; conditional Allies via events
+    capital: { lon: 40, lat: 60 },         // Moscow (on painted arctic band)
+    startTiles: [[40, 60], [70, 61], [55, 44]],
+    startingResources: { fruit: 4, hardwood: 1, iron: 4, oil: 3 },
+    startingMilitaryBoost: { land: 2 },
+    note: "Vast manpower and territory; slower early mobility.",
+  },
+  {
+    nationIndex: 6,
+    factionId: "usa",
+    name: "United States",
+    bloc: "neutral", // joins Allies via Pearl Harbor event (stubbed)
+    capital: { lon: -77, lat: 39 },        // Washington, D.C.
+    startTiles: [[-75, 39], [-84, 34], [-97, 34]],
+    startingResources: { fruit: 4, hardwood: 2, iron: 4, oil: 4 },
+    note: "Industrial powerhouse; ramps up via Lend-Lease and entry events.",
+  },
+]);
+
+// Starting positions in the shape the existing newGame loop expects.
+// Capital is the first start tile; full coord resolution happens in game.js.
+export const WW2_STARTING_POSITIONS = WW2_FACTIONS.map((faction) => ({
+  nationIndex: faction.nationIndex,
+  name: faction.name,
+  factionId: faction.factionId,
+  bloc: faction.bloc,
+  capital: faction.capital,
+  startTiles: projectCluster(worldProject, faction.startTiles),
+  startingResources: { ...faction.startingResources },
+  startingMilitaryBoost: faction.startingMilitaryBoost || null,
+}));
+
+// Pre-formed alliance blocs at game start.
+// Soviet Union and United States start unaligned (per spec) so events can
+// promote them into the Allies later.
+export const WW2_STARTING_ALLIANCES = Object.freeze([
+  {
+    id: "ww2-axis",
+    label: "Axis Powers",
+    type: "military",
+    factionIds: ["germany", "italy", "japan"],
+  },
+  {
+    id: "ww2-allies",
+    label: "Allied Powers",
+    type: "military",
+    factionIds: ["uk", "france"],
+  },
+]);
+
+// Rule overrides applied to the game when the WW2 scenario starts.
+// Stored on game.settings.scenarioOverrides; consumed where applicable.
+// Unused multipliers are retained as data for future systems (TODO).
+export const WW2_RULE_OVERRIDES = Object.freeze({
+  unitCostMultiplier: 1.4,        // applied in game.js training cost path
+  unitUpkeepMultiplier: 1.25,     // TODO: thread into upkeep paths
+  factoryProductionMultiplier: 1.5, // TODO: apply in productionForTile factory yield
+  growthRateMultiplier: 0.7,      // applied to fruit-surplus population growth
+  industrialRegionBonus: ["germany", "uk", "usa", "ussr", "japan"],
+  oilRegionBoost: ["middle_east", "usa", "ussr", "southeast_asia"],
+});
+
+// Custom victory rules for WW2.
+export const WW2_VICTORY_RULES = Object.freeze({
+  axisFactions: ["germany", "italy", "japan"],
+  alliedFactions: ["uk", "france", "ussr", "usa"],
+  axisCapitalCaptureTarget: 3,    // any 3 of London, Moscow, Paris, Washington
+  axisTerritoryThreshold: 0.6,    // 60% of all land tiles
+  alliedRequiredCapitals: ["germany", "italy", "japan"], // Berlin, Rome, Tokyo
+});
+
+// Historical event data. For MVP most are stubbed (active=false) with TODO
+// comments so the engine can iterate without scenario-specific surprises.
+// The events array is wired into game.scenarioEvents at start time.
+export const WW2_EVENTS = Object.freeze([
+  {
+    id: "germany_invades_poland",
+    label: "Germany Invades Poland",
+    description: "The Wehrmacht crosses the Polish border. War begins.",
+    triggerTurn: 1,
+    active: true,
+    apply(game) {
+      // MVP behavior: log + small relation hit between Axis and Allies.
+      game.addEvent?.("Germany invades Poland — global war is underway.", { type: "scenario" });
+    },
+  },
+  {
+    id: "fall_of_france",
+    label: "Fall of France",
+    description: "If France's capital falls, Allied morale is shaken.",
+    triggerTurn: null, // condition-based; TODO: hook capture detection
+    active: false,
+    apply() { /* TODO: implement when capital-capture events exist. */ },
+  },
+  {
+    id: "operation_barbarossa",
+    label: "Operation Barbarossa",
+    description: "Germany turns east. The USSR is drawn into the war.",
+    triggerTurn: 12,
+    active: false,
+    apply() { /* TODO: declare war Germany→USSR; promote USSR to Allies bloc. */ },
+  },
+  {
+    id: "pearl_harbor",
+    label: "Pearl Harbor",
+    description: "Japan strikes the U.S. Pacific Fleet.",
+    triggerTurn: 18,
+    active: false,
+    apply() { /* TODO: declare war Japan→USA; promote USA to Allies bloc. */ },
+  },
+  {
+    id: "us_enters_war",
+    label: "United States Enters the War",
+    description: "American industry mobilizes for global conflict.",
+    triggerTurn: 19,
+    active: false,
+    apply() { /* TODO: link to pearl_harbor; grant USA production boost. */ },
+  },
+  {
+    id: "d_day",
+    label: "D-Day",
+    description: "Allied forces land in Normandy.",
+    triggerTurn: 40,
+    active: false,
+    apply() { /* TODO: spawn Allied unit on French coast if Axis-held. */ },
+  },
+]);
+
+/**
+ * Evaluate WW2-specific victory conditions.
+ * Called from victory.js before the generic turn-limit fallback.
+ * @returns {object|null} { winnerFactionId, label, reason } or null.
+ */
+export function evaluateWW2Victory(game) {
+  const factionByNationId = nationToFactionMap(game);
+  if (!factionByNationId) return null;
+
+  const axisIds = nationIdsForBloc(factionByNationId, WW2_VICTORY_RULES.axisFactions);
+  const alliedIds = nationIdsForBloc(factionByNationId, WW2_VICTORY_RULES.alliedFactions);
+  const alliedKeyCapitalFactionIds = WW2_VICTORY_RULES.alliedFactions; // any of these capitals counts
+  const axisKeyCapitalFactionIds = WW2_VICTORY_RULES.alliedRequiredCapitals; // {germany,italy,japan} for Allies
+
+  // --- Axis victory: capture N Allied capitals OR control >X% of land ---
+  // "Captured" = capital tile is currently owned by an Axis nation.
+  const alliedCapitalCount = countCapitalsHeldByAttackers(
+    game,
+    factionByNationId,
+    alliedKeyCapitalFactionIds,
+    axisIds,
+  );
+  if (alliedCapitalCount >= WW2_VICTORY_RULES.axisCapitalCaptureTarget) {
+    return {
+      winnerBloc: "axis",
+      label: "Axis Victory — Capitals Fallen",
+      reason: `The Axis captured ${alliedCapitalCount} Allied capitals.`,
+    };
+  }
+  const axisLandShare = blocLandShare(game, axisIds);
+  if (axisLandShare >= WW2_VICTORY_RULES.axisTerritoryThreshold) {
+    return {
+      winnerBloc: "axis",
+      label: "Axis Victory — World Domination",
+      reason: `Axis powers control ${(axisLandShare * 100).toFixed(0)}% of the world.`,
+    };
+  }
+
+  // --- Allied victory: capture all of Berlin, Rome, Tokyo ---
+  // A capital is "captured" by Allies if its current owner is NOT in the Axis bloc.
+  const allAxisCapitalsTaken = axisKeyCapitalFactionIds.every((factionId) => {
+    return capitalLostByDefenderBloc(game, factionByNationId, factionId, axisIds);
+  });
+  if (allAxisCapitalsTaken) {
+    return {
+      winnerBloc: "allies",
+      label: "Allied Victory — Axis Capitals Liberated",
+      reason: "Berlin, Rome, and Tokyo have all fallen.",
+    };
+  }
+
+  // --- Allied survival victory: turn limit reached without Axis victory ---
+  const maxTurns = Number(game.settings?.maxTurns) || 0;
+  if (maxTurns > 0 && game.turn >= maxTurns) {
+    return {
+      winnerBloc: "allies",
+      label: "Allied Victory — Axis Contained",
+      reason: "The Allies prevented Axis victory until the turn limit.",
+    };
+  }
+
+  return null;
+}
+
+function nationToFactionMap(game) {
+  if (!game?.settings?.scenarioId || game.settings.scenarioId !== SCENARIOS.WW2_GLOBAL) return null;
+  const map = {};
+  for (const nation of Object.values(game.nations || {})) {
+    if (nation?.factionId) map[nation.id] = nation.factionId;
+  }
+  return Object.keys(map).length ? map : null;
+}
+
+function nationIdsForBloc(factionByNationId, factionIds) {
+  const set = new Set(factionIds);
+  return Object.entries(factionByNationId)
+    .filter(([, factionId]) => set.has(factionId))
+    .map(([nationId]) => nationId);
+}
+
+function countCapitalsHeldByAttackers(game, factionByNationId, defenderFactionIds, attackerNationIds) {
+  let count = 0;
+  for (const factionId of defenderFactionIds) {
+    if (capitalHeldByAttackers(game, factionByNationId, factionId, attackerNationIds)) count += 1;
+  }
+  return count;
+}
+
+function capitalHeldByAttackers(game, factionByNationId, defenderFactionId, attackerNationIds) {
+  const tile = capitalTileForFaction(game, factionByNationId, defenderFactionId);
+  if (!tile) return false;
+  return attackerNationIds.includes(tile.ownerId);
+}
+
+// Capital is considered "lost" by the defending bloc when its current owner
+// is set and is not part of the defending bloc's nation ids.
+function capitalLostByDefenderBloc(game, factionByNationId, defenderFactionId, defenderBlocNationIds) {
+  const tile = capitalTileForFaction(game, factionByNationId, defenderFactionId);
+  if (!tile || !tile.ownerId) return false;
+  return !defenderBlocNationIds.includes(tile.ownerId);
+}
+
+function capitalTileForFaction(game, factionByNationId, factionId) {
+  const nationId = Object.entries(factionByNationId)
+    .find(([, fId]) => fId === factionId)?.[0];
+  if (!nationId) return null;
+  const nation = game.nations?.[nationId];
+  if (!nation?.capitalTileId) return null;
+  return game.map?.tiles?.find((t) => t.id === nation.capitalTileId) || null;
+}
+
+function blocLandShare(game, blocNationIds) {
+  if (!blocNationIds.length) return 0;
+  const set = new Set(blocNationIds);
+  let owned = 0;
+  let total = 0;
+  for (const tile of game.map?.tiles || []) {
+    if (tile.terrain !== "land") continue;
+    total += 1;
+    if (set.has(tile.ownerId)) owned += 1;
+  }
+  return total > 0 ? owned / total : 0;
+}
+
 // Starting positions for Oceania scenario
 export const OCEANIA_STARTING_POSITIONS = [
   {
@@ -949,6 +1328,10 @@ export function getScenarioMap(scenarioId) {
   if (scenarioId === SCENARIOS.GLOBAL_RESOURCE_RIVALRY) {
     return createWorldMap();
   }
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) {
+    // WW2 reuses the global world map; faction starts/capitals differ.
+    return createWorldMap();
+  }
   return null;
 }
 
@@ -963,6 +1346,9 @@ export function getScenarioObjectives(scenarioId) {
   }
   if (scenarioId === SCENARIOS.GLOBAL_RESOURCE_RIVALRY) {
     return JSON.parse(JSON.stringify(GLOBAL_OBJECTIVES)); // Deep clone
+  }
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) {
+    return JSON.parse(JSON.stringify(WW2_OBJECTIVES));
   }
   return [];
 }
@@ -979,5 +1365,52 @@ export function getScenarioStartingPositions(scenarioId) {
   if (scenarioId === SCENARIOS.GLOBAL_RESOURCE_RIVALRY) {
     return GLOBAL_STARTING_POSITIONS;
   }
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) {
+    return WW2_STARTING_POSITIONS;
+  }
+  return null;
+}
+
+/**
+ * Scenario-wide rule overrides applied to game.settings.scenarioOverrides.
+ * Returns null when no overrides are defined.
+ */
+export function getScenarioRuleOverrides(scenarioId) {
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) return WW2_RULE_OVERRIDES;
+  return null;
+}
+
+/**
+ * Pre-formed alliance blocs the scenario starts with.
+ * Each entry: { id, label, type, factionIds: [...] }
+ */
+export function getScenarioStartingAlliances(scenarioId) {
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) return WW2_STARTING_ALLIANCES;
+  return [];
+}
+
+/** Scenario turn limit (overrides settings.maxTurns). 0/null = no override. */
+export function getScenarioTurnLimit(scenarioId) {
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) return SCENARIO_METADATA[SCENARIOS.WW2_GLOBAL].turnLimit;
+  return null;
+}
+
+/** Scenario event list (deep cloned to allow per-game mutation). */
+export function getScenarioEvents(scenarioId) {
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) {
+    return WW2_EVENTS.map((event) => ({ ...event, fired: false }));
+  }
+  return [];
+}
+
+/**
+ * Run scenario victory checks. Returns null if no scenario-specific
+ * victory triggered. Caller (victory.js) should fall through to generic
+ * checks (turn limit etc.) when null.
+ */
+export function evaluateScenarioVictory(game) {
+  const scenarioId = game?.settings?.scenarioId;
+  if (!scenarioId) return null;
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) return evaluateWW2Victory(game);
   return null;
 }

@@ -1,4 +1,5 @@
 import { BALANCE } from "./balance.js";
+import { evaluateScenarioVictory } from "./scenarios.js";
 
 const LINEAR_TECH_CATEGORIES = ["farming", "mining", "education", "infrastructure", "military"];
 const BRANCH_TECH_CATEGORIES = ["tanks", "air", "naval"];
@@ -166,6 +167,25 @@ export function checkVictory(game, options = {}) {
     }
   }
 
+  // Scenario-specific victory hook (e.g. WW2 capital captures, territory %).
+  // Runs before the generic turn-limit fallback so scenarios can win earlier.
+  const scenarioOutcome = game.settings?.scenarioId ? evaluateScenarioVictory(game) : null;
+  if (scenarioOutcome) {
+    // Pick a winnerId from the winning bloc — the player if they are in it,
+    // else the first allied member. Falls back to the first alive nation.
+    const winnerId = scenarioWinnerNationId(game, scenarioOutcome) || activeNationIdsFor(game)[0] || "";
+    if (winnerId) {
+      return finalizeVictory(
+        game,
+        winnerId,
+        "scenario_victory",
+        scenarioOutcome.label || "Scenario Victory",
+        scenarioOutcome.reason || "Scenario victory conditions met.",
+        options,
+      );
+    }
+  }
+
   if (!game.settings.unlimitedMode && game.settings.maxTurns > 0 && game.turn >= game.settings.maxTurns) {
     const scores = typeof options.scoreboard === "function" ? options.scoreboard(game) : [];
     const winnerId = scores[0]?.id || activeNationIdsFor(game)[0] || Object.keys(game.nations || {})[0] || "";
@@ -294,6 +314,28 @@ function nextHoldTurns(previous, meetsCondition, shouldCountTurnBoundary) {
   if (!meetsCondition) return 0;
   if (!shouldCountTurnBoundary) return priorTurns;
   return priorTurns + 1;
+}
+
+// Resolve a winner nation id from a scenario outcome. Prefers the player
+// if they are in the winning bloc; otherwise picks the first nation
+// belonging to that bloc by faction metadata.
+function scenarioWinnerNationId(game, outcome) {
+  if (!outcome?.winnerBloc) return null;
+  const bloc = outcome.winnerBloc;
+  // Build candidate list of nation ids whose nation.bloc/factionId places
+  // them in the winning bloc. We accept a few aliasing rules so scenarios
+  // don't need to set bloc explicitly on every faction.
+  const candidates = [];
+  for (const nation of Object.values(game.nations || {})) {
+    if (!nation?.active && nation?.active !== undefined) continue;
+    const nationBloc = nation.bloc || null;
+    const factionId = nation.factionId || null;
+    if (bloc === "axis" && (nationBloc === "axis" || ["germany", "italy", "japan"].includes(factionId))) candidates.push(nation.id);
+    else if (bloc === "allies" && (nationBloc === "allies" || ["uk", "france", "ussr", "usa"].includes(factionId))) candidates.push(nation.id);
+  }
+  if (!candidates.length) return null;
+  if (candidates.includes(game.playerId)) return game.playerId;
+  return candidates[0];
 }
 
 function activeNationIdsFor(game) {

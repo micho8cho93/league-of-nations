@@ -179,6 +179,7 @@ export function createMapData(settings) {
       unit: null,
       regionId: null,
       isCapital: false,
+      hasMilitaryBase: false,
       effects: {
         disabledTurns: 0,
         floodedTurns: 0,
@@ -537,8 +538,9 @@ function claimStartingCluster(map, nation, center, rng) {
   const capital = claimed[0];
   if (capital) {
     capital.isCapital = true;
-    capital.type = TILE_TYPES.MILITARY;
-    capital.workers = WORKER_MIN[TILE_TYPES.MILITARY];
+    capital.type = TILE_TYPES.CAPITAL_CITY;
+    capital.hasMilitaryBase = true;
+    capital.workers = WORKER_MIN[TILE_TYPES.CAPITAL_CITY];
     capital.unit = {
       nationId: nation.id,
       strength: 4,
@@ -575,13 +577,13 @@ function visualTierForTile(tile, nations) {
   if (tile.type === TILE_TYPES.MINE || tile.type === TILE_TYPES.MOUNTAIN_MINE) return tech.mining || 0;
   if (tile.type === TILE_TYPES.SCHOOL || tile.type === TILE_TYPES.UNIVERSITY) return tech.education || 0;
   if ([TILE_TYPES.ROAD, TILE_TYPES.RAILROAD, TILE_TYPES.HIGHWAY, TILE_TYPES.AIRPORT].includes(tile.type)) return tech.infrastructure || 0;
-  if (tile.type === TILE_TYPES.MILITARY) return tech.military || 0;
+  if ([TILE_TYPES.MILITARY, TILE_TYPES.CITY, TILE_TYPES.CAPITAL_CITY].includes(tile.type)) return tech.military || 0;
   if (tile.type === TILE_TYPES.FACTORY) return Math.min(4, Math.max(tech.mining || 0, tech.education || 0));
   return 0;
 }
 
 function strongestBranchForTile(tile, nations) {
-  if (tile.type !== TILE_TYPES.MILITARY) return { branch: tile.unit?.branch || "infantry", level: 0 };
+  if (![TILE_TYPES.MILITARY, TILE_TYPES.CITY, TILE_TYPES.CAPITAL_CITY].includes(tile.type)) return { branch: tile.unit?.branch || "infantry", level: 0 };
   const nation = nations[tile.ownerId];
   const branches = nation?.tech?.branches || {};
   const focus = nation?.military?.branchFocus;
@@ -1436,7 +1438,7 @@ export class HexMapRenderer {
     group.position.set(x, isWaterLike(tile) ? 0.08 : HEX_HEIGHT + 0.02, z);
     const ownerColor = colorFromHex(this.nations[tile.ownerId]?.color || "#e2dcc8");
 
-    if (tile.isCapital) {
+    if (tile.isCapital || tile.type === TILE_TYPES.CITY || tile.type === TILE_TYPES.CAPITAL_CITY) {
       this._addCapitalMarker(group, tile, ownerColor);
     }
 

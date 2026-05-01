@@ -18,6 +18,8 @@ export const TILE_TYPES = {
   UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  CITY: "city",
+  CAPITAL_CITY: "capitalCity",
   ROAD: "road",
   RAILROAD: "railroad",
   HIGHWAY: "highway",
@@ -35,6 +37,7 @@ export const BUILDING_TYPES = [
   TILE_TYPES.UNIVERSITY,
   TILE_TYPES.FACTORY,
   TILE_TYPES.MILITARY,
+  TILE_TYPES.CITY,
 ];
 
 export const TILE_LABELS = {
@@ -47,6 +50,8 @@ export const TILE_LABELS = {
   [TILE_TYPES.UNIVERSITY]: "University",
   [TILE_TYPES.FACTORY]: "Factory",
   [TILE_TYPES.MILITARY]: "Military Base",
+  [TILE_TYPES.CITY]: "City",
+  [TILE_TYPES.CAPITAL_CITY]: "Capital City",
   [TILE_TYPES.ROAD]: "Road",
   [TILE_TYPES.RAILROAD]: "Railroad",
   [TILE_TYPES.HIGHWAY]: "Highway",
@@ -62,6 +67,7 @@ export const WORKER_ROLES = {
   SCHOLARS: "scholars",
   ENGINEERS: "engineers",
   SOLDIERS: "soldiers",
+  CITY_WORKERS: "cityWorkers",
 };
 
 export const WORKER_ROLE_BY_TILE = {
@@ -73,6 +79,8 @@ export const WORKER_ROLE_BY_TILE = {
   [TILE_TYPES.UNIVERSITY]: WORKER_ROLES.SCHOLARS,
   [TILE_TYPES.FACTORY]: WORKER_ROLES.ENGINEERS,
   [TILE_TYPES.MILITARY]: WORKER_ROLES.SOLDIERS,
+  [TILE_TYPES.CITY]: WORKER_ROLES.CITY_WORKERS,
+  [TILE_TYPES.CAPITAL_CITY]: WORKER_ROLES.CITY_WORKERS,
 };
 
 export const WORKER_MIN = {
@@ -84,6 +92,8 @@ export const WORKER_MIN = {
   [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.CITY]: 4,
+  [TILE_TYPES.CAPITAL_CITY]: 4,
 };
 
 export const TILE_COLORS = {
@@ -96,6 +106,8 @@ export const TILE_COLORS = {
   [TILE_TYPES.UNIVERSITY]: 0x5868c8,
   [TILE_TYPES.FACTORY]: 0x4b525f,
   [TILE_TYPES.MILITARY]: 0xa44646,
+  [TILE_TYPES.CITY]: 0xd7ad4a,
+  [TILE_TYPES.CAPITAL_CITY]: 0xffd166,
   [TILE_TYPES.ROAD]: 0x6b5a4c,
   [TILE_TYPES.RAILROAD]: 0x6e6258,
   [TILE_TYPES.HIGHWAY]: 0x384653,
@@ -310,6 +322,16 @@ export function isTileActive(tile) {
   if (!tile || !WORKER_MIN[tile.type]) return false;
   if (tile.effects?.disabledTurns > 0 || tile.effects?.floodedTurns > 0) return false;
   return (tile.workers || 0) >= WORKER_MIN[tile.type];
+}
+
+export function tileHasMilitaryBase(tile) {
+  return Boolean(
+    tile &&
+    (tile.hasMilitaryBase ||
+      tile.type === TILE_TYPES.MILITARY ||
+      tile.type === TILE_TYPES.CITY ||
+      tile.type === TILE_TYPES.CAPITAL_CITY)
+  );
 }
 
 export function deepClone(value) {

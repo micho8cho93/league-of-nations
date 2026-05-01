@@ -153,6 +153,7 @@ function prepareTile(tile: any, values: Record<string, unknown>) {
     workers: 0,
     unit: null,
     isCapital: false,
+    hasMilitaryBase: false,
     effects: { disabledTurns: 0, floodedTurns: 0, bountifulTurns: 0 },
     ...values,
   });
@@ -497,6 +498,90 @@ test("advanced mode build flow requires hardwood", async () => {
   });
   assert.equal(gameState.map.tiles.find((tile: any) => tile.id === tileId).type, "farm");
   assert.equal(nation.resources.hardwood, 2);
+});
+
+test("city can be built on empty land by bundling a military base purchase", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tileId = buildableTileId(gameState, "nation-1");
+  const nation = gameState.nations["nation-1"];
+  nation.money = 1400;
+  nation.resources.materials = 60;
+  nation.population.available = 12;
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId,
+    buildingType: "city",
+  });
+
+  const tile = gameState.map.tiles.find((item: any) => item.id === tileId);
+  assert.equal(tile.type, "city");
+  assert.equal(tile.hasMilitaryBase, true);
+  assert.equal(tile.workers, 4);
+  assert.equal(nation.money, 550);
+  assert.equal(nation.resources.materials, 32);
+  assert.equal(nation.population.available, 8);
+  assert.equal(nation.actionPoints, 4);
+  assert.equal(latestRejection(creator), "");
+});
+
+test("city can upgrade an owned military base without buying another base", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const nation = gameState.nations["nation-1"];
+  const tile = makeOwnedTile(gameState, "nation-1", "military", 4);
+  tile.hasMilitaryBase = true;
+  tile.unit = { nationId: "nation-1", strength: 3, branch: "infantry", movedTurn: 0 };
+  nation.money = 1000;
+  nation.resources.materials = 80;
+  nation.population.available = 10;
+  nation.workers.soldiers = 4;
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId: tile.id,
+    buildingType: "city",
+  });
+
+  assert.equal(tile.type, "city");
+  assert.equal(tile.hasMilitaryBase, true);
+  assert.equal(tile.workers, 4);
+  assert.equal(tile.unit?.strength, 3);
+  assert.equal(nation.money, 480);
+  assert.equal(nation.resources.materials, 52);
+  assert.equal(nation.population.available, 10);
+  assert.equal(nation.workers.soldiers, 0);
+  assert.equal(nation.workers.cityWorkers, 8);
+});
+
+test("advanced city construction requires hardwood", async () => {
+  const room = await createRoom(2, { mode: "advanced" });
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  const tileId = buildableTileId(gameState, "nation-1");
+  const nation = gameState.nations["nation-1"];
+  nation.money = 1400;
+  nation.resources.materials = 60;
+  nation.resources.hardwood = 0;
+  nation.population.available = 12;
+
+  await room.messages.playerAction(creator.client, {
+    type: "buildTile",
+    nationId: "nation-1",
+    tileId,
+    buildingType: "city",
+  });
+
+  assert.match(latestRejection(creator), /hardwood/i);
+  assert.equal(gameState.map.tiles.find((item: any) => item.id === tileId).type, "empty");
 });
 
 test("gameplay build action is rejected for the wrong player or wrong turn", async () => {
@@ -949,6 +1034,9 @@ test("generated maps respect water bounds and keep enough viable starting land",
     assert.ok(lakeLikeWaters.length > 0, `${mapSize} seed ${seed} should include lake-like inland water`);
     for (const nation of Object.values(game.nations) as any[]) {
       assert.ok(nation.capitalTileId, `${nation.id} should receive a capital`);
+      const capital = tiles.find((tile: any) => tile.id === nation.capitalTileId);
+      assert.equal(capital?.type, "capitalCity", `${nation.id} capital should use the capital city tile type`);
+      assert.equal(capital?.hasMilitaryBase, true, `${nation.id} capital should include a military base`);
       assert.ok(nation.territory.length > 0, `${nation.id} should receive territory`);
     }
   }
@@ -2654,7 +2742,7 @@ test("advanced mode advanced units require iron and oil", async () => {
   nation.population.available = 40;
   setResources(nation, { materials: 200, education: 200, industry: 200, iron: 0, oil: 0 });
 
-  const military = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && item.type === "military");
+  const military = gameState.map.tiles.find((item: any) => item.ownerId === "nation-1" && (item.hasMilitaryBase || item.type === "military" || item.type === "city" || item.type === "capitalCity"));
   assert.ok(military);
 
   resetActions(gameState, "nation-1");

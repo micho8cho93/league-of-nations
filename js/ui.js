@@ -10,6 +10,7 @@ import {
   isWaterLike,
   isTileActive,
   signed,
+  tileHasMilitaryBase,
   titleCase,
 } from "./utils.js";
 import {
@@ -1277,9 +1278,13 @@ class GameUI {
     const buttons = BUILDING_TYPES.map((type) => {
       const check = this.game.canBuild(tile.id, type, this.game.playerId);
       const resourceBits = [];
+      if (check.resourceCost?.materials) resourceBits.push(`${check.resourceCost.materials} materials`);
       if (check.advancedCost?.hardwood) resourceBits.push(`${check.advancedCost.hardwood} hardwood`);
       if (check.advancedCost?.iron) resourceBits.push(`${check.advancedCost.iron} iron`);
-      const cost = [`$${buildingCost(type, this.game.era)}`, ...resourceBits].join(", ");
+      if (check.peopleCost) resourceBits.push(`${check.peopleCost} people`);
+      if (check.bundledBaseCost) resourceBits.push("includes military base");
+      const moneyCost = check.ok || check.cost ? check.cost : buildingCost(type, this.game.era);
+      const cost = [`$${formatNumber(moneyCost)}`, ...resourceBits].join(", ");
       return `<div>${this.actionPreview("buildTile", check, cost)}<button class="secondary-btn" data-tile-action="build" data-type="${type}" ${this.actionDisabledAttribute("buildTile", check)} title="${escapeHtml(this.actionDisabledReason("buildTile", check))}">${TILE_LABELS[type]} ${escapeHtml(cost)}</button></div>`;
     }).join("");
     return `
@@ -1317,10 +1322,10 @@ class GameUI {
   }
 
   renderMilitaryControls(tile) {
-    if (tile.type !== TILE_TYPES.MILITARY && !tile.unit?.strength) return "";
+    if (!tileHasMilitaryBase(tile) && !tile.unit?.strength) return "";
     const player = this.game.player;
     const visibility = this.getFogVisibility();
-    const train = tile.type === TILE_TYPES.MILITARY
+    const train = tileHasMilitaryBase(tile)
       ? trainingOptionsForNation(player, this.game.era).map((option) => {
           const advancedCost = isAdvancedMode(this.game)
             ? { ...(ironCostForBranch(option.branch) && { iron: ironCostForBranch(option.branch) }), ...(oilCostForBranch(option.branch) && { oil: oilCostForBranch(option.branch) }) }
@@ -1430,7 +1435,11 @@ class GameUI {
     const resourceText = production
       ? ["money", "food", "materials", "education", "industry", "people"].filter((key) => production[key]).map((key) => `${key}: ${signed(production[key])}/turn`).join(" · ")
       : "No active production";
-    const buildCosts = BUILDING_TYPES.map((type) => `${TILE_LABELS[type]} $${formatNumber(buildingCost(type, this.game.era))}`).join(" · ");
+    const buildCosts = BUILDING_TYPES.map((type) => {
+      if (type !== TILE_TYPES.CITY) return `${TILE_LABELS[type]} $${formatNumber(buildingCost(type, this.game.era))}`;
+      const city = BALANCE.costs.city;
+      return `${TILE_LABELS[type]} $${formatNumber(buildingCost(type, this.game.era))} + base if needed, ${city.materials} materials, ${city.people} people`;
+    }).join(" · ");
     this.openDialog("Tile Details", `
       <div class="metric-grid">
         ${metric("Owner", owner ? owner.name : "Unowned")}
@@ -1491,6 +1500,8 @@ class GameUI {
     const deltas = [];
     if (action === "build") {
       deltas.push({ resource: "money", delta: -result.cost });
+      if (result.resourceCost?.materials) deltas.push({ resource: "materials", delta: -result.resourceCost.materials });
+      if (result.peopleCost) deltas.push({ resource: "population", delta: -result.peopleCost });
       if (result.advancedCost?.hardwood) deltas.push({ resource: "hardwood", delta: -result.advancedCost.hardwood });
       if (result.advancedCost?.iron) deltas.push({ resource: "iron", delta: -result.advancedCost.iron });
       deltas.push(...this.buildingProductionDeltas(tile, context.buildingType));
@@ -1748,6 +1759,23 @@ class GameUI {
       this.dialogCloseBtn.hidden = true;
       this.dialogBody.querySelector("#victory-new-game").addEventListener("click", () => window.location.reload());
     });
+  }
+
+  showScenarioIntro(scenario) {
+    if (!scenario) return;
+    const title = scenario.introTitle || scenario.name || "Scenario";
+    const lines = [];
+    if (scenario.subtitle) lines.push(`<p class="scenario-intro-subtitle"><em>${escapeHtml(scenario.subtitle)}</em></p>`);
+    if (scenario.introBody) lines.push(`<p>${escapeHtml(scenario.introBody)}</p>`);
+    else if (scenario.description) lines.push(`<p>${escapeHtml(scenario.description)}</p>`);
+    if (scenario.objectiveSummary) {
+      lines.push(`<h3 class="scenario-intro-heading">Objectives</h3><p>${escapeHtml(scenario.objectiveSummary)}</p>`);
+    }
+    const metaBits = [];
+    if (scenario.difficulty) metaBits.push(`Difficulty: <strong>${escapeHtml(scenario.difficulty)}</strong>`);
+    if (scenario.estimatedLength) metaBits.push(`Length: <strong>${escapeHtml(scenario.estimatedLength)}</strong>`);
+    if (metaBits.length) lines.push(`<p class="scenario-intro-meta">${metaBits.join(" &middot; ")}</p>`);
+    this.openDialog(title, lines.join(""));
   }
 
   showNotice(title, message) {

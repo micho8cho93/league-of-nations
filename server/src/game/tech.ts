@@ -18,6 +18,8 @@ const TILE_TYPES = {
   UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  CITY: "city",
+  CAPITAL_CITY: "capitalCity",
   ROAD: "road",
   RAILROAD: "railroad",
   HIGHWAY: "highway",
@@ -33,6 +35,8 @@ const WORKER_MIN: Record<string, number> = {
   [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.CITY]: 4,
+  [TILE_TYPES.CAPITAL_CITY]: 4,
 };
 
 export const TECH_CATEGORIES: Record<TechCategory, { label: string; tileTypes: string[]; baseCost: number; resource: string }> = {

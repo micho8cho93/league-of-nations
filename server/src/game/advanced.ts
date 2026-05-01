@@ -14,6 +14,8 @@ export const BUILDING_HARDWOOD_COSTS: Record<string, number> = {
   school: 2,
   university: 3,
   military: 2,
+  city: 3,
+  capitalCity: 3,
 };
 
 export const FACTORY_HARDWOOD_COST = 2;
@@ -27,11 +29,12 @@ export const ADVANCED_UNIT_OIL_COSTS: Record<string, number> = {
 };
 
 export function normalizeGameMode(value: unknown) {
-  return value === "advanced" ? "advanced" : "lite";
+  return value === "advanced" || value === "scenario" ? value : "lite";
 }
 
 export function isAdvancedMode(game: Pick<ServerGameState, "settings"> | { settings?: { mode?: unknown } }) {
-  return normalizeGameMode(game?.settings?.mode) === "advanced";
+  const mode = normalizeGameMode(game?.settings?.mode);
+  return mode === "advanced" || mode === "scenario";
 }
 
 export function normalizeAdvancedResources(nation: { resources?: Record<string, number> } | null | undefined) {

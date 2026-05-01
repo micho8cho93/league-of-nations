@@ -85,6 +85,7 @@ let syncingLobbyInputs = false;
 let musicManager = null;
 let currentSetupMode = "lite";
 let currentScenarioId = null;
+let currentScenarioMeta = null;
 
 function syncAppViewportHeight() {
   const viewportHeight = window.visualViewport?.height || window.innerHeight || 0;
@@ -198,7 +199,9 @@ function readSetup() {
     waterLevel: inputs.waterLevel.value,
     landscapeDiversity: normalizeLandscapeDiversity(inputs.landscapeDiversity.value, mode),
     fogOfWarEnabled: inputs.fogOfWarEnabled.checked,
-    nationCount: currentScenarioId ? 4 : clampInt(inputs.nationCount.value, 2, 16, 5),
+    nationCount: currentScenarioId
+      ? clampInt(currentScenarioMeta?.maxPlayers || 4, 2, 16, 4)
+      : clampInt(inputs.nationCount.value, 2, 16, 5),
     maxTurns: clampInt(inputs.maxTurns.value, 10, 120, 30),
     turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: inputs.unlimitedMode.checked,
@@ -425,6 +428,11 @@ async function start(nextGame, { multiplayerSnapshot = null } = {}) {
   renderer = new HexMapRenderer(canvas);
   renderer.setMap(game.map);
   ui = bindUI(game, renderer, { multiplayerClient: multiplayerSnapshot ? multiplayer : null });
+  // Show scenario intro modal once when starting a scenario.
+  if (game.settings?.scenarioId) {
+    const scenarioMeta = getScenario(game.settings.scenarioId);
+    if (scenarioMeta && ui?.showScenarioIntro) ui.showScenarioIntro(scenarioMeta);
+  }
   if (multiplayerSnapshot) renderMultiplayerSnapshotDebug(multiplayerSnapshot, game.playerId);
   window.__leagueOfNations = { game, renderer, ui, multiplayer, multiplayerSnapshot };
 
@@ -521,6 +529,7 @@ function deepClone(value) {
 function openSetupMode(mode) {
   currentSetupMode = normalizeGameMode(mode);
   currentScenarioId = null;
+  currentScenarioMeta = null;
   configureSetupScreen(currentSetupMode);
   modeScreen.hidden = true;
   setupScreen.hidden = false;
@@ -546,19 +555,41 @@ function populateScenarioGrid() {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "scenario-card secondary-btn";
+    const subtitle = scenario.subtitle ? `<em class="scenario-card-subtitle">${escapeHtml(scenario.subtitle)}</em>` : "";
+    const metaParts = [];
+    if (scenario.difficulty) metaParts.push(`Difficulty: ${escapeHtml(scenario.difficulty)}`);
+    if (scenario.estimatedLength) metaParts.push(`Length: ${escapeHtml(scenario.estimatedLength)}`);
+    const meta = metaParts.length ? `<div class="scenario-card-meta">${metaParts.join(" · ")}</div>` : "";
+    const objectives = scenario.objectiveSummary
+      ? `<div class="scenario-card-objectives">${escapeHtml(scenario.objectiveSummary)}</div>`
+      : "";
     card.innerHTML = `
-      <strong>${scenario.name}</strong>
-      <span>${scenario.description}</span>
+      <strong>${escapeHtml(scenario.name)}</strong>
+      ${subtitle}
+      <span>${escapeHtml(scenario.description)}</span>
+      ${meta}
+      ${objectives}
     `;
     card.addEventListener("click", () => startScenario(scenario.id));
     scenarioGrid.appendChild(card);
   }
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[ch]));
+}
+
 function startScenario(scenarioId) {
   const scenario = getScenario(scenarioId);
   if (!scenario) return;
   currentScenarioId = scenarioId;
+  currentScenarioMeta = scenario;
   currentSetupMode = scenario.mode;
   configureScenarioSetupScreen(scenario);
   scenarioScreen.hidden = true;

@@ -223,6 +223,8 @@ const TILE_TYPES = {
   UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  CITY: "city",
+  CAPITAL_CITY: "capitalCity",
   ROAD: "road",
   RAILROAD: "railroad",
   HIGHWAY: "highway",
@@ -240,6 +242,7 @@ const BUILDING_TYPES = [
   TILE_TYPES.UNIVERSITY,
   TILE_TYPES.FACTORY,
   TILE_TYPES.MILITARY,
+  TILE_TYPES.CITY,
 ];
 
 const WORKER_MIN: Record<string, number> = {
@@ -251,6 +254,8 @@ const WORKER_MIN: Record<string, number> = {
   [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.CITY]: 4,
+  [TILE_TYPES.CAPITAL_CITY]: 4,
 };
 
 const WORKER_ROLES = {
@@ -260,6 +265,7 @@ const WORKER_ROLES = {
   SCHOLARS: "scholars",
   ENGINEERS: "engineers",
   SOLDIERS: "soldiers",
+  CITY_WORKERS: "cityWorkers",
 } as const;
 
 const WORKER_ROLE_BY_TILE: Record<string, string> = {
@@ -271,6 +277,8 @@ const WORKER_ROLE_BY_TILE: Record<string, string> = {
   [TILE_TYPES.UNIVERSITY]: WORKER_ROLES.SCHOLARS,
   [TILE_TYPES.FACTORY]: WORKER_ROLES.ENGINEERS,
   [TILE_TYPES.MILITARY]: WORKER_ROLES.SOLDIERS,
+  [TILE_TYPES.CITY]: WORKER_ROLES.CITY_WORKERS,
+  [TILE_TYPES.CAPITAL_CITY]: WORKER_ROLES.CITY_WORKERS,
 };
 
 const HEX_DIRECTIONS = [
@@ -290,7 +298,15 @@ const BUILD_COST: Record<string, number> = {
   [TILE_TYPES.SCHOOL]: 230,
   [TILE_TYPES.UNIVERSITY]: 560,
   [TILE_TYPES.MILITARY]: 330,
+  [TILE_TYPES.CITY]: 520,
+  [TILE_TYPES.CAPITAL_CITY]: 0,
   [TILE_TYPES.FACTORY]: 780,
+};
+
+const CITY_BUILD_COST = {
+  materials: 28,
+  people: 4,
+  hardwood: 3,
 };
 
 const DESTROY_COST: Record<string, number> = {
@@ -402,12 +418,14 @@ const WAR = {
         TILE_TYPES.UNIVERSITY,
         TILE_TYPES.FACTORY,
         TILE_TYPES.MILITARY,
+        TILE_TYPES.CITY,
+        TILE_TYPES.CAPITAL_CITY,
       ],
       flatBonus: 1,
       multiplierBonus: 0.04,
     },
     highValue: {
-      types: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+      types: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY, TILE_TYPES.CITY, TILE_TYPES.CAPITAL_CITY],
       flatBonus: 2,
       multiplierBonus: 0.08,
     },
@@ -416,7 +434,7 @@ const WAR = {
     progressPerVictory: 1,
     capitalRequiredProgress: 3,
     highValueRequiredProgress: 2,
-    highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+    highValueTypes: [TILE_TYPES.FACTORY, TILE_TYPES.MILITARY, TILE_TYPES.CITY],
   },
   exhaustion: {
     max: 100,
@@ -485,6 +503,8 @@ const PRODUCTION: Record<string, Partial<Record<"money" | "food" | "materials" |
   [TILE_TYPES.UNIVERSITY]: { education: 14, money: 52 },
   [TILE_TYPES.FACTORY]: { industry: 8, money: 130 },
   [TILE_TYPES.MILITARY]: { money: 20 },
+  [TILE_TYPES.CITY]: { money: 85, food: 5, materials: 3, education: 3, industry: 1 },
+  [TILE_TYPES.CAPITAL_CITY]: { money: 110, food: 7, materials: 4, education: 4, industry: 2 },
 };
 
 export function applyServerPlayerAction(
@@ -832,11 +852,19 @@ function buildTile(game: ServerGameState, tileId: string, type: string, nationId
   if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
   if (check.advancedCost?.hardwood) nation.resources.hardwood = resourceCount(nation, "hardwood") - check.advancedCost.hardwood;
   if (check.advancedCost?.iron) nation.resources.iron = resourceCount(nation, "iron") - check.advancedCost.iron;
+  if (check.resourceCost?.materials) nation.resources.materials = resourceCount(nation, "materials") - check.resourceCost.materials;
+  const peopleCost = check.peopleCost || 0;
+  if (type === TILE_TYPES.CITY && peopleCost > 0) {
+    if (tile.type === TILE_TYPES.MILITARY) releaseTileWorkers(game, tile);
+    nation.population.available = numberValue(nation.population.available) - peopleCost;
+    nation.workers[WORKER_ROLES.CITY_WORKERS] = workerCount(nation, WORKER_ROLES.CITY_WORKERS) + peopleCost;
+  }
 
   tile.ownerId = nationId;
   tile.type = type;
-  tile.workers = 0;
-  tile.unit = null;
+  tile.hasMilitaryBase = type === TILE_TYPES.MILITARY || type === TILE_TYPES.CITY || type === TILE_TYPES.CAPITAL_CITY;
+  tile.workers = type === TILE_TYPES.CITY ? peopleCost : 0;
+  if (type !== TILE_TYPES.CITY && type !== TILE_TYPES.CAPITAL_CITY && type !== TILE_TYPES.MILITARY) tile.unit = null;
   incrementStat(nation, "built", 1);
   recomputeTerritories(game);
   addEvent(game, `${nation.name} built a ${typeLabel(type)} for $${check.cost}.`, {
@@ -845,7 +873,14 @@ function buildTile(game: ServerGameState, tileId: string, type: string, nationId
     tileId: tile.id,
   });
 
-  return { ok: true, cost: check.cost, advancedCost: check.advancedCost || null };
+  return {
+    ok: true,
+    cost: check.cost,
+    advancedCost: check.advancedCost || null,
+    resourceCost: check.resourceCost || null,
+    peopleCost: check.peopleCost || 0,
+    bundledBaseCost: check.bundledBaseCost || 0,
+  };
 }
 
 function canBuildInfrastructure(
@@ -908,6 +943,7 @@ function destroyTile(game: ServerGameState, tileId: string, nationId: string): A
   spendMoney(nation, cost);
   releaseTileWorkers(game, tile);
   tile.type = destroyedFallbackType(tile.type);
+  tile.hasMilitaryBase = false;
   tile.unit = null;
   incrementStat(nation, "destroyed", 1);
   addEvent(game, `${nation.name} cleared a tile for $${cost}.`, {
@@ -998,7 +1034,7 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
   const branch = normalizeUnitType(rawBranch);
   if (!isKnownUnitType(rawBranch)) return reject("INVALID_PAYLOAD", "Unknown unit branch.");
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
-  if (!tile || tile.ownerId !== nationId || tile.type !== TILE_TYPES.MILITARY) {
+  if (!tile || tile.ownerId !== nationId || !tileHasMilitaryBase(tile)) {
     return { ok: false, reason: "Training requires an owned military base." };
   }
   if (branch !== "infantry" && (game.era < 4 || (techBranchLevel(nation, branch) || 0) <= 0)) {
@@ -1341,7 +1377,7 @@ function canBuild(
   tileId: string,
   type: string,
   nationId: string,
-): { ok: true; cost: number; advancedCost?: { hardwood: number; iron: number } } | { ok: false; reason: string } {
+): { ok: true; cost: number; advancedCost?: { hardwood: number; iron: number }; resourceCost?: { materials?: number }; peopleCost?: number; bundledBaseCost?: number } | { ok: false; reason: string } {
   const nation = game.nations[nationId];
   const tile = tileById(game, tileId);
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
@@ -1351,7 +1387,15 @@ function canBuild(
   if (!tileTypeUnlocked(type, game.era)) return { ok: false, reason: "This building is not unlocked yet." };
   const techCheck = validateBuildingTechRequirement(type, nation, game.era);
   if (!techCheck.ok) return techCheck;
-  if (type === TILE_TYPES.FISHERY) {
+  if (type === TILE_TYPES.CITY) {
+    const upgradesMilitaryBase = tile.ownerId === nationId && tile.type === TILE_TYPES.MILITARY;
+    const purchasesMilitaryBase = tile.type === TILE_TYPES.EMPTY;
+    if (!isLand(tile)) return { ok: false, reason: "Cities require land." };
+    if (tile.isCapital || tile.type === TILE_TYPES.CAPITAL_CITY) return { ok: false, reason: "Capital cities already occupy this tile." };
+    if (!upgradesMilitaryBase && !purchasesMilitaryBase) {
+      return { ok: false, reason: "Cities require an owned military base or empty land where one can be purchased." };
+    }
+  } else if (type === TILE_TYPES.FISHERY) {
     if (tile.type !== TILE_TYPES.WATER) return { ok: false, reason: "Fisheries require lake or ocean water." };
   } else if (type === TILE_TYPES.MOUNTAIN_MINE) {
     if (tile.type !== TILE_TYPES.MOUNTAIN) return { ok: false, reason: "Mountain mines require mountains." };
@@ -1372,17 +1416,25 @@ function canBuild(
     if (!factoryCheck.ok) return factoryCheck;
   }
 
-  const cost = buildingCost(type, game.era);
+  const bundledBaseCost = type === TILE_TYPES.CITY && tile.type !== TILE_TYPES.MILITARY ? buildingCost(TILE_TYPES.MILITARY, game.era) : 0;
+  const cost = buildingCost(type, game.era) + bundledBaseCost;
   if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+  const resourceCost: { materials?: number } = {};
+  const peopleCost = type === TILE_TYPES.CITY ? CITY_BUILD_COST.people : 0;
+  if (type === TILE_TYPES.CITY) {
+    resourceCost.materials = CITY_BUILD_COST.materials;
+    if (resourceCount(nation, "materials") < resourceCost.materials) return { ok: false, reason: `Requires ${resourceCost.materials} materials.` };
+    if (numberValue(nation.population.available) < peopleCost) return { ok: false, reason: `Requires ${peopleCost} available population.` };
+  }
   if (isAdvancedMode(game)) {
     normalizeAdvancedResources(nation);
-    const hardwoodCost = hardwoodCostForBuilding(type);
+    const hardwoodCost = type === TILE_TYPES.CITY ? CITY_BUILD_COST.hardwood : hardwoodCostForBuilding(type);
     const ironCost = ironCostForFactory(type);
     if (hardwoodCost > 0 && resourceCount(nation, "hardwood") < hardwoodCost) return { ok: false, reason: `Requires ${hardwoodCost} hardwood.` };
     if (ironCost > 0 && resourceCount(nation, "iron") < ironCost) return { ok: false, reason: `Requires ${ironCost} iron.` };
-    return { ok: true, cost, advancedCost: { hardwood: hardwoodCost, iron: ironCost } };
+    return { ok: true, cost, advancedCost: { hardwood: hardwoodCost, iron: ironCost }, resourceCost, peopleCost, bundledBaseCost };
   }
-  return { ok: true, cost };
+  return { ok: true, cost, resourceCost, peopleCost, bundledBaseCost };
 }
 
 export function getActionCost(actionType: string, _game: ServerGameState, _playerNation?: Nation) {
@@ -2151,8 +2203,18 @@ function conquerNation(game: ServerGameState, defenderId: string, winnerId: stri
 }
 
 function defenderStrength(tile: Tile) {
-  const base = tile.type === TILE_TYPES.MILITARY ? Math.max(tile.workers || 0, WORKER_MIN[TILE_TYPES.MILITARY]) : Math.ceil((tile.workers || 0) / 2);
+  const base = tileHasMilitaryBase(tile) ? Math.max(tile.workers || 0, WORKER_MIN[TILE_TYPES.MILITARY]) : Math.ceil((tile.workers || 0) / 2);
   return base + (tile.unit?.strength || 0);
+}
+
+function tileHasMilitaryBase(tile: Tile | null | undefined) {
+  return Boolean(
+    tile &&
+      (tile.hasMilitaryBase ||
+        tile.type === TILE_TYPES.MILITARY ||
+        tile.type === TILE_TYPES.CITY ||
+        tile.type === TILE_TYPES.CAPITAL_CITY)
+  );
 }
 
 function tileDefenseModifier(tile: Tile) {
@@ -2266,7 +2328,7 @@ function removePopulation(nation: Nation, rawAmount: number) {
   nation.population.available -= fromAvailable;
   nation.population.total -= fromAvailable;
   remaining -= fromAvailable;
-  for (const role of [WORKER_ROLES.SOLDIERS, WORKER_ROLES.ENGINEERS, WORKER_ROLES.SCHOLARS, WORKER_ROLES.MINERS, WORKER_ROLES.FISHERS, WORKER_ROLES.FARMERS]) {
+  for (const role of [WORKER_ROLES.SOLDIERS, WORKER_ROLES.ENGINEERS, WORKER_ROLES.SCHOLARS, WORKER_ROLES.MINERS, WORKER_ROLES.FISHERS, WORKER_ROLES.FARMERS, WORKER_ROLES.CITY_WORKERS]) {
     if (remaining <= 0) break;
     const lost = Math.min(workerCount(nation, role), remaining);
     nation.workers[role] = workerCount(nation, role) - lost;
@@ -2430,7 +2492,7 @@ function militaryPower(game: ServerGameState, nationId: string) {
     .filter((tile) => tile.ownerId === nationId)
     .reduce((sum, tile) => sum + numberValue(tile.unit?.strength), 0);
   const staffedBases = game.map.tiles
-    .filter((tile) => tile.ownerId === nationId && tile.type === TILE_TYPES.MILITARY)
+    .filter((tile) => tile.ownerId === nationId && tileHasMilitaryBase(tile))
     .reduce((sum, tile) => sum + numberValue(tile.workers), 0);
   return Math.round(
     unitStrength +
@@ -2644,6 +2706,7 @@ function normalizeMaxActionPoints(value: unknown) {
 
 function typeLabel(type: string) {
   if (type === TILE_TYPES.MILITARY) return "Military Base";
+  if (type === TILE_TYPES.CAPITAL_CITY) return "Capital City";
   if (type === TILE_TYPES.MOUNTAIN_MINE) return "Mountain Mine";
   return String(type).replace(/^\w/, (letter) => letter.toUpperCase());
 }

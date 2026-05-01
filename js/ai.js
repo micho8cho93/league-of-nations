@@ -8,10 +8,10 @@ import { RELIGION_IDS, SOCIETY, normalizeSociety } from "./cultureReligion.js";
 
 // First type in each list is built first each turn (overridden temporarily by food pressure)
 const PERSONALITY_BUILD_ORDER = {
-  aggressive:  [TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE, TILE_TYPES.FARM, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL],
-  economic:    [TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL, TILE_TYPES.MILITARY],
-  scientific:  [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY, TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
-  balanced:    [TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+  aggressive:  [TILE_TYPES.MILITARY, TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE, TILE_TYPES.FARM, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL, TILE_TYPES.CITY],
+  economic:    [TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE, TILE_TYPES.CITY, TILE_TYPES.FACTORY, TILE_TYPES.SCHOOL, TILE_TYPES.MILITARY],
+  scientific:  [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY, TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.CITY, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
+  balanced:    [TILE_TYPES.FARM, TILE_TYPES.FISHERY, TILE_TYPES.MINE, TILE_TYPES.SCHOOL, TILE_TYPES.CITY, TILE_TYPES.FACTORY, TILE_TYPES.MILITARY],
 };
 
 export async function processBotTurn(game, botId) {
@@ -211,6 +211,15 @@ function chooseBuildTile(game, bot, type) {
     if (type === TILE_TYPES.MILITARY && game.neighbors(tile.id).some((n) => n.ownerId && n.ownerId !== bot.id)) {
       weight += (p === "aggressive" ? 5 : 3);
     }
+    if (type === TILE_TYPES.CITY) {
+      if (tile.type === TILE_TYPES.MILITARY) weight += 4;
+      if (game.logisticsSummaryFor) {
+        const logistics = game.logisticsSummaryFor(bot.id);
+        const capital = logistics.infrastructure?.capital;
+        if (capital) weight += Math.min(4, Math.max(0, Math.ceil(Math.abs(tile.q - capital.q) + Math.abs(tile.r - capital.r)) / 3));
+      }
+      if (p === "economic" || p === "balanced") weight += 2;
+    }
     // Factories: economic bots prefer tiles adjacent to mines or farms
     if (type === TILE_TYPES.FACTORY && p === "economic") {
       const nearInfra = game.neighbors(tile.id).some((n) => n.ownerId === bot.id &&
@@ -226,7 +235,7 @@ function tryTrain(game, bot) {
   // Aggressive trains every turn; balanced 25%; economic/scientific 10% for minimal garrison
   const trainChance = { aggressive: 1.0, balanced: 0.25, economic: 0.10, scientific: 0.10 };
   if (game.rng() > (trainChance[bot.personality] ?? 0.25)) return false;
-  const bases = game.tiles.filter((tile) => tile.ownerId === bot.id && tile.type === TILE_TYPES.MILITARY);
+  const bases = game.tiles.filter((tile) => tile.ownerId === bot.id && (tile.hasMilitaryBase || tile.type === TILE_TYPES.MILITARY || tile.type === TILE_TYPES.CITY || tile.type === TILE_TYPES.CAPITAL_CITY));
   if (!bases.length) return false;
   const base = bases.sort((a, b) => (a.unit?.strength || 0) - (b.unit?.strength || 0))[0];
   // Aggressive trains larger units to project power faster

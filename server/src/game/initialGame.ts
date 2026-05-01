@@ -109,6 +109,7 @@ interface Tile {
   };
   regionId: number | null;
   isCapital: boolean;
+  hasMilitaryBase?: boolean;
   effects: {
     disabledTurns: number;
     floodedTurns: number;
@@ -190,6 +191,8 @@ const TILE_TYPES = {
   UNIVERSITY: "university",
   FACTORY: "factory",
   MILITARY: "military",
+  CITY: "city",
+  CAPITAL_CITY: "capitalCity",
   ROAD: "road",
   RAILROAD: "railroad",
   HIGHWAY: "highway",
@@ -205,6 +208,7 @@ const WORKER_ROLES = {
   SCHOLARS: "scholars",
   ENGINEERS: "engineers",
   SOLDIERS: "soldiers",
+  CITY_WORKERS: "cityWorkers",
 } as const;
 
 const WORKER_MIN = {
@@ -216,6 +220,8 @@ const WORKER_MIN = {
   [TILE_TYPES.UNIVERSITY]: 5,
   [TILE_TYPES.FACTORY]: 5,
   [TILE_TYPES.MILITARY]: 4,
+  [TILE_TYPES.CITY]: 4,
+  [TILE_TYPES.CAPITAL_CITY]: 4,
 };
 
 const NATION_COLOR_PALETTE = [
@@ -565,6 +571,7 @@ function createNation({
       [WORKER_ROLES.SCHOLARS]: 0,
       [WORKER_ROLES.ENGINEERS]: 0,
       [WORKER_ROLES.SOLDIERS]: 6,
+      [WORKER_ROLES.CITY_WORKERS]: 4,
     },
     diplomacy: {},
     military: {
@@ -729,6 +736,7 @@ function createMapData(settings: InitialGameSettings): ServerGameState["map"] {
       unit: null,
       regionId: null,
       isCapital: false,
+      hasMilitaryBase: false,
       effects: {
         disabledTurns: 0,
         floodedTurns: 0,
@@ -1096,8 +1104,9 @@ function claimStartingCluster(map: ServerGameState["map"], nation: Nation, cente
   const capital = claimed[0];
   if (capital) {
     capital.isCapital = true;
-    capital.type = TILE_TYPES.MILITARY;
-    capital.workers = WORKER_MIN[TILE_TYPES.MILITARY];
+    capital.type = TILE_TYPES.CAPITAL_CITY;
+    capital.hasMilitaryBase = true;
+    capital.workers = WORKER_MIN[TILE_TYPES.CAPITAL_CITY];
     capital.unit = {
       nationId: nation.id,
       strength: 4,

@@ -6,6 +6,7 @@ import {
   isLand,
   isWaterLike,
   pairKey,
+  tileHasMilitaryBase,
   tileId,
 } from "./utils.js";
 import {
@@ -529,6 +530,7 @@ function isSupplyTile(game, tile, nationId) {
 function isSupplyAnchor(tile, config) {
   return Boolean(
     tile?.isCapital ||
+    tileHasMilitaryBase(tile) ||
     config.anchorTypes.includes(tile?.type)
   );
 }
@@ -563,7 +565,7 @@ function clampMobilizationLevel(value) {
 
 export function defenderStrength(tile) {
   if (!tile) return 0;
-  const base = tile.type === TILE_TYPES.MILITARY ? Math.max(tile.workers || 0, WORKER_MIN[TILE_TYPES.MILITARY]) : Math.ceil((tile.workers || 0) / 2);
+  const base = tileHasMilitaryBase(tile) ? Math.max(tile.workers || 0, WORKER_MIN[TILE_TYPES.MILITARY]) : Math.ceil((tile.workers || 0) / 2);
   return base + (tile.unit?.strength || 0);
 }
 
@@ -580,7 +582,7 @@ export function canStrategicallyDeclare(game, attackerId, defenderId) {
 export function adjacentOwnedMilitaryBases(game, tile, nationId) {
   return axialNeighbors(tile.q, tile.r)
     .map((coord) => game.tileAt(coord.q, coord.r))
-    .filter((neighbor) => neighbor?.ownerId === nationId && neighbor.type === TILE_TYPES.MILITARY);
+    .filter((neighbor) => neighbor?.ownerId === nationId && tileHasMilitaryBase(neighbor));
 }
 
 function reachableMoveTargets(game, from, nationId, unitType) {

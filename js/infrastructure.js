@@ -76,11 +76,13 @@ export function canTileHostInfrastructure(tile, type) {
 export function computeInfrastructureState(tiles = [], nation = null) {
   const territoryTiles = (tiles || []).filter((tile) => tile.ownerId === nation?.id);
   const capital = territoryTiles.find((tile) => tile.id === nation?.capitalTileId || tile.isCapital) || null;
+  const hubs = territoryTiles.filter((tile) => tile === capital || tile.type === "city" || tile.type === "capitalCity");
+  if (capital && !hubs.includes(capital)) hubs.unshift(capital);
   const index = new Map((tiles || []).map((tile) => [tile.id, tile]));
   const connectedByType = {
-    [INFRASTRUCTURE_TYPES.ROAD]: connectedInfrastructureFromCapital(index, capital, nation?.id, INFRASTRUCTURE_TYPES.ROAD),
-    [INFRASTRUCTURE_TYPES.RAIL]: connectedInfrastructureFromCapital(index, capital, nation?.id, INFRASTRUCTURE_TYPES.RAIL),
-    [INFRASTRUCTURE_TYPES.ADVANCED]: connectedInfrastructureFromCapital(index, capital, nation?.id, INFRASTRUCTURE_TYPES.ADVANCED),
+    [INFRASTRUCTURE_TYPES.ROAD]: connectedInfrastructureFromHubs(index, hubs, nation?.id, INFRASTRUCTURE_TYPES.ROAD),
+    [INFRASTRUCTURE_TYPES.RAIL]: connectedInfrastructureFromHubs(index, hubs, nation?.id, INFRASTRUCTURE_TYPES.RAIL),
+    [INFRASTRUCTURE_TYPES.ADVANCED]: connectedInfrastructureFromHubs(index, hubs, nation?.id, INFRASTRUCTURE_TYPES.ADVANCED),
   };
   const allConnected = new Set([
     ...connectedByType[INFRASTRUCTURE_TYPES.ROAD],
@@ -99,6 +101,7 @@ export function computeInfrastructureState(tiles = [], nation = null) {
   };
   return {
     capital,
+    hubs,
     index,
     territoryTiles,
     connectedByType,
@@ -111,8 +114,8 @@ export function computeNationLogistics(tiles = [], nation = null) {
   const infrastructure = computeInfrastructureState(tiles, nation);
   const total = Math.max(1, infrastructure.counts.total);
   const distances = infrastructure.territoryTiles
-    .filter((tile) => !tile.isCapital && infrastructure.capital)
-    .map((tile) => hexDistance(infrastructure.capital, tile));
+    .filter((tile) => !tile.isCapital && infrastructure.hubs?.length)
+    .map((tile) => Math.min(...infrastructure.hubs.map((hub) => hexDistance(hub, tile))));
   const averageDistance = distances.length
     ? distances.reduce((sum, value) => sum + value, 0) / distances.length
     : 0;
@@ -179,12 +182,20 @@ export function canUseInfrastructureEdge(logistics, fromTileId, toTileId, unitTy
 }
 
 function connectedInfrastructureFromCapital(index, capital, nationId, type) {
+  return connectedInfrastructureFromHubs(index, capital ? [capital] : [], nationId, type);
+}
+
+function connectedInfrastructureFromHubs(index, hubs, nationId, type) {
   const connected = new Set();
-  if (!capital || !nationId) return connected;
-  if (tileInfrastructureType(capital) === type) connected.add(capital.id);
+  if (!hubs?.length || !nationId) return connected;
   const queue = [];
-  const seen = new Set([capital.id]);
-  queue.push(capital);
+  const seen = new Set();
+  for (const hub of hubs) {
+    if (!hub) continue;
+    seen.add(hub.id);
+    if (tileInfrastructureType(hub) === type) connected.add(hub.id);
+    queue.push(hub);
+  }
   while (queue.length) {
     const current = queue.shift();
     if (!current) continue;

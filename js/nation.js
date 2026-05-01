@@ -86,6 +86,7 @@ export function createNation({
       [WORKER_ROLES.SCHOLARS]: 0,
       [WORKER_ROLES.ENGINEERS]: 0,
       [WORKER_ROLES.SOLDIERS]: 6,
+      [WORKER_ROLES.CITY_WORKERS]: 4,
     },
     diplomacy: {},
     military: {
@@ -194,6 +195,7 @@ export function removePopulation(nation, amount) {
     WORKER_ROLES.MINERS,
     WORKER_ROLES.FISHERS,
     WORKER_ROLES.FARMERS,
+    WORKER_ROLES.CITY_WORKERS,
   ];
   for (const role of roleOrder) {
     if (remaining <= 0) break;
@@ -215,7 +217,9 @@ export function militaryPower(nation, tiles = []) {
   if (!nation || !nation.active) return 0;
   const owned = tiles.length ? ownedTiles(nation, tiles) : [];
   const unitStrength = owned.reduce((sum, tile) => sum + (tile.unit?.strength || 0), 0);
-  const staffedBases = owned.filter((tile) => tile.type === TILE_TYPES.MILITARY).reduce((sum, tile) => sum + (tile.workers || 0), 0);
+  const staffedBases = owned
+    .filter((tile) => tile.hasMilitaryBase || tile.type === TILE_TYPES.MILITARY || tile.type === TILE_TYPES.CITY || tile.type === TILE_TYPES.CAPITAL_CITY)
+    .reduce((sum, tile) => sum + (tile.workers || 0), 0);
   const power = BALANCE.militaryPower;
   const branchPower =
     nation.tech.branches.tanks * power.branch.tanks +

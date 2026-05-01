@@ -4,6 +4,7 @@ import {
   MAX_ACTIONS_PER_TURN,
   TILE_TYPES,
   WORKER_MIN,
+  WORKER_ROLES,
   WORKER_ROLE_BY_TILE,
   computeFogOfWarVisibility,
   axialNeighbors,
@@ -17,12 +18,17 @@ import {
   nationColor,
   pairKey,
   randomSeed,
+  tileHasMilitaryBase,
   tileId,
 } from "./utils.js";
 import {
   getScenarioMap,
   getScenarioObjectives,
   getScenarioStartingPositions,
+  getScenarioRuleOverrides,
+  getScenarioStartingAlliances,
+  getScenarioTurnLimit,
+  getScenarioEvents,
 } from "./scenarios.js";
 import {
   BALANCE,
@@ -300,7 +306,7 @@ export class GameState {
         const nation = nations[nationId];
         if (nation && posData.startTiles) {
           for (const [q, r] of posData.startTiles) {
-            const tile = map.tiles.find((t) => t.q === q && t.r === r);
+            const tile = findOrNearestLandTile(map, q, r, 4);
             if (tile) {
               tile.ownerId = nationId;
             }
@@ -311,6 +317,28 @@ export class GameState {
             for (const [res, amount] of Object.entries(posData.startingResources)) {
               nation.resources[res] = amount;
             }
+          }
+          // Faction metadata is preserved on the nation so victory checks
+          // and event hooks can map nationId → factionId without lookups.
+          if (posData.factionId) nation.factionId = posData.factionId;
+          if (posData.bloc) nation.bloc = posData.bloc;
+          // Mark capital tile (first start tile, or nearest land to capital coord).
+          const capitalTile = posData.startTiles[0]
+            ? findOrNearestLandTile(map, posData.startTiles[0][0], posData.startTiles[0][1], 4)
+            : null;
+          if (capitalTile) {
+            capitalTile.isCapital = true;
+            capitalTile.type = TILE_TYPES.CAPITAL_CITY;
+            capitalTile.hasMilitaryBase = true;
+            capitalTile.workers = WORKER_MIN[TILE_TYPES.CAPITAL_CITY];
+            capitalTile.unit = {
+              nationId,
+              strength: 4,
+              branch: "infantry",
+              movedTurn: 0,
+            };
+            nation.capitalTileId = capitalTile.id;
+            capitalTile.ownerId = nationId;
           }
         }
       }
@@ -333,6 +361,16 @@ export class GameState {
       objectives = getScenarioObjectives(settings.scenarioId);
     }
 
+    // Scenario rule overrides — stashed on settings so other systems can
+    // read them without depending on scenarios.js. Unused fields are
+    // retained as data for future extensions.
+    if (settings.scenarioId) {
+      const overrides = getScenarioRuleOverrides(settings.scenarioId);
+      if (overrides) settings.scenarioOverrides = { ...overrides };
+      const turnLimit = getScenarioTurnLimit(settings.scenarioId);
+      if (turnLimit && !settings.unlimitedMode) settings.maxTurns = turnLimit;
+    }
+
     const game = new GameState({
       settings,
       map,
@@ -341,6 +379,11 @@ export class GameState {
       botIds,
       objectives,
     });
+
+    // Scenario alliances + events are applied after GameState exists so
+    // game.alliances and game.scenarioEvents are normalized.
+    if (settings.scenarioId) applyScenarioStartupExtras(game, settings.scenarioId);
+
     game.addEvent(`Game started with ${settings.nationCount} nations on a ${settings.mapSize.toLowerCase()} map.`, { type: "system" });
     for (const botId of botIds) {
       game.addEvent(`${game.nations[botId].name} plays as a ${game.nations[botId].personality} nation.`, { nationId: botId, type: "ai" });
@@ -620,7 +663,15 @@ export class GameState {
     if (!BUILDING_TYPES.includes(type)) return { ok: false, reason: "Unknown building type." };
     const techCheck = buildingTechRequirement(type, nation, this.era);
     if (!techCheck.ok) return techCheck;
-    if (type === TILE_TYPES.FISHERY) {
+    if (type === TILE_TYPES.CITY) {
+      const upgradesMilitaryBase = tile.ownerId === nationId && tile.type === TILE_TYPES.MILITARY;
+      const purchasesMilitaryBase = tile.type === TILE_TYPES.EMPTY;
+      if (!isLand(tile)) return { ok: false, reason: "Cities require land." };
+      if (tile.isCapital || tile.type === TILE_TYPES.CAPITAL_CITY) return { ok: false, reason: "Capital cities already occupy this tile." };
+      if (!upgradesMilitaryBase && !purchasesMilitaryBase) {
+        return { ok: false, reason: "Cities require an owned military base or empty land where one can be purchased." };
+      }
+    } else if (type === TILE_TYPES.FISHERY) {
       if (tile.type !== TILE_TYPES.WATER) return { ok: false, reason: "Fisheries require lake or ocean water." };
     } else if (type === TILE_TYPES.MOUNTAIN_MINE) {
       if (tile.type !== TILE_TYPES.MOUNTAIN) return { ok: false, reason: "Mountain mines require mountains." };
@@ -636,12 +687,20 @@ export class GameState {
       const factoryCheck = canBuildFactory(nation, this.tiles, this.era);
       if (!factoryCheck.ok) return factoryCheck;
     }
-    const cost = buildingCost(type, this.era);
+    const bundledBaseCost = type === TILE_TYPES.CITY && tile.type !== TILE_TYPES.MILITARY ? buildingCost(TILE_TYPES.MILITARY, this.era) : 0;
+    const cost = buildingCost(type, this.era) + bundledBaseCost;
     if (nation.money < cost) return { ok: false, reason: `Requires $${cost}.` };
+    const resourceCost = {};
+    const peopleCost = type === TILE_TYPES.CITY ? BALANCE.costs.city.people : 0;
+    if (type === TILE_TYPES.CITY) {
+      resourceCost.materials = BALANCE.costs.city.materials;
+      if ((nation.resources.materials || 0) < resourceCost.materials) return { ok: false, reason: `Requires ${resourceCost.materials} materials.` };
+      if ((nation.population.available || 0) < peopleCost) return { ok: false, reason: `Requires ${peopleCost} available population.` };
+    }
     if (isAdvancedMode(this)) {
       normalizeAdvancedResources(nation);
       const advancedCost = {};
-      const hardwoodCost = hardwoodCostForBuilding(type);
+      const hardwoodCost = type === TILE_TYPES.CITY ? BALANCE.costs.city.advancedHardwood : hardwoodCostForBuilding(type);
       const ironCost = ironCostForFactory(type);
       if (hardwoodCost > 0) {
         if (nation.resources.hardwood < hardwoodCost) return { ok: false, reason: `Requires ${hardwoodCost} hardwood.` };
@@ -651,9 +710,9 @@ export class GameState {
         if (nation.resources.iron < ironCost) return { ok: false, reason: `Requires ${ironCost} iron.` };
         advancedCost.iron = ironCost;
       }
-      return { ok: true, cost, advancedCost };
+      return { ok: true, cost, advancedCost, resourceCost, peopleCost, bundledBaseCost };
     }
-    return { ok: true, cost };
+    return { ok: true, cost, resourceCost, peopleCost, bundledBaseCost };
   }
 
   buildTile(tileIdValue, type, nationId = this.playerId, { silent = false } = {}) {
@@ -667,15 +726,29 @@ export class GameState {
     if (!spendMoney(nation, check.cost)) return { ok: false, reason: "Not enough money." };
     if (check.advancedCost?.hardwood) nation.resources.hardwood -= check.advancedCost.hardwood;
     if (check.advancedCost?.iron) nation.resources.iron -= check.advancedCost.iron;
+    if (check.resourceCost?.materials) nation.resources.materials -= check.resourceCost.materials;
+    if (type === TILE_TYPES.CITY && check.peopleCost > 0) {
+      if (tile.type === TILE_TYPES.MILITARY) this.releaseTileWorkers(tile);
+      nation.population.available -= check.peopleCost;
+      nation.workers[WORKER_ROLES.CITY_WORKERS] = (nation.workers[WORKER_ROLES.CITY_WORKERS] || 0) + check.peopleCost;
+    }
     tile.ownerId = nationId;
     tile.type = type;
-    tile.workers = 0;
-    tile.unit = null;
+    tile.hasMilitaryBase = type === TILE_TYPES.MILITARY || type === TILE_TYPES.CITY || type === TILE_TYPES.CAPITAL_CITY;
+    tile.workers = type === TILE_TYPES.CITY ? check.peopleCost : 0;
+    if (type !== TILE_TYPES.CITY && type !== TILE_TYPES.CAPITAL_CITY && type !== TILE_TYPES.MILITARY) tile.unit = null;
     nation.stats.built += 1;
     this.recomputeTerritories();
     if (!silent) this.addEvent(`${nation.name} built a ${typeLabel(type)} for $${check.cost}.`, { nationId, type: "build", tileId: tile.id });
     this.changed("build");
-    return { ok: true, cost: check.cost, advancedCost: check.advancedCost || null };
+    return {
+      ok: true,
+      cost: check.cost,
+      advancedCost: check.advancedCost || null,
+      resourceCost: check.resourceCost || null,
+      peopleCost: check.peopleCost || 0,
+      bundledBaseCost: check.bundledBaseCost || 0,
+    };
   }
 
   canBuildInfrastructure(tileIdValue, infrastructureType, nationId = this.playerId) {
@@ -734,6 +807,7 @@ export class GameState {
     spendMoney(nation, cost);
     this.releaseTileWorkers(tile);
     tile.type = destroyedFallbackType(tile.type);
+    tile.hasMilitaryBase = false;
     tile.unit = null;
     nation.stats.destroyed += 1;
     this.addEvent(`${nation.name} cleared a tile for $${cost}.`, { nationId, type: "build", tileId: tile.id });
@@ -801,13 +875,20 @@ export class GameState {
     const nation = this.nations[nationId];
     const amount = Math.max(1, Math.floor(Number(strength) || 1));
     const unitBranch = branch || "infantry";
-    if (!tile || tile.ownerId !== nationId || tile.type !== TILE_TYPES.MILITARY) {
+    if (!tile || tile.ownerId !== nationId || !tileHasMilitaryBase(tile)) {
       return { ok: false, reason: "Training requires an owned military base." };
     }
     if (unitBranch !== "infantry" && (this.era < 4 || (nation.tech.branches[unitBranch] || 0) <= 0)) {
       return { ok: false, reason: "Research this military branch before deploying it." };
     }
     const cost = trainingCost(amount, this.era, unitBranch, nation.tech.branches[unitBranch] || 0);
+    // Scenario rule override: multiply unit costs (e.g. WW2 makes units pricier).
+    const unitCostMul = Number(this.settings?.scenarioOverrides?.unitCostMultiplier) || 1;
+    if (unitCostMul !== 1) {
+      cost.money = Math.ceil(cost.money * unitCostMul);
+      cost.materials = Math.ceil(cost.materials * unitCostMul);
+      if (cost.industry) cost.industry = Math.ceil(cost.industry * unitCostMul);
+    }
     if (nation.money < cost.money) return { ok: false, reason: `Requires $${cost.money}.` };
     if (nation.population.available < cost.people) return { ok: false, reason: `Requires ${cost.people} available population.` };
     if (nation.resources.materials < cost.materials) return { ok: false, reason: `Requires ${cost.materials} materials.` };
@@ -1681,7 +1762,10 @@ export class GameState {
     const capacity = nation.territory.length * BALANCE.population.capacityPerTile;
     const headroom = Math.max(0, capacity - nation.population.total);
     const stockSurplus = Math.max(0, available - demand);
-    const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * FRUIT_SURPLUS_GROWTH_RATE)) : 0;
+    // Scenario rule override: slow population growth (e.g. WW2 wartime drag).
+    const growthMul = Number(this.settings?.scenarioOverrides?.growthRateMultiplier) || 1;
+    const effectiveGrowthRate = FRUIT_SURPLUS_GROWTH_RATE * growthMul;
+    const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * effectiveGrowthRate)) : 0;
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
@@ -1882,6 +1966,57 @@ export class GameState {
   }
 }
 
+// Scenario helper: find the requested tile if it exists on land, else the
+// nearest land tile within `radius` hexes. Falls back to null if none.
+function findOrNearestLandTile(map, q, r, radius = 3) {
+  const direct = map.tiles.find((t) => t.q === q && t.r === r);
+  if (direct && direct.terrain === "land") return direct;
+  let best = null;
+  let bestDist = Infinity;
+  for (const tile of map.tiles) {
+    if (tile.terrain !== "land") continue;
+    const dist = Math.max(Math.abs(tile.q - q), Math.abs(tile.r - r), Math.abs((tile.q + tile.r) - (q + r)));
+    if (dist <= radius && dist < bestDist) {
+      best = tile;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+// Scenario helper: seed pre-formed alliances from faction blocs and stash
+// any scenario events on the game for downstream consumers.
+function applyScenarioStartupExtras(game, scenarioId) {
+  const startingAlliances = getScenarioStartingAlliances(scenarioId) || [];
+  if (startingAlliances.length) {
+    const factionToNation = {};
+    for (const nation of Object.values(game.nations)) {
+      if (nation.factionId) factionToNation[nation.factionId] = nation.id;
+    }
+    for (const bloc of startingAlliances) {
+      const memberIds = (bloc.factionIds || [])
+        .map((factionId) => factionToNation[factionId])
+        .filter(Boolean);
+      if (memberIds.length < 2) continue;
+      game.alliances.push({
+        id: bloc.id || `scenario-alliance-${memberIds.join("-")}`,
+        type: bloc.type || "military",
+        label: bloc.label || "Scenario Alliance",
+        members: memberIds,
+        createdTurn: game.turn,
+        // Long duration so blocs persist for the scenario's run.
+        duration: 999,
+        expiresTurn: game.turn + 999,
+        active: true,
+        scenario: true,
+      });
+    }
+  }
+  // Scenario events are stored as data; execution is opt-in per-event.
+  // For MVP we keep them on the game so future tick logic can consume them.
+  game.scenarioEvents = getScenarioEvents(scenarioId);
+}
+
 function normalizeSettings(raw) {
   const nationCount = clamp(Math.floor(Number(raw.nationCount) || 5), 2, 16);
   const unlimitedMode = Boolean(raw.unlimitedMode);
@@ -1908,6 +2043,7 @@ function normalizeSettings(raw) {
 
 function typeLabel(type) {
   if (type === TILE_TYPES.MILITARY) return "Military Base";
+  if (type === TILE_TYPES.CAPITAL_CITY) return "Capital City";
   if (type === TILE_TYPES.MOUNTAIN_MINE) return "Mountain Mine";
   return String(type).replace(/^\w/, (letter) => letter.toUpperCase());
 }
