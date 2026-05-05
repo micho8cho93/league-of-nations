@@ -24,6 +24,7 @@ export const MULTIPLAYER_ACTION_TYPES = Object.freeze({
   RESEARCH: "RESEARCH",
   RESEARCH_TECH: "RESEARCH_TECH",
   RESEARCH_BRANCH: "RESEARCH_BRANCH",
+  SUBMIT_EDUCATION_REFLECTION: "SUBMIT_EDUCATION_REFLECTION",
   END_TURN: "END_TURN",
 });
 
@@ -48,6 +49,7 @@ const ACTION_ALIASES = Object.freeze({
   research: MULTIPLAYER_ACTION_TYPES.RESEARCH,
   researchTech: MULTIPLAYER_ACTION_TYPES.RESEARCH_TECH,
   researchBranch: MULTIPLAYER_ACTION_TYPES.RESEARCH_BRANCH,
+  submitEducationReflection: MULTIPLAYER_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION,
   endTurn: MULTIPLAYER_ACTION_TYPES.END_TURN,
 });
 
@@ -281,6 +283,7 @@ function readSettings(settings = {}) {
     turnTimerMinutes,
     unlimitedMode: Boolean(settings.unlimitedMode),
     happinessEnabled: settings.happinessEnabled !== false,
+    educationModeEnabled: settings.educationModeEnabled === true,
     seed: Number(settings.seed || 1),
   };
 }

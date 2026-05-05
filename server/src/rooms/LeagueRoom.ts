@@ -11,9 +11,11 @@ import {
   handleAttack,
   handleProposeTrade,
   handleRejectTrade,
+  nationNeedsEducationReflection,
   normalizeServerActionType,
   processServerRound,
   resetActionPointsForTurn,
+  validateEducationAction,
 } from "../game/actions.js";
 import {
   serializeGameSnapshot,
@@ -64,6 +66,7 @@ interface SettingsPayload {
   timeLimitMinutes?: unknown;
   unlimitedMode?: unknown;
   happinessEnabled?: unknown;
+  educationModeEnabled?: unknown;
   seed?: unknown;
 }
 
@@ -85,8 +88,10 @@ interface PlayerActionPayload {
   allianceType?: unknown;
   offer?: unknown;
   request?: unknown;
+  educationExplanation?: unknown;
   proposalId?: unknown;
   id?: unknown;
+  text?: unknown;
   actionPoints?: unknown;
   maxActionPoints?: unknown;
   actionsRemaining?: unknown;
@@ -117,6 +122,7 @@ class GameSettings extends Schema {
   @type("uint16") turnTimerMinutes = 0;
   @type("boolean") unlimitedMode = false;
   @type("boolean") happinessEnabled = true;
+  @type("boolean") educationModeEnabled = false;
   @type("uint32") seed = randomSeed();
 }
 
@@ -345,6 +351,10 @@ export class LeagueRoom extends Room {
       this.state.settings.happinessEnabled = Boolean(payload.happinessEnabled);
     }
 
+    if (payload.educationModeEnabled !== undefined) {
+      this.state.settings.educationModeEnabled = Boolean(payload.educationModeEnabled);
+    }
+
     if (payload.maxTurns !== undefined) {
       this.state.settings.maxTurns = this.state.settings.unlimitedMode
         ? 0
@@ -379,6 +389,7 @@ export class LeagueRoom extends Room {
       turnTimerMinutes: this.state.settings.turnTimerMinutes,
       unlimitedMode: this.state.settings.unlimitedMode,
       happinessEnabled: this.state.settings.happinessEnabled,
+      educationModeEnabled: this.state.settings.educationModeEnabled,
       seed: this.state.settings.seed,
     };
   }
@@ -476,16 +487,20 @@ export class LeagueRoom extends Room {
     }
 
     const intentPayload = sanitizeActionIntentPayload(payload);
-    const player = this.gameState?.nations[validation.nationId] || null;
-    let result: { ok?: boolean; reason?: string; [key: string]: unknown };
+    const gameState = this.gameState;
+    const player = gameState?.nations[validation.nationId] || null;
+    let result: { ok?: boolean; reason?: string; [key: string]: unknown } = this.reject("UNSUPPORTED_ACTION", `Unsupported multiplayer action: ${type}.`);
 
     try {
-      if (!this.gameState) result = this.reject("GAME_UNAVAILABLE", "Game state is unavailable.");
-      else if (type === SERVER_GAME_ACTION_TYPES.PROPOSE_TRADE) result = handleProposeTrade(this.gameState, player, intentPayload);
-      else if (type === SERVER_GAME_ACTION_TYPES.ACCEPT_TRADE) result = handleAcceptTrade(this.gameState, player, intentPayload);
-      else if (type === SERVER_GAME_ACTION_TYPES.REJECT_TRADE) result = handleRejectTrade(this.gameState, player, intentPayload);
-      else if (type === SERVER_GAME_ACTION_TYPES.ATTACK) result = handleAttack(this.gameState, player, intentPayload);
-      else result = this.reject("UNSUPPORTED_ACTION", `Unsupported multiplayer action: ${type}.`);
+      if (!gameState) result = this.reject("GAME_UNAVAILABLE", "Game state is unavailable.");
+      else {
+        const educationCheck = validateEducationAction(gameState, type, validation.nationId, intentPayload);
+        if (!educationCheck.ok) result = educationCheck;
+        else if (type === SERVER_GAME_ACTION_TYPES.PROPOSE_TRADE) result = handleProposeTrade(gameState, player, intentPayload);
+        else if (type === SERVER_GAME_ACTION_TYPES.ACCEPT_TRADE) result = handleAcceptTrade(gameState, player, intentPayload);
+        else if (type === SERVER_GAME_ACTION_TYPES.REJECT_TRADE) result = handleRejectTrade(gameState, player, intentPayload);
+        else if (type === SERVER_GAME_ACTION_TYPES.ATTACK) result = handleAttack(gameState, player, intentPayload);
+      }
     } catch (error) {
       result = this.reject("SERVER_ERROR", error instanceof Error ? error.message : "The server could not apply that action.");
     }
@@ -536,6 +551,14 @@ export class LeagueRoom extends Room {
     if (!nation.active) return this.reject("INACTIVE_NATION", "That nation is no longer active.");
     if (this.activeTurnNationId() !== nationId) {
       return this.reject("INVALID_TURN", "It is not your turn.");
+    }
+
+    if (nationNeedsEducationReflection(this.gameState, nationId) && type !== SERVER_GAME_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION) {
+      const pending = this.gameState.pendingEducationReflection;
+      return this.reject(
+        "EDUCATION_REFLECTION_REQUIRED",
+        `Write a short reflection about Era ${pending?.fromEra || this.gameState.era} ending and Era ${pending?.toEra || this.gameState.era} beginning before continuing.`,
+      );
     }
 
     const actionCheck = canAffordAction(type, this.gameState, nationId);
@@ -823,6 +846,8 @@ function sanitizeActionIntentPayload(payload: PlayerActionPayload): PlayerAction
     actionsUsedThisTurn: _actionsUsedThisTurn,
     tech: _tech,
     cost: _cost,
+    educationExplanation: _educationExplanation,
+    text: _text,
     ...intent
   } = payload as PlayerActionPayload & Record<string, unknown>;
   return intent;

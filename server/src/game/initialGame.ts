@@ -20,6 +20,7 @@ export interface InitialGameSettings {
   timeLimitMinutes?: number;
   unlimitedMode: boolean;
   happinessEnabled?: boolean;
+  educationModeEnabled?: boolean;
   seed: number;
   victory?: {
     economicGoldThreshold?: number;
@@ -149,6 +150,13 @@ export interface ServerGameState {
   eventHistory: Array<Record<string, unknown>>;
   eraReports: unknown[];
   pendingEraReport: null;
+  pendingEducationReflection: null | {
+    id: string;
+    fromEra: number;
+    toEra: number;
+    requiredNationIds: string[];
+    completedNationIds: string[];
+  };
   globalEvents: Record<string, unknown>;
   gameOver: null | Record<string, unknown>;
   victoryProgress: null | Record<string, unknown>;
@@ -366,6 +374,7 @@ export function createInitialServerGame(settings: InitialGameSettings, players: 
     eventHistory: [],
     eraReports: [],
     pendingEraReport: null,
+    pendingEducationReflection: null,
     globalEvents: {},
     gameOver: null,
     victoryProgress: null,
@@ -390,6 +399,7 @@ function normalizeInitialGameSettings(settings: InitialGameSettings): InitialGam
     landscapeDiversity: normalizeLandscapeDiversity(settings.landscapeDiversity, mode),
     fogOfWarEnabled: settings.fogOfWarEnabled === true,
     happinessEnabled: settings.happinessEnabled !== false,
+    educationModeEnabled: settings.educationModeEnabled === true,
   };
 }
 
@@ -454,6 +464,7 @@ function serializableGameState(game: ServerGameState | Record<string, any>) {
     eventHistory: game.eventHistory || [],
     eraReports: game.eraReports,
     pendingEraReport: game.pendingEraReport,
+    pendingEducationReflection: game.pendingEducationReflection,
     globalEvents: game.globalEvents,
     gameOver: game.gameOver,
     victoryProgress: game.victoryProgress,

@@ -203,6 +203,41 @@ export function getUnlockedActions(game: ServerGameState, nation: Nation) {
   };
 }
 
+export function checkEraAdvancement(game: ServerGameState) {
+  if (game.pendingEraReport || game.pendingEducationReflection) return null;
+  const humanNations = Object.values(game.nations).filter((nation) => nation.active && !nation.bot && nation.controllerType !== "bot");
+  const candidates = humanNations.length ? humanNations : Object.values(game.nations).filter((nation) => nation.active);
+  if (!candidates.length) return null;
+
+  if (game.era === 1) {
+    const qualified = candidates.some((nation) => {
+      const farms = activeTileCount(game, nation.id, [TILE_TYPES.FARM, TILE_TYPES.FISHERY]);
+      const techSum = numberValue(nation.tech.farming) + numberValue(nation.tech.mining) + numberValue(nation.tech.education) + numberValue(nation.tech.infrastructure) + numberValue(nation.tech.military);
+      return game.turn >= 5 && farms >= 2 && techSum >= 2;
+    });
+    if (qualified || game.turn >= 7) return 2;
+  }
+
+  if (game.era === 2) {
+    const qualified = candidates.some((nation) => {
+      const mines = activeTileCount(game, nation.id, [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE]);
+      const schools = activeTileCount(game, nation.id, [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY]);
+      return game.turn >= 9 && mines >= 3 && schools >= 2 && numberValue(nation.tech.mining) >= 2 && numberValue(nation.tech.education) >= 2;
+    });
+    if (qualified || game.turn >= 12) return 3;
+  }
+
+  if (game.era === 3) {
+    const qualified = candidates.some((nation) => {
+      const factories = activeTileCount(game, nation.id, [TILE_TYPES.FACTORY]);
+      return game.turn >= 14 && factories >= 2 && numberValue(nation.tech.military) >= 2;
+    });
+    if (qualified || game.turn >= 18) return 4;
+  }
+
+  return null;
+}
+
 function activeTileCount(game: ServerGameState, nationId: string, types: string[]) {
   return types.reduce((sum, type) => sum + game.map.tiles.filter((tile) => tile.ownerId === nationId && tile.type === type && isTileActive(tile)).length, 0);
 }

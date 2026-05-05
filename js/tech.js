@@ -422,7 +422,7 @@ export function transportUnlockForTier(tier) {
 
 export function checkEraAdvancement(game) {
   const nation = game.player;
-  if (!nation || game.pendingEraReport) return null;
+  if (!nation || game.pendingEraReport || game.pendingEducationReflection) return null;
   const farms = activeTileCount(nation, game.tiles, [TILE_TYPES.FARM, TILE_TYPES.FISHERY]);
   const mines = activeTileCount(nation, game.tiles, [TILE_TYPES.MINE, TILE_TYPES.MOUNTAIN_MINE]);
   const schools = activeTileCount(nation, game.tiles, [TILE_TYPES.SCHOOL, TILE_TYPES.UNIVERSITY]);

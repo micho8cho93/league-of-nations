@@ -201,6 +201,8 @@ function addUnitBranch(unit, branch, amount) {
   return trimUnitBranches(unit);
 }
 
+export const EDUCATION_RESPONSE_MIN_LENGTH = 8;
+
 export class GameState {
   constructor(data) {
     this.settings = data.settings;
@@ -233,6 +235,7 @@ export class GameState {
     this.eventHistory = data.eventHistory || [];
     this.eraReports = data.eraReports || [];
     this.pendingEraReport = data.pendingEraReport || null;
+    this.pendingEducationReflection = data.pendingEducationReflection || null;
     this.globalEvents = data.globalEvents || {};
     this.objectives = data.objectives || [];
     this.gameOver = data.gameOver || null;
@@ -570,6 +573,8 @@ export class GameState {
   canSpendAction(nationId = this.playerId, amount = 1) {
     const nation = this.nations[nationId];
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    const gate = this.educationActionGate(nationId);
+    if (!gate.ok) return gate;
     const cost = Math.max(1, Math.floor(Number(amount) || 1));
     if (this.serverAuthoritative) {
       const maxActionPoints = normalizeMaxActionPoints(nation.maxActionPoints);
@@ -596,8 +601,48 @@ export class GameState {
     return !this.serverAuthoritative;
   }
 
+  isEducationModeEnabled() {
+    return this.settings?.educationModeEnabled === true;
+  }
+
+  activeHumanNationIds() {
+    return Object.values(this.nations)
+      .filter((nation) => nation?.active && !this.botIds.includes(nation.id))
+      .map((nation) => nation.id);
+  }
+
+  nationNeedsEducationReflection(nationId = this.playerId) {
+    const pending = this.pendingEducationReflection;
+    if (!this.isEducationModeEnabled() || !pending || !nationId) return false;
+    return pending.requiredNationIds.includes(nationId) && !pending.completedNationIds.includes(nationId);
+  }
+
+  educationActionGate(nationId = this.playerId, { allowReflection = false } = {}) {
+    if (!this.nationNeedsEducationReflection(nationId)) return { ok: true };
+    if (allowReflection) return { ok: true };
+    const pending = this.pendingEducationReflection;
+    return {
+      ok: false,
+      reason: `Write a short reflection about Era ${pending.fromEra} ending and Era ${pending.toEra} beginning before continuing.`,
+    };
+  }
+
+  createPendingEducationReflection(fromEra, toEra) {
+    const requiredNationIds = this.activeHumanNationIds();
+    if (!this.isEducationModeEnabled() || requiredNationIds.length === 0) return null;
+    return {
+      id: `education-reflection-${fromEra}-${toEra}-${Date.now()}`,
+      fromEra,
+      toEra,
+      requiredNationIds,
+      completedNationIds: [],
+    };
+  }
+
   spendAction(reason = "action", nationId = this.playerId, { amount = 1, free = false } = {}) {
     if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    const gate = this.educationActionGate(nationId);
+    if (!gate.ok) return gate;
     if (free) return { ok: true, free: true, reason };
     const check = this.canSpendAction(nationId, amount);
     if (!check.ok) return check;
@@ -1350,6 +1395,8 @@ export class GameState {
 
   chooseReligion(religionId, nationId = this.playerId) {
     if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    const gate = this.educationActionGate(nationId);
+    if (!gate.ok) return gate;
     const nation = this.nations[nationId];
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
     if (this.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
@@ -1439,6 +1486,8 @@ export class GameState {
 
   async endTurn({ onBotTurn = null } = {}) {
     if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    const gate = this.educationActionGate(this.playerId);
+    if (!gate.ok) return gate;
     if (this.isProcessingTurn || this.gameOver) return;
     this.isProcessingTurn = true;
     this.phase = "ai";
@@ -1584,8 +1633,10 @@ export class GameState {
         this.addEvent(`${eraEvent.label}: ${eraEvent.description}`, { type: "global_event" });
         summary.notes.push(`${eraEvent.label}: ${eraEvent.results.slice(0, 3).join("; ")}`);
       }
+      const previousEra = this.era;
       this.era = nextEra;
       this.eraStartSnapshot = this.createSnapshot();
+      this.pendingEducationReflection = this.createPendingEducationReflection(previousEra, nextEra);
       scheduleEraEvent(this, this.era);
       this.addEvent(`Era ${this.era} has begun.`, { nationId: this.playerId, type: "era" });
     }
@@ -1889,6 +1940,23 @@ export class GameState {
     return { ok: true };
   }
 
+  submitEducationReflection(text, nationId = this.playerId) {
+    if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
+    if (!this.pendingEducationReflection) return { ok: false, reason: "No education reflection is pending." };
+    if (!this.nationNeedsEducationReflection(nationId)) return { ok: false, reason: "This nation does not owe an education reflection." };
+    const reflection = String(text || "").trim();
+    if (reflection.length < EDUCATION_RESPONSE_MIN_LENGTH) {
+      return { ok: false, reason: "Write a short reflection before continuing." };
+    }
+    const completed = new Set(this.pendingEducationReflection.completedNationIds || []);
+    completed.add(nationId);
+    this.pendingEducationReflection.completedNationIds = [...completed];
+    const finished = this.pendingEducationReflection.requiredNationIds.every((id) => completed.has(id));
+    if (finished) this.pendingEducationReflection = null;
+    this.changed("education_reflection");
+    return { ok: true, completedNationId: nationId, pending: this.pendingEducationReflection };
+  }
+
   createSnapshot() {
     const nations = {};
     for (const nation of Object.values(this.nations)) {
@@ -2036,6 +2104,7 @@ function normalizeSettings(raw) {
     turnTimerMinutes,
     unlimitedMode,
     happinessEnabled: raw.happinessEnabled !== false,
+    educationModeEnabled: raw.educationModeEnabled === true,
     seed: Math.floor(Number(raw.seed) || randomSeed()),
     scenarioId: raw.scenarioId || null,
   };

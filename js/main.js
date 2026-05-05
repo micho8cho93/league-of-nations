@@ -56,6 +56,7 @@ const inputs = {
   turnTimerMinutes: document.getElementById("setup-turn-timer"),
   unlimitedMode: document.getElementById("setup-unlimited"),
   happinessEnabled: document.getElementById("setup-happiness-enabled"),
+  educationModeEnabled: document.getElementById("setup-education-mode"),
 };
 
 const lobbyInputs = {
@@ -68,6 +69,7 @@ const lobbyInputs = {
   turnTimerMinutes: document.getElementById("lobby-turn-timer"),
   unlimitedMode: document.getElementById("lobby-unlimited"),
   happinessEnabled: document.getElementById("lobby-happiness-enabled"),
+  educationModeEnabled: document.getElementById("lobby-education-mode"),
 };
 
 if (!window.THREE) {
@@ -206,6 +208,7 @@ function readSetup() {
     turnTimerMinutes: clampInt(inputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: inputs.unlimitedMode.checked,
     happinessEnabled: inputs.happinessEnabled.checked,
+    educationModeEnabled: inputs.educationModeEnabled.checked,
   };
   if (currentScenarioId) {
     setup.scenarioId = currentScenarioId;
@@ -330,6 +333,7 @@ function syncLobbyInputs(settings, editable) {
   lobbyInputs.turnTimerMinutes.value = settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0;
   lobbyInputs.unlimitedMode.checked = settings.unlimitedMode;
   lobbyInputs.happinessEnabled.checked = settings.happinessEnabled !== false;
+  lobbyInputs.educationModeEnabled.checked = settings.educationModeEnabled === true;
   lobbyInputs.maxTurns.disabled = settings.unlimitedMode || !editable;
 
   for (const [key, input] of Object.entries(lobbyInputs)) {
@@ -351,6 +355,7 @@ function readLobbySetup() {
     turnTimerMinutes: clampInt(lobbyInputs.turnTimerMinutes.value, 0, 240, 0),
     unlimitedMode: lobbyInputs.unlimitedMode.checked,
     happinessEnabled: lobbyInputs.happinessEnabled.checked,
+    educationModeEnabled: lobbyInputs.educationModeEnabled.checked,
   };
 }
 

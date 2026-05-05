@@ -16,6 +16,7 @@ import {
   buildingTechRequirement as validateBuildingTechRequirement,
   canResearch as validateResearchTech,
   canResearchBranch as validateResearchBranch,
+  checkEraAdvancement,
 } from "./tech.js";
 import {
   VICTORY_CONFIG as DEFAULT_VICTORY_CONFIG,
@@ -75,6 +76,7 @@ type PlayerActionPayload = {
   religionId?: unknown;
   reason?: unknown;
   text?: unknown;
+  educationExplanation?: unknown;
   typeId?: unknown;
   actionPoints?: unknown;
   maxActionPoints?: unknown;
@@ -107,6 +109,7 @@ export const SERVER_GAME_ACTION_TYPES = {
   RESEARCH: "RESEARCH",
   RESEARCH_TECH: "RESEARCH_TECH",
   RESEARCH_BRANCH: "RESEARCH_BRANCH",
+  SUBMIT_EDUCATION_REFLECTION: "SUBMIT_EDUCATION_REFLECTION",
   SUBMIT_ERA_REFLECTION: "SUBMIT_ERA_REFLECTION",
   END_TURN: "END_TURN",
 } as const;
@@ -127,6 +130,7 @@ export const SERVER_PLAYER_ACTION_TYPES = [
   "research",
   "researchTech",
   "researchBranch",
+  "submitEducationReflection",
   "submitEraReflection",
   "buildTile",
 ] as const;
@@ -151,6 +155,7 @@ export const SERVER_ACTION_ALIASES: Record<string, string> = {
   research: SERVER_GAME_ACTION_TYPES.RESEARCH,
   researchTech: SERVER_GAME_ACTION_TYPES.RESEARCH_TECH,
   researchBranch: SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH,
+  submitEducationReflection: SERVER_GAME_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION,
   submitEraReflection: SERVER_GAME_ACTION_TYPES.SUBMIT_ERA_REFLECTION,
   buildTile: SERVER_GAME_ACTION_TYPES.BUILD_TILE,
   endTurn: SERVER_GAME_ACTION_TYPES.END_TURN,
@@ -173,6 +178,7 @@ export const SERVER_ACTION_ALIASES: Record<string, string> = {
   RESEARCH: SERVER_GAME_ACTION_TYPES.RESEARCH,
   RESEARCH_TECH: SERVER_GAME_ACTION_TYPES.RESEARCH_TECH,
   RESEARCH_BRANCH: SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH,
+  SUBMIT_EDUCATION_REFLECTION: SERVER_GAME_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION,
   SUBMIT_ERA_REFLECTION: SERVER_GAME_ACTION_TYPES.SUBMIT_ERA_REFLECTION,
   BUILD_TILE: SERVER_GAME_ACTION_TYPES.BUILD_TILE,
   END_TURN: SERVER_GAME_ACTION_TYPES.END_TURN,
@@ -199,11 +205,13 @@ export const ACTION_COSTS: Record<string, number> = {
   [SERVER_GAME_ACTION_TYPES.RESEARCH]: 1,
   [SERVER_GAME_ACTION_TYPES.RESEARCH_TECH]: 1,
   [SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH]: 1,
+  [SERVER_GAME_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION]: 0,
   [SERVER_GAME_ACTION_TYPES.SUBMIT_ERA_REFLECTION]: 1,
   [SERVER_GAME_ACTION_TYPES.END_TURN]: 0,
 };
 
 const DEFAULT_HAPPINESS = 65;
+export const EDUCATION_RESPONSE_MIN_LENGTH = 8;
 
 const HAPPINESS_BANDS = [
   { min: 80, label: "Thriving", workRate: 1.08, stoppageChance: 0, militaryRefusalChance: 0 },
@@ -507,6 +515,61 @@ const PRODUCTION: Record<string, Partial<Record<"money" | "food" | "materials" |
   [TILE_TYPES.CAPITAL_CITY]: { money: 110, food: 7, materials: 4, education: 4, industry: 2 },
 };
 
+const EDUCATION_EXPLANATION_ACTIONS = new Set<string>([
+  SERVER_GAME_ACTION_TYPES.DECLARE_WAR,
+  SERVER_GAME_ACTION_TYPES.PROPOSE_TRADE,
+  SERVER_GAME_ACTION_TYPES.ACCEPT_TRADE,
+  SERVER_GAME_ACTION_TYPES.PROPOSE_ALLIANCE,
+  SERVER_GAME_ACTION_TYPES.BREAK_ALLIANCE,
+  SERVER_GAME_ACTION_TYPES.EMBARGO,
+  SERVER_GAME_ACTION_TYPES.CHOOSE_RELIGION,
+  SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION,
+  SERVER_GAME_ACTION_TYPES.RESEARCH,
+  SERVER_GAME_ACTION_TYPES.RESEARCH_TECH,
+  SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH,
+]);
+
+export function nationNeedsEducationReflection(game: ServerGameState, nationId: string) {
+  const pending = game.pendingEducationReflection;
+  if (!game.settings.educationModeEnabled || !pending || !nationId) return false;
+  return pending.requiredNationIds.includes(nationId) && !pending.completedNationIds.includes(nationId);
+}
+
+function activeHumanNationIds(game: ServerGameState) {
+  return Object.values(game.nations)
+    .filter((nation) => nation.active && !nation.bot && nation.controllerType !== "bot")
+    .map((nation) => nation.id);
+}
+
+function createPendingEducationReflection(game: ServerGameState, fromEra: number, toEra: number) {
+  const requiredNationIds = activeHumanNationIds(game);
+  if (!game.settings.educationModeEnabled || requiredNationIds.length === 0) return null;
+  return {
+    id: uniqueId("education-reflection"),
+    fromEra,
+    toEra,
+    requiredNationIds,
+    completedNationIds: [] as string[],
+  };
+}
+
+export function validateEducationAction(game: ServerGameState, type: string, nationId: string, payload: PlayerActionPayload): ActionResult {
+  const actionType = normalizeServerActionType(type);
+  if (nationNeedsEducationReflection(game, nationId) && actionType !== SERVER_GAME_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION) {
+    const pending = game.pendingEducationReflection;
+    return reject(
+      "EDUCATION_REFLECTION_REQUIRED",
+      `Write a short reflection about Era ${pending?.fromEra || game.era} ending and Era ${pending?.toEra || game.era} beginning before continuing.`
+    );
+  }
+  if (!game.settings.educationModeEnabled || !EDUCATION_EXPLANATION_ACTIONS.has(actionType)) return { ok: true };
+  const explanation = String(payload.educationExplanation || "").trim();
+  if (explanation.length < EDUCATION_RESPONSE_MIN_LENGTH) {
+    return reject("EDUCATION_EXPLANATION_REQUIRED", "Write a short explanation before continuing.");
+  }
+  return { ok: true };
+}
+
 export function applyServerPlayerAction(
   game: ServerGameState,
   type: string,
@@ -515,6 +578,8 @@ export function applyServerPlayerAction(
 ): ActionResult {
   normalizeDiscoveryState(game);
   const actionType = normalizeServerActionType(type);
+  const educationCheck = validateEducationAction(game, actionType, nationId, payload);
+  if (!educationCheck.ok) return educationCheck;
   let result: ActionResult;
   switch (actionType) {
     case SERVER_GAME_ACTION_TYPES.BUILD_TILE:
@@ -574,6 +639,9 @@ export function applyServerPlayerAction(
       break;
     case SERVER_GAME_ACTION_TYPES.RESEARCH_BRANCH:
       result = researchBranch(game, stringValue(payload.branch), nationId);
+      break;
+    case SERVER_GAME_ACTION_TYPES.SUBMIT_EDUCATION_REFLECTION:
+      result = submitEducationReflection(game, stringValue(payload.text), nationId);
       break;
     case SERVER_GAME_ACTION_TYPES.SUBMIT_ERA_REFLECTION:
       result = submitEraReflection(game, stringValue(payload.text), nationId);
@@ -652,6 +720,13 @@ export function processServerRound(game: ServerGameState) {
   tickEventTileEffects(game);
   addEvent(game, `Turn ${game.turn} production resolved by the server.`, { type: "resource" });
   checkServerVictory(game, DEFAULT_VICTORY_CONFIG, { turnBoundary: true });
+  const nextEra = checkEraAdvancement(game);
+  if (!game.gameOver && nextEra) {
+    const previousEra = game.era;
+    game.era = nextEra;
+    game.pendingEducationReflection = createPendingEducationReflection(game, previousEra, nextEra);
+    addEvent(game, `Era ${game.era} began.`, { type: "era" });
+  }
   return summary;
 }
 
@@ -1370,6 +1445,21 @@ function submitEraReflection(game: ServerGameState, text: string, nationId: stri
   resetTurnActions(game, nationId);
   addEvent(game, `Era ${game.era} began.`, { nationId, type: "era" });
   return { ok: true };
+}
+
+function submitEducationReflection(game: ServerGameState, text: string, nationId: string): ActionResult {
+  if (!game.pendingEducationReflection) return { ok: false, reason: "No education reflection is pending." };
+  if (!nationNeedsEducationReflection(game, nationId)) return { ok: false, reason: "This nation does not owe an education reflection." };
+  const reflection = String(text || "").trim();
+  if (reflection.length < EDUCATION_RESPONSE_MIN_LENGTH) {
+    return { ok: false, reason: "Write a short reflection before continuing." };
+  }
+  const completed = new Set(game.pendingEducationReflection.completedNationIds || []);
+  completed.add(nationId);
+  game.pendingEducationReflection.completedNationIds = [...completed];
+  const finished = game.pendingEducationReflection.requiredNationIds.every((id) => completed.has(id));
+  if (finished) game.pendingEducationReflection = null;
+  return { ok: true, completedNationId: nationId, pending: game.pendingEducationReflection };
 }
 
 function canBuild(

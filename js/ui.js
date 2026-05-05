@@ -59,6 +59,7 @@ import {
   religionLabel,
   societyRelationModifier,
 } from "./cultureReligion.js";
+import { EDUCATION_RESPONSE_MIN_LENGTH } from "./game.js";
 
 export const TUTORIAL_COMPLETED_KEY = "leagueOfNationsTutorialCompleted";
 
@@ -144,6 +145,7 @@ class GameUI {
     this.militarySelection = null;
     this.tutorial = null;
     this.religionPromptOpen = false;
+    this.educationPromptState = null;
     this.turnTimeoutInProgress = false;
     this.lastTileActionSignature = "";
     this.lastTileActionAt = 0;
@@ -239,6 +241,10 @@ class GameUI {
   }
 
   requestEndTurn() {
+    if (this.playerNeedsEducationReflection()) {
+      this.maybePromptEducationReflection();
+      return;
+    }
     if (this.isServerAuthoritative()) {
       this.clearMilitarySelection();
       this.sendPlayerAction({ type: "endTurn" });
@@ -399,16 +405,18 @@ class GameUI {
 	    this.renderStatus();
 	    this.renderResources();
 	    this.renderVictoryProgress();
-	    this.renderScenarioObjectives();
-	    this.refreshBoardDialogs();
-	    this.refreshTechDialog();
-	    this.renderTilePopup(visibility);
-	    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights(visibility), visibility);
+    this.renderScenarioObjectives();
+    this.refreshBoardDialogs();
+    this.refreshTechDialog();
+    this.renderTilePopup(visibility);
+    this.renderer.renderState(this.game.map, this.game.nations, this.game.selectedTileId, this.currentMilitaryHighlights(visibility), visibility);
+    this.maybePromptEducationReflection();
     this.maybePromptReligionChoice();
     if (this.game.gameOver) this.showVictory();
   }
 
   maybePromptReligionChoice() {
+    if (this.playerNeedsEducationReflection()) return;
     const player = this.game.player;
     if (!player || this.game.era < SOCIETY.unlockEra || player.religion?.stateReligionId || this.game.gameOver) return;
     if (!this.dialogBackdrop.hidden || this.tutorial || this.religionPromptOpen) return;
@@ -524,6 +532,119 @@ class GameUI {
     return Boolean(this.game.serverAuthoritative && this.multiplayerClient?.room);
   }
 
+  playerNeedsEducationReflection() {
+    return this.game.nationNeedsEducationReflection?.(this.game.playerId) === true;
+  }
+
+  isEducationPromptOpen(mode = "") {
+    return Boolean(this.educationPromptState && (!mode || this.educationPromptState.mode === mode));
+  }
+
+  clearEducationPromptState() {
+    this.educationPromptState = null;
+  }
+
+  closeDialogForce() {
+    this.religionPromptOpen = false;
+    this.clearEducationPromptState();
+    this.dialogBackdrop.hidden = true;
+    this.dialogBody.innerHTML = "";
+    this.dialogCloseBtn.hidden = false;
+  }
+
+  openEducationPrompt({
+    mode,
+    title,
+    prompt,
+    submitLabel,
+    initialValue = "",
+    blocking = true,
+    onSubmit,
+  }) {
+    const body = `
+      <form id="education-prompt-form" class="form-grid">
+        <p class="muted">${escapeHtml(prompt)}</p>
+        <label class="field wide">
+          <span>Response</span>
+          <textarea id="education-prompt-text" rows="6" placeholder="Write a short explanation.">${escapeHtml(initialValue)}</textarea>
+        </label>
+        <div id="education-prompt-error" class="muted bad" hidden></div>
+        <div class="wide row-actions">
+          <button id="education-prompt-submit" class="primary-btn" type="submit">${escapeHtml(submitLabel)}</button>
+        </div>
+      </form>
+    `;
+    this.educationPromptState = { mode, blocking };
+    this.openDialog(title, body, () => {
+      if (blocking) this.dialogCloseBtn.hidden = true;
+      const form = this.dialogBody.querySelector("#education-prompt-form");
+      const textarea = this.dialogBody.querySelector("#education-prompt-text");
+      const error = this.dialogBody.querySelector("#education-prompt-error");
+      const submitBtn = this.dialogBody.querySelector("#education-prompt-submit");
+      textarea?.focus();
+      form?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const text = String(textarea?.value || "").trim();
+        if (text.length < EDUCATION_RESPONSE_MIN_LENGTH) {
+          error.textContent = "Write a short explanation before continuing.";
+          error.hidden = false;
+          return;
+        }
+        error.hidden = true;
+        submitBtn.disabled = true;
+        const result = await onSubmit(text);
+        submitBtn.disabled = false;
+        if (result && result.ok === false) {
+          error.textContent = result.reason || "That response could not be accepted.";
+          error.hidden = false;
+          return;
+        }
+        if (!this.isEducationPromptOpen(mode)) return;
+        if (mode === "reflection" && this.isServerAuthoritative()) return;
+        this.closeDialogForce();
+      });
+    });
+  }
+
+  maybePromptEducationReflection() {
+    if (!this.playerNeedsEducationReflection() || this.game.gameOver) {
+      if (this.isEducationPromptOpen("reflection")) this.closeDialogForce();
+      return;
+    }
+    if (this.isServerAuthoritative() && !this.isPlayersTurn()) return;
+    const pending = this.game.pendingEducationReflection;
+    if (!pending) return;
+    if (this.isEducationPromptOpen("reflection")) return;
+    this.openEducationPrompt({
+      mode: "reflection",
+      title: `Era ${pending.toEra} Reflection`,
+      prompt: `Era ${pending.fromEra} has ended and Era ${pending.toEra} has begun. Explain what changed in your strategy and what matters most in the new era before continuing.`,
+      submitLabel: "Submit Reflection",
+      onSubmit: (text) => {
+        if (this.isServerAuthoritative()) {
+          this.sendPlayerAction({ type: "submitEducationReflection", text });
+          return { ok: true };
+        }
+        return this.game.submitEducationReflection(text, this.game.playerId);
+      },
+    });
+  }
+
+  runEducationGatedAction(actionType, execute) {
+    if (!educationActionNeedsExplanation(this.game, actionType)) {
+      return execute({});
+    }
+    const promptMeta = educationPromptMeta(actionType);
+    this.openEducationPrompt({
+      mode: "action",
+      title: promptMeta.title,
+      prompt: promptMeta.prompt,
+      submitLabel: "Continue",
+      onSubmit: (text) => execute({ educationExplanation: text }),
+    });
+    return { ok: true, prompted: true };
+  }
+
   sendPlayerAction(payload) {
     const nationId = this.game.playerId;
     const nation = this.game.nations[nationId];
@@ -535,14 +656,19 @@ class GameUI {
       this.showNotice("Waiting", "It is not your turn yet.");
       return;
     }
+    if (payload?.type !== "submitEducationReflection" && this.playerNeedsEducationReflection()) {
+      this.maybePromptEducationReflection();
+      return;
+    }
     this.multiplayerClient.sendPlayerAction({ ...payload, nationId });
   }
 
   renderStatus() {
     const player = this.game.player;
     const waitingForTurn = this.isServerAuthoritative() && !this.isPlayersTurn();
-    const endTurnDisabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn;
-    const endTurnLabel = waitingForTurn ? "Waiting" : "End Turn";
+    const needsReflection = this.playerNeedsEducationReflection();
+    const endTurnDisabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn || needsReflection;
+    const endTurnLabel = waitingForTurn ? "Waiting" : (needsReflection ? "Reflect" : "End Turn");
     this.phaseLabel.textContent = phaseLabel(this.game.phase, this.game.isProcessingTurn);
     this.endTurnBtn.disabled = endTurnDisabled;
     this.endTurnBtn.textContent = endTurnLabel;
@@ -588,6 +714,7 @@ class GameUI {
   isTurnTimerExpired() {
     const limit = Number(this.game.settings.turnTimerMinutes || this.game.settings.timeLimitMinutes || 0);
     if (limit <= 0 || this.game.gameOver || this.game.isProcessingTurn || this.game.phase !== "player") return false;
+    if (this.playerNeedsEducationReflection()) return false;
     if (this.isServerAuthoritative() && !this.isPlayersTurn()) return false;
     const elapsed = Math.floor((Date.now() - (this.game.turnStartedAt || Date.now())) / 1000);
     return elapsed >= limit * 60;
@@ -1557,24 +1684,43 @@ class GameUI {
     const id = button.dataset.id;
     if (action === "trade") this.openTradeDialog(id);
     if (action === "alliance") this.openAllianceDialog(id);
+    if (action === "trade" || action === "alliance") return;
     if (this.isServerAuthoritative()) {
-      if (action === "embargo") this.sendPlayerAction({ type: "embargo", targetId: id });
-      if (action === "war") this.sendPlayerAction({ type: "declareWar", targetId: id });
-      if (action === "break") this.sendPlayerAction({ type: "breakAlliance", allianceId: id });
+      if (action === "embargo") this.runEducationGatedAction("embargo", ({ educationExplanation }) => {
+        this.sendPlayerAction({ type: "embargo", targetId: id, educationExplanation });
+        return { ok: true };
+      });
+      if (action === "war") this.runEducationGatedAction("declareWar", ({ educationExplanation }) => {
+        this.sendPlayerAction({ type: "declareWar", targetId: id, educationExplanation });
+        return { ok: true };
+      });
+      if (action === "break") this.runEducationGatedAction("breakAlliance", ({ educationExplanation }) => {
+        this.sendPlayerAction({ type: "breakAlliance", allianceId: id, educationExplanation });
+        return { ok: true };
+      });
       return;
     }
     // Local/offline logic: diplomacy mutates the local GameState directly.
     if (action === "embargo") {
-      const result = this.game.embargo(id);
-      if (!result.ok) this.showNotice("Embargo blocked", result.reason);
+      this.runEducationGatedAction("embargo", () => {
+        const result = this.game.embargo(id);
+        if (!result.ok) this.showNotice("Embargo blocked", result.reason);
+        return result;
+      });
     }
     if (action === "war") {
-      const result = this.game.declareWar(id);
-      if (!result.ok) this.showNotice("War blocked", result.reason);
+      this.runEducationGatedAction("declareWar", () => {
+        const result = this.game.declareWar(id);
+        if (!result.ok) this.showNotice("War blocked", result.reason);
+        return result;
+      });
     }
     if (action === "break") {
-      const result = this.game.breakAlliance(id);
-      if (!result.ok) this.showNotice("Alliance", result.reason);
+      this.runEducationGatedAction("breakAlliance", () => {
+        const result = this.game.breakAlliance(id);
+        if (!result.ok) this.showNotice("Alliance", result.reason);
+        return result;
+      });
     }
   }
 
@@ -1583,17 +1729,23 @@ class GameUI {
     if (chooseButton) {
       const religionId = chooseButton.dataset.societyReligion;
       if (this.isServerAuthoritative()) {
-        this.sendPlayerAction({ type: "chooseReligion", religionId });
-        this.religionPromptOpen = false;
-        this.closeDialog();
+        this.runEducationGatedAction("chooseReligion", ({ educationExplanation }) => {
+          this.sendPlayerAction({ type: "chooseReligion", religionId, educationExplanation });
+          this.religionPromptOpen = false;
+          this.closeDialogForce();
+          return { ok: true };
+        });
         return;
       }
-      const result = this.game.chooseReligion(religionId);
-      if (!result.ok) this.showNotice("Society", result.reason);
-      if (result.ok) {
-        this.religionPromptOpen = false;
-        this.closeDialog();
-      }
+      this.runEducationGatedAction("chooseReligion", () => {
+        const result = this.game.chooseReligion(religionId);
+        if (!result.ok) this.showNotice("Society", result.reason);
+        if (result.ok) {
+          this.religionPromptOpen = false;
+          this.closeDialogForce();
+        }
+        return result;
+      });
       return;
     }
 
@@ -1601,12 +1753,18 @@ class GameUI {
     if (!actionButton) return;
     if (actionButton.dataset.societyAction === "promote") {
       if (this.isServerAuthoritative()) {
-        this.sendPlayerAction({ type: "promoteReligion" });
+        this.runEducationGatedAction("promoteReligion", ({ educationExplanation }) => {
+          this.sendPlayerAction({ type: "promoteReligion", educationExplanation });
+          return { ok: true };
+        });
         return;
       }
-      const result = this.game.promoteReligion();
-      if (!result.ok) this.showNotice("Society", result.reason);
-      if (result.ok) this.dialogBody.innerHTML = this.renderSocietyHtml();
+      this.runEducationGatedAction("promoteReligion", () => {
+        const result = this.game.promoteReligion();
+        if (!result.ok) this.showNotice("Society", result.reason);
+        if (result.ok) this.dialogBody.innerHTML = this.renderSocietyHtml();
+        return result;
+      });
     }
   }
 
@@ -1614,23 +1772,35 @@ class GameUI {
     const techButton = event.target.closest("[data-tech]");
     if (techButton) {
       if (this.isServerAuthoritative()) {
-        this.sendPlayerAction({ type: "researchTech", category: techButton.dataset.tech });
+        this.runEducationGatedAction("researchTech", ({ educationExplanation }) => {
+          this.sendPlayerAction({ type: "researchTech", category: techButton.dataset.tech, educationExplanation });
+          return { ok: true };
+        });
         return;
       }
-      const result = this.game.research(techButton.dataset.tech);
-      if (!result.ok) this.showNotice("Research blocked", result.reason);
-      if (result.ok) this.refreshTechDialog();
+      this.runEducationGatedAction("researchTech", () => {
+        const result = this.game.research(techButton.dataset.tech);
+        if (!result.ok) this.showNotice("Research blocked", result.reason);
+        if (result.ok) this.refreshTechDialog();
+        return result;
+      });
       return;
     }
     const branchButton = event.target.closest("[data-branch]");
     if (branchButton) {
       if (this.isServerAuthoritative()) {
-        this.sendPlayerAction({ type: "researchBranch", branch: branchButton.dataset.branch });
+        this.runEducationGatedAction("researchBranch", ({ educationExplanation }) => {
+          this.sendPlayerAction({ type: "researchBranch", branch: branchButton.dataset.branch, educationExplanation });
+          return { ok: true };
+        });
         return;
       }
-      const result = this.game.researchBranch(branchButton.dataset.branch);
-      if (!result.ok) this.showNotice("Specialization blocked", result.reason);
-      if (result.ok) this.refreshTechDialog();
+      this.runEducationGatedAction("researchBranch", () => {
+        const result = this.game.researchBranch(branchButton.dataset.branch);
+        if (!result.ok) this.showNotice("Specialization blocked", result.reason);
+        if (result.ok) this.refreshTechDialog();
+        return result;
+      });
     }
   }
 
@@ -1671,18 +1841,25 @@ class GameUI {
           people: Number(data.get(`${prefix}-people`) || 0),
         });
         if (this.isServerAuthoritative()) {
-          this.multiplayerClient.proposeTrade({
-            nationId: this.game.playerId,
-            partnerId,
-            offer: bundle("offer"),
-            request: bundle("request"),
+          this.runEducationGatedAction("proposeTrade", ({ educationExplanation }) => {
+            this.multiplayerClient.proposeTrade({
+              nationId: this.game.playerId,
+              partnerId,
+              offer: bundle("offer"),
+              request: bundle("request"),
+              educationExplanation,
+            });
+            this.closeDialogForce();
+            return { ok: true };
           });
-          this.closeDialog();
           return;
         }
-        const result = this.game.trade(partnerId, bundle("offer"), bundle("request"));
-        this.closeDialog();
-        this.showNotice("Trade", result.reason || (result.accepted ? "Accepted." : "Rejected."));
+        this.runEducationGatedAction("proposeTrade", () => {
+          const result = this.game.trade(partnerId, bundle("offer"), bundle("request"));
+          this.closeDialogForce();
+          this.showNotice("Trade", result.reason || (result.accepted ? "Accepted." : "Rejected."));
+          return result;
+        });
       });
     });
   }
@@ -1699,17 +1876,24 @@ class GameUI {
       this.dialogBody.querySelectorAll("[data-alliance-type]").forEach((btn) => {
         btn.addEventListener("click", () => {
           if (this.isServerAuthoritative()) {
-            this.sendPlayerAction({
-              type: "proposeAlliance",
-              partnerId,
-              allianceType: btn.dataset.allianceType,
+            this.runEducationGatedAction("proposeAlliance", ({ educationExplanation }) => {
+              this.sendPlayerAction({
+                type: "proposeAlliance",
+                partnerId,
+                allianceType: btn.dataset.allianceType,
+                educationExplanation,
+              });
+              this.closeDialogForce();
+              return { ok: true };
             });
-            this.closeDialog();
             return;
           }
-          const result = this.game.proposeAlliance(partnerId, btn.dataset.allianceType);
-          this.closeDialog();
-          this.showNotice("Alliance", result.reason || (result.accepted ? "Accepted." : "Rejected."));
+          this.runEducationGatedAction("proposeAlliance", () => {
+            const result = this.game.proposeAlliance(partnerId, btn.dataset.allianceType);
+            this.closeDialogForce();
+            this.showNotice("Alliance", result.reason || (result.accepted ? "Accepted." : "Rejected."));
+            return result;
+          });
         });
       });
     });
@@ -1805,7 +1989,9 @@ class GameUI {
 
   closeDialog() {
     if (this.game.gameOver) return;
+    if (this.educationPromptState?.blocking) return;
     this.religionPromptOpen = false;
+    this.clearEducationPromptState();
     this.dialogBackdrop.hidden = true;
     this.dialogBody.innerHTML = "";
     this.dialogCloseBtn.hidden = false;
@@ -2276,6 +2462,75 @@ function normalizeAcceptedActionType(type) {
     RESEARCH: "research",
     RESEARCH_TECH: "researchTech",
     RESEARCH_BRANCH: "researchBranch",
+    SUBMIT_EDUCATION_REFLECTION: "submitEducationReflection",
     END_TURN: "endTurn",
   }[type] || type;
 }
+
+function educationActionNeedsExplanation(game, actionType = "") {
+  if (game?.settings?.educationModeEnabled !== true) return false;
+  return EDUCATION_ACTION_TYPES.has(String(actionType || ""));
+}
+
+function educationPromptMeta(actionType = "") {
+  return EDUCATION_PROMPT_META[String(actionType || "")] || {
+    title: "Explain This Decision",
+    prompt: "Write a short explanation for this decision before continuing.",
+  };
+}
+
+const EDUCATION_ACTION_TYPES = new Set([
+  "researchTech",
+  "researchBranch",
+  "chooseReligion",
+  "promoteReligion",
+  "declareWar",
+  "proposeAlliance",
+  "breakAlliance",
+  "embargo",
+  "proposeTrade",
+  "acceptTrade",
+]);
+
+const EDUCATION_PROMPT_META = {
+  researchTech: {
+    title: "Explain This Research",
+    prompt: "Explain why this technology research matters for your nation right now.",
+  },
+  researchBranch: {
+    title: "Explain This Specialization",
+    prompt: "Explain why this military specialization fits your current strategy.",
+  },
+  chooseReligion: {
+    title: "Explain This Religion Choice",
+    prompt: "Explain why this religion is the right choice for your society and diplomacy.",
+  },
+  promoteReligion: {
+    title: "Explain This Promotion",
+    prompt: "Explain why promoting this religion is strategically important now.",
+  },
+  declareWar: {
+    title: "Explain This War Decision",
+    prompt: "Explain why declaring war is necessary and what you expect it to achieve.",
+  },
+  proposeAlliance: {
+    title: "Explain This Alliance",
+    prompt: "Explain why this alliance makes sense for your nation at this moment.",
+  },
+  breakAlliance: {
+    title: "Explain Breaking This Alliance",
+    prompt: "Explain why ending this alliance is the right decision now.",
+  },
+  embargo: {
+    title: "Explain This Embargo",
+    prompt: "Explain why this embargo supports your broader strategy.",
+  },
+  proposeTrade: {
+    title: "Explain This Trade",
+    prompt: "Explain why this trade proposal benefits your nation.",
+  },
+  acceptTrade: {
+    title: "Explain Accepting This Trade",
+    prompt: "Explain why accepting this trade is a good decision for your nation.",
+  },
+};
