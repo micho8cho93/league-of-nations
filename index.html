@@ -5,203 +5,284 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>League of Nations</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230f172a'/%3E%3Cpath d='M16 42V18h8v17h24v7H16Z' fill='%232dd4bf'/%3E%3Cpath d='M30 18h18v7H38v17h-8V18Z' fill='%23fbbf24'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Libre+Baskerville:wght@400;700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./css/style.css" />
 </head>
 <body>
   <div id="mode-screen" class="setup-screen">
-    <section class="setup-panel mode-panel" aria-labelledby="mode-title">
-      <div id="mode-title" class="setup-title">League of Nations</div>
-      <div class="setup-subtitle">Choose a ruleset before opening match settings.</div>
-      <div class="mode-grid">
-        <button id="mode-lite-btn" type="button" class="mode-card primary-btn">
-          <strong>Lite</strong>
-          <span>Current simple flow and current gameplay rules.</span>
-        </button>
-        <button id="mode-advanced-btn" type="button" class="mode-card secondary-btn">
-          <strong>Advanced</strong>
-          <span>New terrain resources, gated construction, and advanced units.</span>
-        </button>
-        <button id="mode-scenario-btn" type="button" class="mode-card tertiary-btn">
-          <strong>Scenario</strong>
-          <span>Pre-designed maps and objectives with advanced rules.</span>
-        </button>
-      </div>
-    </section>
+    <div class="setup-atlas">
+      <section class="setup-hero" aria-labelledby="mode-title">
+        <div class="setup-branding">
+          <div class="setup-kicker">Grand Strategy Prototype</div>
+          <h1 id="mode-title" class="setup-brand"><span class="line">League</span><span class="line">of Nations</span></h1>
+          <p class="setup-headline">Statecraft, borders, and ambition on a living map.</p>
+          <p class="setup-lede">Choose the frame for your campaign, then open a custom match built around diplomacy, infrastructure, and territorial power.</p>
+        </div>
+        <div class="setup-vignette mode-vignette" aria-hidden="true"></div>
+      </section>
+      <section class="setup-panel mode-panel" aria-label="Choose ruleset">
+        <div class="setup-head">
+          <div>
+            <div class="setup-kicker">Campaign Frame</div>
+            <h2 class="setup-title">Select the rules of play</h2>
+            <p class="setup-subtitle">One choice, one tone. Pick the version of the world you want to govern before opening match settings.</p>
+          </div>
+        </div>
+        <div class="mode-grid">
+          <button id="mode-lite-btn" type="button" class="mode-card">
+            <strong>Lite</strong>
+            <span>Fast setup and the current streamlined ruleset for immediate play.</span>
+          </button>
+          <button id="mode-advanced-btn" type="button" class="mode-card">
+            <strong>Advanced</strong>
+            <span>Richer terrain resources, gated construction, and broader military depth.</span>
+          </button>
+          <button id="mode-scenario-btn" type="button" class="mode-card">
+            <strong>Scenario</strong>
+            <span>Pre-authored situations with fixed maps, objectives, and a sharper historical frame.</span>
+          </button>
+        </div>
+      </section>
+    </div>
   </div>
 
   <div id="scenario-screen" class="setup-screen" hidden>
-    <section class="setup-panel" aria-labelledby="scenario-title">
-      <div class="setup-head">
-        <div>
-          <div id="scenario-title" class="setup-title">Choose a Scenario</div>
-          <div class="setup-subtitle">Select a scenario with pre-designed map and objectives.</div>
+    <div class="setup-atlas">
+      <section class="setup-hero" aria-labelledby="scenario-title">
+        <div class="setup-branding">
+          <div class="setup-kicker">Scenario Selection</div>
+          <h1 class="setup-brand"><span class="line">League</span><span class="line">of Nations</span></h1>
+          <h2 id="scenario-title" class="setup-headline">Enter a designed geopolitical situation.</h2>
+          <p class="setup-lede">Each scenario begins with its own map, objective pressure, and diplomatic geometry. Choose the world before you choose the nation.</p>
         </div>
-        <button id="scenario-back-btn" type="button" class="secondary-btn">Back</button>
-      </div>
-      <div id="scenario-grid" class="scenario-grid"></div>
-    </section>
+        <div class="setup-vignette scenario-vignette" aria-hidden="true"></div>
+      </section>
+      <section class="setup-panel" aria-label="Choose a scenario">
+        <div class="setup-head">
+          <div>
+            <div class="setup-kicker">Curated Situations</div>
+            <h2 class="setup-title">Choose a scenario</h2>
+            <p class="setup-subtitle">Select a pre-designed map and objective set. This screen should do only that.</p>
+          </div>
+          <button id="scenario-back-btn" type="button" class="secondary-btn">Back</button>
+        </div>
+        <div id="scenario-grid" class="scenario-grid"></div>
+      </section>
+    </div>
   </div>
 
   <div id="setup-screen" class="setup-screen" hidden>
-    <form id="setup-form" class="setup-panel">
-      <div class="setup-head">
-        <div>
-          <div class="setup-title">League of Nations</div>
-          <div id="setup-subtitle" class="setup-subtitle">Educational turn-based strategy</div>
+    <div class="setup-atlas">
+      <section class="setup-hero" aria-labelledby="setup-title-brand">
+        <div class="setup-branding">
+          <div class="setup-kicker">Match Configuration</div>
+          <h1 id="setup-title-brand" class="setup-brand"><span class="line">League</span><span class="line">of Nations</span></h1>
+          <h2 class="setup-headline">Draft a world, then decide who enters it.</h2>
+          <p class="setup-lede">This screen exists only to define the match: map scale, political density, time pressure, and whether the game begins against bots or behind a room code.</p>
         </div>
-        <button id="back-to-mode-btn" type="button" class="secondary-btn">Back</button>
-      </div>
-      <div class="setup-grid">
-        <label class="field">
-          <span>Nation name</span>
-          <input id="setup-player-name" type="text" maxlength="40" value="Republic of Nova" />
-        </label>
-        <label class="field">
-          <span>Map size</span>
-	          <select id="setup-map-size">
-	            <option>Small</option>
-	            <option selected>Medium</option>
-	            <option>Large</option>
-	            <option>Extra Large</option>
-	            <option>Enormous</option>
-	          </select>
-	        </label>
-	        <label class="field">
-	          <span>Total nations</span>
-	          <input id="setup-nation-count" type="number" min="2" max="16" step="1" value="5" />
-	        </label>
-        <label class="field">
-          <span>Water coverage</span>
-          <select id="setup-water-level">
-            <option value="Low">More Land</option>
-            <option value="Balanced" selected>Balanced</option>
-            <option value="High">More Water</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Landscape diversity</span>
-          <select id="setup-landscape-diversity">
-            <option value="Low">Low</option>
-            <option value="Balanced" selected>Balanced</option>
-            <option value="High">High</option>
-          </select>
-        </label>
-        <label class="field checkbox-field">
-          <input id="setup-fog-of-war" type="checkbox" />
-          <span>Fog of War</span>
-        </label>
-        <label class="field">
-          <span>Max turns</span>
-          <input id="setup-max-turns" type="number" min="10" max="120" step="1" value="30" />
-        </label>
-        <label class="field">
-          <span>Minutes per turn</span>
-          <input id="setup-turn-timer" type="number" min="0" max="240" step="1" value="0" />
-        </label>
-        <label class="field checkbox-field">
-          <input id="setup-unlimited" type="checkbox" />
-          <span>Unlimited mode</span>
-        </label>
-        <label class="field checkbox-field">
-          <input id="setup-happiness-enabled" type="checkbox" checked />
-          <span>Citizen happiness</span>
-        </label>
-      </div>
-      <div id="continue-note" class="continue-note"></div>
-      <div class="setup-actions">
-        <button id="enter-code-btn" type="button" class="secondary-btn">Enter Code</button>
-        <button id="create-match-btn" type="button" class="secondary-btn">Create Online Match</button>
-        <button type="submit" class="primary-btn">Start Bot Match</button>
-      </div>
-      <div id="join-panel" class="join-panel" hidden>
-        <label class="field">
-          <span>Room code</span>
-          <input id="join-room-code" type="text" maxlength="8" autocomplete="off" placeholder="ABCDE" />
-        </label>
-        <button id="join-match-btn" type="button" class="primary-btn">Join Match</button>
-      </div>
-      <div id="multiplayer-error" class="multiplayer-error" role="alert" hidden></div>
-    </form>
+        <div class="setup-vignette mode-vignette" aria-hidden="true"></div>
+      </section>
+      <form id="setup-form" class="setup-panel">
+        <div class="setup-head">
+          <div>
+            <div class="setup-kicker">New Match</div>
+            <div class="setup-title">Set the campaign terms</div>
+            <div id="setup-subtitle" class="setup-subtitle">Educational turn-based strategy</div>
+          </div>
+          <button id="back-to-mode-btn" type="button" class="secondary-btn">Back</button>
+        </div>
+        <div class="setup-form-sections">
+          <section class="setup-section" aria-labelledby="setup-identity-title">
+            <div class="setup-section-header">
+              <div id="setup-identity-title" class="setup-section-title">Identity</div>
+              <div class="setup-section-copy">Name the nation you will govern before shaping the wider world.</div>
+            </div>
+            <div class="setup-grid">
+              <label class="field wide">
+                <span>Nation name</span>
+                <input id="setup-player-name" type="text" maxlength="40" value="Republic of Nova" />
+              </label>
+            </div>
+          </section>
+
+          <section class="setup-section" aria-labelledby="setup-map-title">
+            <div class="setup-section-header">
+              <div id="setup-map-title" class="setup-section-title">Map and Balance</div>
+              <div class="setup-section-copy">Define the size, shape, and political density of the world map.</div>
+            </div>
+            <div class="setup-grid">
+              <label class="field">
+                <span>Map size</span>
+                <select id="setup-map-size">
+                  <option>Small</option>
+                  <option selected>Medium</option>
+                  <option>Large</option>
+                  <option>Extra Large</option>
+                  <option>Enormous</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Total nations</span>
+                <input id="setup-nation-count" type="number" min="2" max="16" step="1" value="5" />
+              </label>
+              <label class="field">
+                <span>Water coverage</span>
+                <select id="setup-water-level">
+                  <option value="Low">More Land</option>
+                  <option value="Balanced" selected>Balanced</option>
+                  <option value="High">More Water</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Landscape diversity</span>
+                <select id="setup-landscape-diversity">
+                  <option value="Low">Low</option>
+                  <option value="Balanced" selected>Balanced</option>
+                  <option value="High">High</option>
+                </select>
+              </label>
+              <label class="field checkbox-field">
+                <input id="setup-fog-of-war" type="checkbox" />
+                <span>Fog of War</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="setup-section" aria-labelledby="setup-rules-title">
+            <div class="setup-section-header">
+              <div id="setup-rules-title" class="setup-section-title">Pacing and Rules</div>
+              <div class="setup-section-copy">Control turn pressure, match length, and social simulation complexity.</div>
+            </div>
+            <div class="setup-grid">
+              <label class="field">
+                <span>Max turns</span>
+                <input id="setup-max-turns" type="number" min="10" max="120" step="1" value="30" />
+              </label>
+              <label class="field">
+                <span>Minutes per turn</span>
+                <input id="setup-turn-timer" type="number" min="0" max="240" step="1" value="0" />
+              </label>
+              <label class="field checkbox-field">
+                <input id="setup-unlimited" type="checkbox" />
+                <span>Unlimited mode</span>
+              </label>
+              <label class="field checkbox-field">
+                <input id="setup-happiness-enabled" type="checkbox" checked />
+                <span>Citizen happiness</span>
+              </label>
+            </div>
+          </section>
+        </div>
+        <div id="continue-note" class="continue-note"></div>
+        <div class="setup-actions">
+          <button id="enter-code-btn" type="button" class="secondary-btn">Enter Code</button>
+          <button id="create-match-btn" type="button" class="secondary-btn">Create Online Match</button>
+          <button type="submit" class="primary-btn">Start Bot Match</button>
+        </div>
+        <div id="join-panel" class="join-panel" hidden>
+          <label class="field">
+            <span>Room code</span>
+            <input id="join-room-code" type="text" maxlength="8" autocomplete="off" placeholder="ABCDE" />
+          </label>
+          <button id="join-match-btn" type="button" class="primary-btn">Join Match</button>
+        </div>
+        <div id="multiplayer-error" class="multiplayer-error" role="alert" hidden></div>
+      </form>
+    </div>
   </div>
 
   <div id="lobby-screen" class="setup-screen" hidden>
-    <section class="setup-panel lobby-panel" aria-labelledby="lobby-title">
-      <div class="lobby-head">
-        <div>
-          <div id="lobby-title" class="setup-title">Lobby</div>
-          <div id="lobby-subtitle" class="setup-subtitle">Room code <strong id="lobby-room-code">-----</strong></div>
+    <div class="setup-atlas">
+      <section class="setup-hero" aria-labelledby="lobby-hero-title">
+        <div class="setup-branding">
+          <div class="setup-kicker">Assembly Chamber</div>
+          <h1 class="setup-brand"><span class="line">League</span><span class="line">of Nations</span></h1>
+          <h2 id="lobby-hero-title" class="setup-headline">Hold the room. Set the terms. Begin when the table is ready.</h2>
+          <p class="setup-lede">The lobby is for two things only: seeing who is present and finalizing the world they are about to share.</p>
         </div>
-        <div class="lobby-head-actions">
-          <button id="lobby-start-btn" type="button" class="primary-btn">Start Game</button>
-          <button id="leave-lobby-btn" type="button" class="secondary-btn">Leave</button>
-        </div>
-      </div>
-
-      <div class="lobby-layout">
-        <section class="lobby-section">
-          <h2>Players</h2>
-          <div id="lobby-player-list" class="lobby-player-list"></div>
-        </section>
-
-        <section class="lobby-section">
-          <h2>Game Settings</h2>
-          <div class="setup-grid lobby-settings">
-            <label class="field">
-              <span>Map size</span>
-	              <select id="lobby-map-size">
-	                <option>Small</option>
-	                <option>Medium</option>
-	                <option>Large</option>
-	                <option>Extra Large</option>
-	                <option>Enormous</option>
-	              </select>
-	            </label>
-	            <label class="field">
-	              <span>Total nations</span>
-	              <input id="lobby-nation-count" type="number" min="2" max="16" step="1" />
-	            </label>
-            <label class="field">
-              <span>Water coverage</span>
-              <select id="lobby-water-level">
-                <option value="Low">More Land</option>
-                <option value="Balanced">Balanced</option>
-                <option value="High">More Water</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Landscape diversity</span>
-              <select id="lobby-landscape-diversity">
-                <option value="Low">Low</option>
-                <option value="Balanced">Balanced</option>
-                <option value="High">High</option>
-              </select>
-            </label>
-            <label class="field checkbox-field">
-              <input id="lobby-fog-of-war" type="checkbox" />
-              <span>Fog of War</span>
-            </label>
-            <label class="field">
-              <span>Max turns</span>
-              <input id="lobby-max-turns" type="number" min="10" max="120" step="1" />
-            </label>
-            <label class="field">
-              <span>Minutes per turn</span>
-              <input id="lobby-turn-timer" type="number" min="0" max="240" step="1" />
-            </label>
-            <label class="field checkbox-field">
-              <input id="lobby-unlimited" type="checkbox" />
-              <span>Unlimited mode</span>
-            </label>
-            <label class="field checkbox-field">
-              <input id="lobby-happiness-enabled" type="checkbox" />
-              <span>Citizen happiness</span>
-            </label>
+        <div class="setup-vignette scenario-vignette" aria-hidden="true"></div>
+      </section>
+      <section class="setup-panel lobby-panel" aria-labelledby="lobby-title">
+        <div class="lobby-head">
+          <div>
+            <div class="setup-kicker">Multiplayer Lobby</div>
+            <div id="lobby-title" class="setup-title">Room ready for delegates</div>
+            <div id="lobby-subtitle" class="setup-subtitle">Room code <strong id="lobby-room-code">-----</strong></div>
           </div>
-        </section>
-      </div>
+          <div class="lobby-head-actions">
+            <button id="lobby-start-btn" type="button" class="primary-btn">Start Game</button>
+            <button id="leave-lobby-btn" type="button" class="secondary-btn">Leave</button>
+          </div>
+        </div>
 
-      <div id="lobby-status" class="continue-note"></div>
-    </section>
+        <div class="lobby-layout">
+          <section class="lobby-section">
+            <h2>Players</h2>
+            <div id="lobby-player-list" class="lobby-player-list"></div>
+          </section>
+
+          <section class="lobby-section">
+            <h2>Game Settings</h2>
+            <div class="setup-grid lobby-settings">
+              <label class="field">
+                <span>Map size</span>
+                <select id="lobby-map-size">
+                  <option>Small</option>
+                  <option>Medium</option>
+                  <option>Large</option>
+                  <option>Extra Large</option>
+                  <option>Enormous</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Total nations</span>
+                <input id="lobby-nation-count" type="number" min="2" max="16" step="1" />
+              </label>
+              <label class="field">
+                <span>Water coverage</span>
+                <select id="lobby-water-level">
+                  <option value="Low">More Land</option>
+                  <option value="Balanced">Balanced</option>
+                  <option value="High">More Water</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Landscape diversity</span>
+                <select id="lobby-landscape-diversity">
+                  <option value="Low">Low</option>
+                  <option value="Balanced">Balanced</option>
+                  <option value="High">High</option>
+                </select>
+              </label>
+              <label class="field checkbox-field">
+                <input id="lobby-fog-of-war" type="checkbox" />
+                <span>Fog of War</span>
+              </label>
+              <label class="field">
+                <span>Max turns</span>
+                <input id="lobby-max-turns" type="number" min="10" max="120" step="1" />
+              </label>
+              <label class="field">
+                <span>Minutes per turn</span>
+                <input id="lobby-turn-timer" type="number" min="0" max="240" step="1" />
+              </label>
+              <label class="field checkbox-field">
+                <input id="lobby-unlimited" type="checkbox" />
+                <span>Unlimited mode</span>
+              </label>
+              <label class="field checkbox-field">
+                <input id="lobby-happiness-enabled" type="checkbox" />
+                <span>Citizen happiness</span>
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <div id="lobby-status" class="continue-note"></div>
+      </section>
+    </div>
   </div>
 
 	  <div id="app" class="app" hidden>
