@@ -25,9 +25,11 @@ import {
   getScenarioMap,
   getScenarioObjectives,
   getScenarioStartingPositions,
+  getScenarioNeutralStartingPositions,
   getScenarioRuleOverrides,
   getScenarioStartingAlliances,
   getScenarioTurnLimit,
+  getScenarioStartingEra,
   getScenarioEvents,
 } from "./scenarios.js";
 import {
@@ -73,6 +75,7 @@ import {
   shiftReligionToward,
   normalizeSociety,
   religionLabel,
+  isSocietyEnabled,
 } from "./cultureReligion.js";
 import {
   INFRASTRUCTURE_BUILD_COSTS,
@@ -266,9 +269,11 @@ export class GameState {
     // Get map - use scenario map if available, otherwise generate
     let map;
     let scenarioStartPositions = null;
+    let scenarioNeutralPositions = [];
     if (settings.scenarioId) {
       map = getScenarioMap(settings.scenarioId);
       scenarioStartPositions = getScenarioStartingPositions(settings.scenarioId);
+      scenarioNeutralPositions = getScenarioNeutralStartingPositions(settings.scenarioId) || [];
     }
     if (!map) {
       map = createMapData(settings);
@@ -301,48 +306,46 @@ export class GameState {
       botIds.push(bot.id);
     }
 
+    for (const neutral of scenarioNeutralPositions) {
+      if (!neutral?.id || nations[neutral.id]) continue;
+      const nation = createNation({
+        id: neutral.id,
+        name: neutral.name || "Neutral Territory",
+        color: neutral.color || "#8f928d",
+        isPlayer: false,
+        profile: "small",
+        personality: "balanced",
+      });
+      nation.active = false;
+      nation.scenarioNeutral = true;
+      nation.lockedNeutral = neutral.lockedNeutral !== false;
+      nation.factionId = neutral.factionId || neutral.id;
+      nation.bloc = neutral.bloc || "neutral";
+      nation.color = neutral.color || "#8f928d";
+      nation.money = 0;
+      nation.resources = { ...nation.resources, food: 0, materials: 0, education: 0, industry: 0 };
+      nations[nation.id] = nation;
+    }
+
     // Assign starting territories - use scenario positions if available
     if (scenarioStartPositions && scenarioStartPositions.length > 0) {
       // Scenario-based starting positions
       for (const posData of scenarioStartPositions.slice(0, settings.nationCount)) {
         const nationId = posData.nationIndex === 0 ? "player" : `bot-${posData.nationIndex}`;
-        const nation = nations[nationId];
-        if (nation && posData.startTiles) {
-          for (const [q, r] of posData.startTiles) {
-            const tile = findOrNearestLandTile(map, q, r, 4);
-            if (tile) {
-              tile.ownerId = nationId;
-            }
-          }
-          // Set starting resources if provided
-          if (posData.startingResources) {
-            nation.resources = nation.resources || {};
-            for (const [res, amount] of Object.entries(posData.startingResources)) {
-              nation.resources[res] = amount;
-            }
-          }
-          // Faction metadata is preserved on the nation so victory checks
-          // and event hooks can map nationId → factionId without lookups.
-          if (posData.factionId) nation.factionId = posData.factionId;
-          if (posData.bloc) nation.bloc = posData.bloc;
-          // Mark capital tile (first start tile, or nearest land to capital coord).
-          const capitalTile = posData.startTiles[0]
-            ? findOrNearestLandTile(map, posData.startTiles[0][0], posData.startTiles[0][1], 4)
-            : null;
-          if (capitalTile) {
-            capitalTile.isCapital = true;
-            capitalTile.type = TILE_TYPES.CAPITAL_CITY;
-            capitalTile.hasMilitaryBase = true;
-            capitalTile.workers = WORKER_MIN[TILE_TYPES.CAPITAL_CITY];
-            capitalTile.unit = {
-              nationId,
-              strength: 4,
-              branch: "infantry",
-              movedTurn: 0,
-            };
-            nation.capitalTileId = capitalTile.id;
-            capitalTile.ownerId = nationId;
-          }
+        applyScenarioStartingPosition(map, nations, posData, nationId);
+      }
+      for (const posData of scenarioNeutralPositions) {
+        applyScenarioStartingPosition(map, nations, posData, posData.id);
+      }
+      for (const posData of scenarioStartPositions.slice(0, settings.nationCount)) {
+        const nationId = posData.nationIndex === 0 ? "player" : `bot-${posData.nationIndex}`;
+        applyScenarioStartingPosition(map, nations, posData, nationId, { controlAreas: false });
+      }
+      for (const posData of scenarioStartPositions.slice(0, settings.nationCount)) {
+        if (!posData.finalControlAreas?.length) continue;
+        const nationId = posData.nationIndex === 0 ? "player" : `bot-${posData.nationIndex}`;
+        for (const area of posData.finalControlAreas) {
+          paintScenarioControlArea(map, area.q, area.r, area.brush || 0, nationId);
         }
       }
     } else {
@@ -381,6 +384,7 @@ export class GameState {
       playerId: player.id,
       botIds,
       objectives,
+      era: getScenarioStartingEra(settings.scenarioId) || 1,
     });
 
     // Scenario alliances + events are applied after GameState exists so
@@ -391,6 +395,7 @@ export class GameState {
     for (const botId of botIds) {
       game.addEvent(`${game.nations[botId].name} plays as a ${game.nations[botId].personality} nation.`, { nationId: botId, type: "ai" });
     }
+    runScenarioEvents(game);
     return game;
   }
 
@@ -407,6 +412,10 @@ export class GameState {
 
   get player() {
     return this.nations[this.playerId];
+  }
+
+  societyEnabled() {
+    return isSocietyEnabled(this);
   }
 
   on(listener) {
@@ -1190,9 +1199,11 @@ export class GameState {
       to.unit = { ...from.unit, nationId: attackerId, movedTurn: this.turn };
       from.unit = null;
       attacker.stats.tilesCaptured += 1;
-      blendCultureTowardNation(attacker, defender, SOCIETY.tileCaptureCultureShift);
-      if (defender.religion?.dominantReligionId) {
-        shiftReligionToward(attacker, defender.religion.dominantReligionId, SOCIETY.tileCaptureReligionShift);
+      if (this.societyEnabled()) {
+        blendCultureTowardNation(attacker, defender, SOCIETY.tileCaptureCultureShift);
+        if (defender.religion?.dominantReligionId) {
+          shiftReligionToward(attacker, defender.religion.dominantReligionId, SOCIETY.tileCaptureReligionShift);
+        }
       }
       report.territoryChanged = true;
       if (capitalCaptured) {
@@ -1300,9 +1311,11 @@ export class GameState {
     const defender = this.nations[defenderId];
     const winner = this.nations[winnerId];
     if (!defender?.active || !winner) return;
-    blendCultureTowardNation(winner, defender, SOCIETY.conquestCultureShift);
-    if (defender.religion?.dominantReligionId) {
-      shiftReligionToward(winner, defender.religion.dominantReligionId, SOCIETY.conquestReligionShift);
+    if (this.societyEnabled()) {
+      blendCultureTowardNation(winner, defender, SOCIETY.conquestCultureShift);
+      if (defender.religion?.dominantReligionId) {
+        shiftReligionToward(winner, defender.religion.dominantReligionId, SOCIETY.conquestReligionShift);
+      }
     }
     defender.active = false;
     for (const tile of this.tiles) {
@@ -1399,6 +1412,7 @@ export class GameState {
     if (!gate.ok) return gate;
     const nation = this.nations[nationId];
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    if (!this.societyEnabled()) return { ok: false, reason: "Society religion is disabled for this scenario." };
     if (this.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
     const result = chooseReligionForNation(nation, religionId, this.turn);
     if (!result.ok) return result;
@@ -1411,6 +1425,7 @@ export class GameState {
     if (!this.canMutateLocally()) return this.rejectServerAuthoritativeMutation();
     const nation = this.nations[nationId];
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    if (!this.societyEnabled()) return { ok: false, reason: "Society religion is disabled for this scenario." };
     if (this.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
     const action = this.canSpendAction(nationId);
     if (!action.ok) return action;
@@ -1600,7 +1615,7 @@ export class GameState {
     }
 
     const tradeResult = processTradeRoutes(this, summary);
-    processSocietySpread(this);
+    if (this.societyEnabled()) processSocietySpread(this);
 
     for (const nation of Object.values(this.nations).filter((item) => item.active)) {
       const routeFood = tradeResult.foodProduced[nation.id] || 0;
@@ -1619,6 +1634,10 @@ export class GameState {
     if (event) {
       this.addEvent(`${event.label}: ${event.description}`, { type: "global_event" });
       summary.notes.push(`${event.label}: ${event.results.slice(0, 3).join("; ")}`);
+    }
+    const scenarioEvents = runScenarioEvents(this);
+    for (const scenarioEvent of scenarioEvents) {
+      summary.notes.push(scenarioEvent.label);
     }
 
     tickTileEffects(this);
@@ -2052,6 +2071,121 @@ function findOrNearestLandTile(map, q, r, radius = 3) {
   return best;
 }
 
+function applyScenarioStartingPosition(map, nations, posData, nationId, options = {}) {
+  const nation = nations[nationId];
+  if (!nation || !posData) return;
+  if (posData.name) nation.name = posData.name;
+  if (posData.color) nation.color = posData.color;
+  if (posData.personality) nation.personality = posData.personality;
+  if (posData.factionId) nation.factionId = posData.factionId;
+  if (posData.bloc) nation.bloc = posData.bloc;
+  if (posData.scenarioNeutral) {
+    nation.scenarioNeutral = true;
+    nation.lockedNeutral = posData.lockedNeutral !== false;
+  }
+
+  if (options.controlAreas !== false) {
+    for (const area of posData.controlAreas || []) {
+      paintScenarioControlArea(map, area.q, area.r, area.brush || 0, nationId);
+    }
+  }
+  for (const [q, r] of posData.startTiles || []) {
+    const tile = findOrNearestLandTile(map, q, r, 4);
+    if (tile) tile.ownerId = nationId;
+  }
+
+  if (posData.startingResources) {
+    nation.resources = nation.resources || {};
+    for (const [res, amount] of Object.entries(posData.startingResources)) {
+      nation.resources[res] = amount;
+    }
+  }
+  if (posData.startingTech) {
+    nation.tech = {
+      ...nation.tech,
+      ...posData.startingTech,
+      branches: {
+        ...(nation.tech?.branches || {}),
+        ...(posData.startingTech.branches || {}),
+      },
+    };
+  }
+  if (posData.startingPopulation) {
+    const total = Math.max(1, Math.floor(Number(posData.startingPopulation) || 1));
+    const assigned = Object.values(nation.workers || {}).reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+    nation.population.total = total;
+    nation.population.available = Math.max(0, total - assigned);
+  }
+
+  const capitalSource = posData.capital
+    ? projectScenarioCapital(map, posData)
+    : posData.startTiles?.[0]
+      ? findOrNearestLandTile(map, posData.startTiles[0][0], posData.startTiles[0][1], 4)
+      : null;
+  if (capitalSource) {
+    capitalSource.isCapital = true;
+    capitalSource.type = TILE_TYPES.CAPITAL_CITY;
+    capitalSource.hasMilitaryBase = true;
+    capitalSource.workers = WORKER_MIN[TILE_TYPES.CAPITAL_CITY];
+    capitalSource.ownerId = nationId;
+    if (!nation.scenarioNeutral) {
+      capitalSource.unit = {
+        nationId,
+        strength: Math.max(4, Math.floor(Number(posData.startingUnitStrength) || 4)),
+        branch: "infantry",
+        branches: { infantry: Math.max(4, Math.floor(Number(posData.startingUnitStrength) || 4)) },
+        movedTurn: 0,
+      };
+    }
+    nation.capitalTileId = capitalSource.id;
+  }
+
+  for (const [q, r] of posData.industrialSites || []) {
+    const tile = findOrNearestLandTile(map, q, r, 4);
+    if (!tile || tile.isCapital || tile.ownerId !== nationId) continue;
+    tile.type = TILE_TYPES.FACTORY;
+    tile.workers = WORKER_MIN[TILE_TYPES.FACTORY] || 0;
+  }
+  for (const [q, r] of posData.militarySites || []) {
+    const tile = findOrNearestLandTile(map, q, r, 4);
+    if (!tile || tile.isCapital || tile.ownerId !== nationId) continue;
+    tile.type = TILE_TYPES.MILITARY;
+    tile.hasMilitaryBase = true;
+    tile.workers = WORKER_MIN[TILE_TYPES.MILITARY] || 0;
+    tile.unit = {
+      nationId,
+      strength: Math.max(3, Math.floor((Number(posData.startingUnitStrength) || 6) * 0.65)),
+      branch: "infantry",
+      branches: { infantry: Math.max(3, Math.floor((Number(posData.startingUnitStrength) || 6) * 0.65)) },
+      movedTurn: 0,
+    };
+  }
+}
+
+function projectScenarioCapital(map, posData) {
+  const projected = posData.startTiles?.[0];
+  if (projected) return findOrNearestLandTile(map, projected[0], projected[1], 5);
+  return null;
+}
+
+function paintScenarioControlArea(map, q, r, brush, nationId) {
+  const center = findOrNearestLandTile(map, q, r, Math.max(4, brush + 2));
+  if (!center) return 0;
+  let claimed = 0;
+  for (const tile of map.tiles) {
+    if (tile.terrain !== "land") continue;
+    const dist = Math.max(
+      Math.abs(tile.q - center.q),
+      Math.abs(tile.r - center.r),
+      Math.abs((tile.q + tile.r) - (center.q + center.r)),
+    );
+    if (dist > brush) continue;
+    tile.ownerId = nationId;
+    claimed += 1;
+  }
+  return claimed;
+}
+
 // Scenario helper: seed pre-formed alliances from faction blocs and stash
 // any scenario events on the game for downstream consumers.
 function applyScenarioStartupExtras(game, scenarioId) {
@@ -2083,6 +2217,28 @@ function applyScenarioStartupExtras(game, scenarioId) {
   // Scenario events are stored as data; execution is opt-in per-event.
   // For MVP we keep them on the game so future tick logic can consume them.
   game.scenarioEvents = getScenarioEvents(scenarioId);
+}
+
+function runScenarioEvents(game) {
+  if (!Array.isArray(game?.scenarioEvents) || game.gameOver) return [];
+  const fired = [];
+  for (const event of game.scenarioEvents) {
+    if (!event?.active || event.fired) continue;
+    const triggerTurn = Number(event.triggerTurn);
+    if (!Number.isFinite(triggerTurn) || game.turn < triggerTurn) continue;
+    event.fired = true;
+    try {
+      event.apply?.(game);
+      fired.push(event);
+    } catch (error) {
+      game.addEvent?.(`${event.label || "Scenario event"} failed: ${error?.message || error}`, { type: "scenario" });
+    }
+  }
+  if (fired.length) {
+    game.recomputeTerritories?.();
+    game.changed?.("scenario_event");
+  }
+  return fired;
 }
 
 function normalizeSettings(raw) {

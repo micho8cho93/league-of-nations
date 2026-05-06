@@ -63,6 +63,11 @@ export function createInitialSociety(nationId) {
   };
 }
 
+export function isSocietyEnabled(game) {
+  if (game?.settings?.scenarioId === "ww2_global") return false;
+  return game?.settings?.scenarioOverrides?.societyEnabled !== false;
+}
+
 export function normalizeSociety(nation) {
   if (!nation) return nation;
   normalizeCulture(nation);
@@ -159,6 +164,7 @@ export function societyRelationModifier(a, b) {
 }
 
 export function processSocietySpread(game) {
+  if (!isSocietyEnabled(game)) return;
   const activeNations = Object.values(game.nations || {}).filter((nation) => nation?.active);
   for (const nation of activeNations) normalizeSociety(nation);
 

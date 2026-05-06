@@ -154,6 +154,7 @@ export function declareWar(game, attackerId, defenderId, reason = "Strategic con
   normalizeWarReadiness(attacker);
   normalizeWarReadiness(defender);
   if (!attacker?.active || !defender?.active) return { ok: false, reason: "Target is unavailable." };
+  if (attacker.lockedNeutral || defender.lockedNeutral) return { ok: false, reason: "Neutral countries cannot be entered or interacted with." };
   if (areAllied(game, attackerId, defenderId)) return { ok: false, reason: "Break the alliance before declaring war." };
   if (areAtWar(game, attackerId, defenderId)) return { ok: false, reason: "War is already active." };
   const cost = BALANCE.war.declarationCost;
@@ -293,6 +294,9 @@ export function getAdjacentMilitaryActions(game, fromTileId, nationId) {
 
 export function canEnterTile(game, nationId, tile) {
   if (!tile) return { ok: false, reason: "No tile." };
+  if (tile.ownerId && game.nations[tile.ownerId]?.lockedNeutral && tile.ownerId !== nationId) {
+    return { ok: false, reason: "Neutral countries cannot be entered or interacted with." };
+  }
   if (isWaterLike(tile) && !hasNavalAccess(game.nations[nationId])) {
     return { ok: false, reason: "Water crossing requires naval specialization." };
   }
@@ -305,6 +309,9 @@ export function canEnterTile(game, nationId, tile) {
 export function canUnitEnterTile(game, nationId, tile, unitType = "infantry") {
   const config = unitTypeConfig(unitType);
   if (!tile) return { ok: false, reason: "No tile." };
+  if (tile.ownerId && game.nations[tile.ownerId]?.lockedNeutral && tile.ownerId !== nationId) {
+    return { ok: false, reason: "Neutral countries cannot be entered or interacted with." };
+  }
   if (tile.type === TILE_TYPES.MOUNTAIN) {
     return { ok: false, reason: "Mountains cannot be traversed. Only aircraft can fly over them." };
   }
@@ -573,6 +580,7 @@ export function canStrategicallyDeclare(game, attackerId, defenderId) {
   const attacker = game.nations[attackerId];
   const defender = game.nations[defenderId];
   if (!attacker?.active || !defender?.active || game.era < 3) return false;
+  if (attacker.lockedNeutral || defender.lockedNeutral) return false;
   if (areAtWar(game, attackerId, defenderId) || areAllied(game, attackerId, defenderId)) return false;
   const attackerPower = militaryPower(attacker, game.tiles);
   const defenderPower = militaryPower(defender, game.tiles);
@@ -645,6 +653,7 @@ function canMoveDestination(game, from, tile, nationId, unitType) {
 
 function canUnitAttackTile(game, nationId, tile, unitType) {
   const config = unitTypeConfig(unitType);
+  if (tile.ownerId && game.nations[tile.ownerId]?.lockedNeutral && tile.ownerId !== nationId) return false;
   if (isWaterLike(tile) && !config.canEnterWater && unitType !== "air") return false;
   if (config.coastalOnly && !isWaterLike(tile) && !isCoastalTile(game, tile)) return false;
   if (unitType === "tanks" && isWaterLike(tile)) return false;

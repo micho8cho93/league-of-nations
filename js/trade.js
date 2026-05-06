@@ -40,6 +40,9 @@ export function relationLabel(value) {
 export function canUseDiplomacy(game, a, b) {
   if (game.era < 2) return { ok: false, reason: "Diplomacy unlocks in Era 2." };
   if (!game.nations[a] || !game.nations[b]) return { ok: false, reason: "Nation unavailable." };
+  if (game.nations[a].lockedNeutral || game.nations[b].lockedNeutral) {
+    return { ok: false, reason: "Neutral countries cannot be entered or interacted with." };
+  }
   if (!game.nations[a].active || !game.nations[b].active) return { ok: false, reason: "Conquered nations cannot negotiate." };
   return { ok: true };
 }
@@ -60,7 +63,8 @@ export function evaluateTrade(game, fromId, toId, offer, request) {
   const offerValue = bundleValueForNation(game, toId, normalizedOffer);
   const requestValue = bundleValueForNation(game, fromId, normalizedRequest);
   const personalityThreshold = tradeThreshold(to.personality);
-  const effectiveRelation = Math.max(0, Math.min(100, record.relation + societyRelationModifier(from, to)));
+  const societyModifier = game.societyEnabled?.() === false ? 0 : societyRelationModifier(from, to);
+  const effectiveRelation = Math.max(0, Math.min(100, record.relation + societyModifier));
   const relationFactor = 1 - ((effectiveRelation - 50) / BALANCE.trade.relationFactorDivisor);
   const trustBonus = Math.min(BALANCE.trade.maxTrustBonus, record.trades * BALANCE.trade.trustBonusPerTrade);
   const required = requestValue * Math.max(BALANCE.trade.minimumRequiredFactor, personalityThreshold * relationFactor - trustBonus);
@@ -120,9 +124,10 @@ export function proposeAlliance(game, fromId, toId, type = "trade") {
   const to = game.nations[toId];
   if (from.money < config.cost) return { ok: false, reason: `Requires $${config.cost}.` };
   const record = getDiplomacy(game, fromId, toId);
+  const societyModifier = game.societyEnabled?.() === false ? 0 : societyRelationModifier(from, to);
   const score =
     record.relation +
-    societyRelationModifier(from, to) +
+    societyModifier +
     (to.personality === "economic" ? BALANCE.trade.personalityAllianceBonus.economic : 0) +
     (to.personality === "scientific" && type === "research" ? BALANCE.trade.personalityAllianceBonus.scientificResearch : 0) +
     (to.personality === "aggressive" && type === "military" ? BALANCE.trade.personalityAllianceBonus.aggressiveMilitary : 0);

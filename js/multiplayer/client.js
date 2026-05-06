@@ -160,12 +160,25 @@ export class LeagueMultiplayerClient {
 }
 
 export function bindRoomEvents(room, handlers = {}) {
+  const STALE_ACCEPTED_ACTION_ERROR_WINDOW_MS = 250;
   let lastActionErrorSignature = "";
   let lastActionErrorAt = 0;
+  let lastAcceptedOwnActionType = "";
+  let lastAcceptedOwnActionAt = 0;
+  const ownNationId = () => readPlayers(room?.state?.players).find((player) => player.sessionId === room?.sessionId)?.nationId || "";
   const forwardActionError = (payload) => {
     const signature = `${payload?.actionType || ""}:${payload?.message || ""}`;
     const now = Date.now();
     if (signature === lastActionErrorSignature && now - lastActionErrorAt < 100) return;
+    // Some lite-mode server flows can emit a stale rejection immediately after
+    // the same action was already accepted and applied. Ignore only that tiny window.
+    if (
+      payload?.actionType
+      && payload.actionType === lastAcceptedOwnActionType
+      && now - lastAcceptedOwnActionAt < STALE_ACCEPTED_ACTION_ERROR_WINDOW_MS
+    ) {
+      return;
+    }
     lastActionErrorSignature = signature;
     lastActionErrorAt = now;
     handleActionError(payload, handlers);
@@ -189,6 +202,10 @@ export function bindRoomEvents(room, handlers = {}) {
     handlers.onPlaying?.(readLobbyState(room), snapshot);
   });
   room.onMessage("actionAccepted", (payload) => {
+    if (payload?.nationId && payload.nationId === ownNationId()) {
+      lastAcceptedOwnActionType = String(payload.type || "");
+      lastAcceptedOwnActionAt = Date.now();
+    }
     handlers.onActionAccepted?.(payload);
   });
   room.onMessage("actionRejected", (payload) => {

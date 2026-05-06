@@ -61,6 +61,7 @@ export async function processBotTurn(game, botId) {
 }
 
 function trySociety(game, bot) {
+  if (game.societyEnabled?.() === false) return false;
   normalizeSociety(bot);
   if (game.era < SOCIETY.unlockEra) return false;
   if (!bot.religion.stateReligionId) {

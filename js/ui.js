@@ -54,6 +54,7 @@ import {
   RELIGIONS,
   SOCIETY,
   dominantCultureLabel,
+  isSocietyEnabled,
   normalizeSociety,
   religionIcon,
   religionLabel,
@@ -297,6 +298,7 @@ class GameUI {
 	    if (this.tutorial) this.closeTutorial({ markComplete: false, restorePanels: false });
 	    this.tutorial = {
 	      index: 0,
+      steps: this.tutorialSteps(),
       replay,
       overlay: this.createTutorialOverlay(),
       highlighted: null,
@@ -304,6 +306,11 @@ class GameUI {
     document.body.append(this.tutorial.overlay);
     document.body.classList.add("tutorial-active");
     this.showTutorialStep(0);
+  }
+
+  tutorialSteps() {
+    if (isSocietyEnabled(this.game)) return TUTORIAL_STEPS;
+    return TUTORIAL_STEPS.filter((step) => step.target !== "#board-society-btn");
   }
 
   createTutorialOverlay() {
@@ -338,7 +345,8 @@ class GameUI {
       this.showTutorialStep(this.tutorial.index - 1);
       return;
     }
-    if (this.tutorial.index >= TUTORIAL_STEPS.length - 1) {
+    const steps = this.tutorial.steps || TUTORIAL_STEPS;
+    if (this.tutorial.index >= steps.length - 1) {
       this.closeTutorial({ markComplete: true });
       return;
     }
@@ -347,18 +355,19 @@ class GameUI {
 
   showTutorialStep(index) {
     if (!this.tutorial) return;
-    const nextIndex = Math.max(0, Math.min(index, TUTORIAL_STEPS.length - 1));
-    const step = TUTORIAL_STEPS[nextIndex];
+    const steps = this.tutorial.steps || TUTORIAL_STEPS;
+    const nextIndex = Math.max(0, Math.min(index, steps.length - 1));
+    const step = steps[nextIndex];
     this.tutorial.index = nextIndex;
     this.prepareTutorialStep(step);
     this.clearTutorialHighlight();
 
     const overlay = this.tutorial.overlay;
-    overlay.querySelector(".tutorial-step-count").textContent = `Step ${nextIndex + 1} of ${TUTORIAL_STEPS.length}`;
+    overlay.querySelector(".tutorial-step-count").textContent = `Step ${nextIndex + 1} of ${steps.length}`;
     overlay.querySelector("#tutorial-title").textContent = step.title;
     overlay.querySelector("#tutorial-body").textContent = step.body;
     overlay.querySelector("[data-tutorial-action='back']").disabled = nextIndex === 0;
-    overlay.querySelector("[data-tutorial-action='next']").textContent = nextIndex === TUTORIAL_STEPS.length - 1 ? "Finish" : "Next";
+    overlay.querySelector("[data-tutorial-action='next']").textContent = nextIndex === steps.length - 1 ? "Finish" : "Next";
 
     const target = document.querySelector(step.target);
     if (target && !target.hidden) {
@@ -416,6 +425,7 @@ class GameUI {
   }
 
   maybePromptReligionChoice() {
+    if (!isSocietyEnabled(this.game)) return;
     if (this.playerNeedsEducationReflection()) return;
     const player = this.game.player;
     if (!player || this.game.era < SOCIETY.unlockEra || player.religion?.stateReligionId || this.game.gameOver) return;
@@ -665,6 +675,7 @@ class GameUI {
 
   renderStatus() {
     const player = this.game.player;
+    const societyEnabled = isSocietyEnabled(this.game);
     const waitingForTurn = this.isServerAuthoritative() && !this.isPlayersTurn();
     const needsReflection = this.playerNeedsEducationReflection();
     const endTurnDisabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn || needsReflection;
@@ -677,6 +688,7 @@ class GameUI {
       this.floatingEndTurnBtn.textContent = endTurnLabel;
       this.syncFloatingEndTurnButton();
     }
+    if (this.boardSocietyBtn) this.boardSocietyBtn.hidden = !societyEnabled;
     this.renderActionCounter();
     const turnLimit = this.game.settings.unlimitedMode ? "Unlimited" : `${this.game.turn}/${this.game.settings.maxTurns}`;
     const statusPills = [
@@ -688,8 +700,8 @@ class GameUI {
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
       pill(`Happy ${formatNumber(populationHappiness(player))} ${happinessBand(player).label}`),
     ];
-    normalizeSociety(player);
-    if (this.game.era >= SOCIETY.unlockEra) {
+    if (societyEnabled) normalizeSociety(player);
+    if (societyEnabled && this.game.era >= SOCIETY.unlockEra) {
       statusPills.push(pill(player.religion.stateReligionId ? religionLabel(player.religion.stateReligionId) : "Choose Religion"));
     }
     const timerText = this.turnTimerText();
@@ -1102,6 +1114,9 @@ class GameUI {
   }
 
   renderSocietyHtml({ prompt = false } = {}) {
+    if (!isSocietyEnabled(this.game)) {
+      return `<p class="muted">Religion and culture are disabled for this scenario.</p>`;
+    }
     const player = this.game.player;
     normalizeSociety(player);
     const stateReligion = player.religion.stateReligionId;
@@ -1159,22 +1174,31 @@ class GameUI {
     if (this.game.era < 2) {
       return `<p class="muted">Diplomacy, trade, and alliances unlock in Era 2.</p>`;
     }
+    const societyEnabled = isSocietyEnabled(this.game);
     const rows = this.diplomacyTargetIds().map((id) => {
       const nation = this.game.nations[id];
       if (!nation) return "";
-      normalizeSociety(nation);
-      normalizeSociety(this.game.player);
+      if (societyEnabled) {
+        normalizeSociety(nation);
+        normalizeSociety(this.game.player);
+      }
       const diplo = getDiplomacy(this.game, this.game.playerId, id);
       const activeAlliances = this.game.alliances.filter((alliance) => alliance.active && alliance.members.includes(this.game.playerId) && alliance.members.includes(id));
       const war = this.game.wars[`${[this.game.playerId, id].sort().join("|")}`]?.active;
       const route = this.game.tradeRoutes.find((item) => item.status !== "removed" && item.members?.includes(this.game.playerId) && item.members?.includes(id));
       const routeText = route ? `Route ${route.status}${route.status === "disrupted" ? ` until T${route.disruptedUntil}` : ""}` : "No trade route";
       const embargoActive = (diplo.embargoes?.[this.game.playerId] || 0) > this.game.turn;
-      const societyModifier = societyRelationModifier(this.game.player, nation);
-      const religionText = nation.religion.stateReligionId
+      const societyModifier = societyEnabled ? societyRelationModifier(this.game.player, nation) : 0;
+      const religionText = societyEnabled && nation.religion.stateReligionId
         ? `${religionIcon(nation.religion.stateReligionId)} ${religionLabel(nation.religion.stateReligionId)}`
         : "No religion";
-      const cultureText = dominantCultureLabel(this.game, nation.culture.dominantCultureId);
+      const cultureText = societyEnabled ? dominantCultureLabel(this.game, nation.culture.dominantCultureId) : "";
+      const societyLine = societyEnabled
+        ? `<div class="muted">${escapeHtml(religionText)} · ${escapeHtml(cultureText)} culture · society modifier ${signed(societyModifier)}</div>`
+        : "";
+      const societyTitle = societyEnabled
+        ? `title="Religion and culture currently apply ${signed(societyModifier)} relation-equivalent pressure."`
+        : "";
       return `
         <div class="diplo-row">
           <div class="row-head">
@@ -1182,10 +1206,10 @@ class GameUI {
             <span class="mini-pill ${war ? "bad" : ""}">${war ? "War" : relationLabel(diplo.relation)} ${diplo.relation}</span>
           </div>
           <div class="muted">${nation.personality} · ${activeAlliances.length ? activeAlliances.map((a) => a.label).join(", ") : "No active alliance"} · ${routeText}</div>
-          <div class="muted">${escapeHtml(religionText)} · ${escapeHtml(cultureText)} culture · society modifier ${signed(societyModifier)}</div>
+          ${societyLine}
           <div class="row-actions">
-            <button class="secondary-btn" data-diplo="trade" data-id="${id}" ${this.actionDisabledAttribute("trade")} title="Religion and culture currently apply ${signed(societyModifier)} relation-equivalent pressure.">Trade</button>
-            <button class="secondary-btn" data-diplo="alliance" data-id="${id}" ${this.actionDisabledAttribute("proposeAlliance")} title="Religion and culture currently apply ${signed(societyModifier)} relation-equivalent pressure.">Alliance</button>
+            <button class="secondary-btn" data-diplo="trade" data-id="${id}" ${this.actionDisabledAttribute("trade")} ${societyTitle}>Trade</button>
+            <button class="secondary-btn" data-diplo="alliance" data-id="${id}" ${this.actionDisabledAttribute("proposeAlliance")} ${societyTitle}>Alliance</button>
             <button class="secondary-btn" data-diplo="embargo" data-id="${id}" ${war || embargoActive || !this.canUseAction("embargo") ? "disabled" : ""}>${embargoActive ? "Embargoed" : `Embargo $${BALANCE.trade.embargo.cost}`}</button>
             <button class="danger-btn" data-diplo="war" data-id="${id}" ${this.game.era < 3 || war || !this.canUseAction("declareWar") ? "disabled" : ""}>Declare War</button>
           </div>
@@ -1491,7 +1515,8 @@ class GameUI {
       this.tooltip.hidden = true;
       return;
     }
-    const owner = tile.ownerId ? this.game.nations[tile.ownerId]?.name : "Unowned";
+    const ownerNation = tile.ownerId ? this.game.nations[tile.ownerId] : null;
+    const owner = ownerNation?.scenarioNeutral ? `${ownerNation.name} · Neutral - cannot enter or interact` : ownerNation?.name || "Unowned";
     this.tooltip.innerHTML = `<strong>${escapeHtml(TILE_LABELS[tile.type])}</strong><br />${escapeHtml(biomeLabel(tile))} · ${escapeHtml(owner)}<br />${escapeHtml(infrastructureLabel(tile.infrastructure))}`;
     this.tooltip.style.left = `${event.clientX + 14}px`;
     this.tooltip.style.top = `${event.clientY + 14}px`;
@@ -1557,7 +1582,7 @@ class GameUI {
       return;
     }
     const owner = tile.ownerId ? this.game.nations[tile.ownerId] : null;
-    const production = owner ? productionForTile(owner, tile, this.game.era) : null;
+    const production = owner && !owner.scenarioNeutral ? productionForTile(owner, tile, this.game.era) : null;
     const advancedResource = isAdvancedMode(this.game) ? advancedResourceForTile(tile) : null;
     const resourceText = production
       ? ["money", "food", "materials", "education", "industry", "people"].filter((key) => production[key]).map((key) => `${key}: ${signed(production[key])}/turn`).join(" · ")
@@ -1569,12 +1594,12 @@ class GameUI {
     }).join(" · ");
     this.openDialog("Tile Details", `
       <div class="metric-grid">
-        ${metric("Owner", owner ? owner.name : "Unowned")}
+        ${metric("Owner", owner?.scenarioNeutral ? `${owner.name} - Neutral locked` : owner ? owner.name : "Unowned")}
         ${metric("Infrastructure", infrastructureLabel(tile.infrastructure))}
         ${metric("Resource", resourceText)}
         ${advancedResource ? metric("Special Resource", `${RESOURCE_METADATA[advancedResource].label} (${RESOURCE_BASE_YIELD_PER_TILE}/turn)`) : ""}
         ${metric("Workers", tile.workers)}
-        ${metric("Actions", tile.ownerId === this.game.playerId ? "Build, workers, military where valid" : "Inspect only")}
+        ${metric("Actions", owner?.scenarioNeutral ? "Neutral - cannot enter or interact" : tile.ownerId === this.game.playerId ? "Build, workers, military where valid" : "Inspect only")}
       </div>
       <div class="summary-row"><strong>Costs</strong><div class="muted">${escapeHtml(buildCosts)}</div></div>
     `);
@@ -1725,6 +1750,7 @@ class GameUI {
   }
 
   handleSocietyClick(event) {
+    if (!isSocietyEnabled(this.game)) return;
     const chooseButton = event.target.closest("[data-society-religion]");
     if (chooseButton) {
       const religionId = chooseButton.dataset.societyReligion;

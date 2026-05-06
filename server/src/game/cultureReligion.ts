@@ -57,6 +57,11 @@ export function createInitialSociety(nationId: string) {
   };
 }
 
+export function isSocietyEnabled(game: ServerGameState | Record<string, any>) {
+  if ((game as any)?.settings?.scenarioId === "ww2_global") return false;
+  return (game as any)?.settings?.scenarioOverrides?.societyEnabled !== false;
+}
+
 export function isValidReligion(religionId: unknown) {
   return RELIGION_IDS.includes(String(religionId));
 }
@@ -157,6 +162,7 @@ export function societyRelationModifier(a: Nation, b: Nation) {
 }
 
 export function processSocietySpread(game: ServerGameState) {
+  if (!isSocietyEnabled(game)) return;
   const activeNations = Object.values(game.nations || {}).filter((nation) => nation?.active);
   for (const nation of activeNations) normalizeSociety(nation);
 

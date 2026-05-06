@@ -47,6 +47,7 @@ import {
   shiftReligionToward,
   normalizeSociety,
   societyRelationModifier,
+  isSocietyEnabled,
 } from "./cultureReligion.js";
 
 type Tile = ServerGameState["map"]["tiles"][number];
@@ -678,7 +679,7 @@ export function processServerRound(game: ServerGameState) {
 
   for (const nation of Object.values(game.nations)) {
     if (!nation.active) continue;
-    ensureAutomaticReligionChoice(game, nation);
+    if (isSocietyEnabled(game)) ensureAutomaticReligionChoice(game, nation);
     const logistics = computeNationLogistics(game.map.tiles, nation);
     if (isAdvancedMode(game)) {
       const resourceCollection = collectAdvancedResourcesForNation(game, nation.id);
@@ -715,7 +716,7 @@ export function processServerRound(game: ServerGameState) {
     if (isAdvancedMode(game)) applyAdvancedFruitEffects(game, nation, summary);
   }
 
-  processSocietySpread(game);
+  if (isSocietyEnabled(game)) processSocietySpread(game);
   game.lastSummary = summary;
   tickEventTileEffects(game);
   addEvent(game, `Turn ${game.turn} production resolved by the server.`, { type: "resource" });
@@ -1369,6 +1370,7 @@ function embargoAction(game: ServerGameState, targetId: string, nationId: string
 function chooseReligionAction(game: ServerGameState, religionId: string, nationId: string): ActionResult {
   const nation = game.nations[nationId];
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+  if (!isSocietyEnabled(game)) return { ok: false, reason: "Society religion is disabled for this scenario." };
   if (game.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
   const result = chooseReligionForNation(nation, religionId, game.turn);
   if (!result.ok) return result;
@@ -1380,6 +1382,7 @@ function chooseReligionAction(game: ServerGameState, religionId: string, nationI
 function promoteReligionAction(game: ServerGameState, nationId: string): ActionResult {
   const nation = game.nations[nationId];
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+  if (!isSocietyEnabled(game)) return { ok: false, reason: "Society religion is disabled for this scenario." };
   if (game.era < SOCIETY.unlockEra) return { ok: false, reason: "Society religion unlocks in Era 2." };
   const action = canSpendAction(game, nationId, SERVER_GAME_ACTION_TYPES.PROMOTE_RELIGION);
   if (!action.ok) return action;
@@ -1844,7 +1847,8 @@ function evaluateTrade(game: ServerGameState, fromId: string, toId: string, offe
   const offerValue = bundleValue(normalizedOffer);
   const requestValue = bundleValue(normalizedRequest);
   const threshold = TRADE.thresholds[to.personality] || TRADE.thresholds.default;
-  const effectiveRelation = Math.max(0, Math.min(100, numberValue(record.relation, 50) + societyRelationModifier(from, to)));
+  const societyModifier = isSocietyEnabled(game) ? societyRelationModifier(from, to) : 0;
+  const effectiveRelation = Math.max(0, Math.min(100, numberValue(record.relation, 50) + societyModifier));
   const relationFactor = 1 - ((effectiveRelation - 50) / TRADE.relationFactorDivisor);
   const trustBonus = Math.min(TRADE.maxTrustBonus, numberValue(record.trades) * TRADE.trustBonusPerTrade);
   const required = requestValue * Math.max(TRADE.minimumRequiredFactor, threshold * relationFactor - trustBonus);
@@ -1870,9 +1874,10 @@ function proposeAlliance(game: ServerGameState, fromId: string, toId: string, ty
   const to = game.nations[toId];
   if (from.money < config.cost) return { ok: false as const, reason: `Requires $${config.cost}.` };
   const record = getDiplomacy(game, fromId, toId);
+  const societyModifier = isSocietyEnabled(game) ? societyRelationModifier(from, to) : 0;
   const score =
     numberValue(record.relation, 50) +
-    societyRelationModifier(from, to) +
+    societyModifier +
     (to.personality === "economic" ? TRADE.personalityAllianceBonus.economic : 0) +
     (to.personality === "scientific" && type === "research" ? TRADE.personalityAllianceBonus.scientificResearch : 0) +
     (to.personality === "aggressive" && type === "military" ? TRADE.personalityAllianceBonus.aggressiveMilitary : 0);
@@ -2245,9 +2250,11 @@ function applyCombatOutcome(game: ServerGameState, from: Tile, to: Tile, outcome
     to.unit = { ...from.unit!, nationId: attackerId, movedTurn: game.turn };
     from.unit = null;
     incrementStat(attacker, "tilesCaptured", 1);
-    blendCultureTowardNation(attacker, defender, SOCIETY.tileCaptureCultureShift);
-    if (defender.religion?.dominantReligionId) {
-      shiftReligionToward(attacker, defender.religion.dominantReligionId, SOCIETY.tileCaptureReligionShift);
+    if (isSocietyEnabled(game)) {
+      blendCultureTowardNation(attacker, defender, SOCIETY.tileCaptureCultureShift);
+      if (defender.religion?.dominantReligionId) {
+        shiftReligionToward(attacker, defender.religion.dominantReligionId, SOCIETY.tileCaptureReligionShift);
+      }
     }
     report.territoryChanged = true;
     if (capitalCaptured) {
@@ -2274,9 +2281,11 @@ function conquerNation(game: ServerGameState, defenderId: string, winnerId: stri
   const defender = game.nations[defenderId];
   const winner = game.nations[winnerId];
   if (!defender?.active || !winner) return;
-  blendCultureTowardNation(winner, defender, SOCIETY.conquestCultureShift);
-  if (defender.religion?.dominantReligionId) {
-    shiftReligionToward(winner, defender.religion.dominantReligionId, SOCIETY.conquestReligionShift);
+  if (isSocietyEnabled(game)) {
+    blendCultureTowardNation(winner, defender, SOCIETY.conquestCultureShift);
+    if (defender.religion?.dominantReligionId) {
+      shiftReligionToward(winner, defender.religion.dominantReligionId, SOCIETY.conquestReligionShift);
+    }
   }
   defender.active = false;
   for (const tile of game.map.tiles) {

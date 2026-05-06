@@ -1241,7 +1241,7 @@ export class HexMapRenderer {
 
   _renderNationLabels() {
     if (!this.map || !this.labelLayer) return;
-    const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false);
+    const activeNations = Object.values(this.nations).filter((nation) => nation?.active !== false || nation?.scenarioNeutral);
     const signature = activeNations
       .map((nation) => `${nation.id}:${nation.name}:${nation.color}:${nation.capitalTileId}:${nation.territory?.length || 0}`)
       .sort()
@@ -1257,7 +1257,7 @@ export class HexMapRenderer {
       for (const nation of activeNations) {
         if (this.nationLabels.has(nation.id)) continue;
         const label = document.createElement("div");
-        label.className = "nation-label";
+        label.className = nation.scenarioNeutral ? "nation-label neutral" : "nation-label";
         label.style.setProperty("--nation-color", nation.color);
         label.textContent = nation.name;
         this.labelLayer.append(label);
@@ -1267,6 +1267,7 @@ export class HexMapRenderer {
         const label = this.nationLabels.get(nation.id);
         if (!label) continue;
         label.textContent = nation.name;
+        label.className = nation.scenarioNeutral ? "nation-label neutral" : "nation-label";
         label.style.setProperty("--nation-color", nation.color);
       }
     }

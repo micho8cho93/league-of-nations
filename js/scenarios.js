@@ -32,7 +32,7 @@ export const SCENARIO_METADATA = Object.freeze({
     id: "ww2_global",
     name: "World War II – Global Conflict",
     subtitle: "Industrial warfare, alliances, and global conquest",
-    description: "A global industrial war scenario beginning in 1939. Players lead one of the major powers and compete through conquest, industrial production, resource control, and alliance strategy.",
+    description: "A focused 1939 theater scenario across Europe, North Africa, the Middle East, East Asia, and the Pacific.",
     mode: GAME_MODES.ADVANCED,
     maxPlayers: 7,
     minPlayers: 1,
@@ -40,8 +40,9 @@ export const SCENARIO_METADATA = Object.freeze({
     difficulty: "Hard",
     estimatedLength: "60 turns (~60-90 min)",
     objectiveSummary: "Axis: capture Allied capitals or dominate world territory. Allies: defeat Axis capitals or survive until the turn limit.",
-    introTitle: "Europe, September 1939",
-    introBody: "The world stands on the brink. The Axis (Germany, Italy, Japan) seek to overturn the global order. The Allies (United Kingdom, France) must survive — joined by the Soviet Union and the United States. Build factories, secure oil and steel, and choose your path to victory before turn 60.",
+    introTitle: "Europe, August 31, 1939",
+    introBody: "The world stands on the brink. Germany is poised at Poland's border, Italy and Japan hold expansionist positions, and the United Kingdom and France prepare to honor their guarantees. Neutral states are labeled and locked; the scenario begins in Era 3 so war can start immediately.",
+    startingEra: 3,
     turnLimit: 60,
   },
 });
@@ -912,11 +913,359 @@ function createOceaniaMap() {
 // =====================================================================
 // World War II – Global Conflict
 // Modular scenario data: objectives, faction definitions, starting
-// alliances, rule overrides, and event stubs. The map reuses the
-// existing global projection (createWorldMap) so we don't duplicate
-// terrain logic. Capitals are looked up by lat/lon at game-start time
-// via projectCluster + nearest-land fallback in game.js.
+// alliances, rule overrides, and event hooks. The map uses a dedicated
+// theater projection so Europe and the Pacific get more playable detail
+// than the generic full-world scenario map.
 // =====================================================================
+
+const WW2_THEATER_SCENARIO_RADIUS = 44;
+const WW2_THEATER_SCENARIO_SEED = 19390831;
+const WW2_NEUTRAL_COLOR = "#8f928d";
+
+function ww2Project(lon, lat, brush = 0) {
+  return {
+    ...projectToAxial(lon, lat, {
+      centerLon: 52,
+      centerLat: 18,
+      scaleX: 0.32,
+      scaleY: 0.62,
+    }),
+    brush,
+  };
+}
+
+function projectAreas(project, areas = []) {
+  return areas.map(([lon, lat, brush = 1]) => project(lon, lat, brush));
+}
+
+function createWW2TheaterMap() {
+  const map = createScenarioTileBuilder();
+
+  // North America. The continental USA is fully present and playable;
+  // Canada, Mexico, and Central America are painted as locked theater edges.
+  map.paintPath([
+    ww2Project(-141, 62, 1),
+    ww2Project(-128, 58, 2),
+    ww2Project(-112, 56, 3),
+    ww2Project(-96, 55, 3),
+    ww2Project(-80, 54, 2),
+    ww2Project(-63, 49, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    ww2Project(-134, 52, 1),
+    ww2Project(-120, 49, 2),
+    ww2Project(-106, 48, 2),
+    ww2Project(-92, 48, 2),
+    ww2Project(-78, 47, 1),
+    ww2Project(-66, 45, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-124, 49, 1),
+    ww2Project(-112, 45, 2),
+    ww2Project(-98, 41, 2),
+    ww2Project(-86, 39, 2),
+    ww2Project(-75, 41, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-122, 36, 1),
+    ww2Project(-110, 34, 2),
+    ww2Project(-96, 32, 2),
+    ww2Project(-82, 31, 1),
+    ww2Project(-77, 36, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-117, 32, 1),
+    ww2Project(-110, 29, 1),
+    ww2Project(-103, 25, 1),
+    ww2Project(-97, 22, 1),
+    ww2Project(-90, 18, 1),
+    ww2Project(-84, 14, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-82, 22, 0),
+    ww2Project(-77, 21, 1),
+    ww2Project(-72, 20, 0),
+  ], "land", "jungle");
+  map.paintPath([
+    ww2Project(-54, 73, 2),
+    ww2Project(-45, 70, 2),
+    ww2Project(-40, 64, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    ww2Project(-160, 22, 0),
+    ww2Project(-156, 20, 0),
+  ], "land", "jungle");
+
+  // South America is visible but locked out of play.
+  map.paintPath([
+    ww2Project(-79, 9, 1),
+    ww2Project(-76, 1, 1),
+    ww2Project(-73, -9, 1),
+    ww2Project(-70, -20, 1),
+    ww2Project(-70, -32, 1),
+    ww2Project(-72, -45, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-67, 6, 2),
+    ww2Project(-58, -3, 2),
+    ww2Project(-50, -12, 2),
+    ww2Project(-53, -24, 1),
+    ww2Project(-59, -36, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-73, 3, 1),
+    ww2Project(-63, 0, 2),
+    ww2Project(-55, -4, 2),
+    ww2Project(-49, -8, 1),
+  ], "land", "jungle");
+
+  // Europe.
+  map.paintPath([
+    ww2Project(-10, 44, 1),
+    ww2Project(-4, 47, 2),
+    ww2Project(4, 49, 2),
+    ww2Project(13, 51, 2),
+    ww2Project(23, 52, 2),
+    ww2Project(32, 54, 2),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-9, 55, 1),
+    ww2Project(0, 54, 1),
+    ww2Project(10, 55, 1),
+    ww2Project(20, 57, 1),
+    ww2Project(31, 60, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-9, 42, 2),
+    ww2Project(-4, 40, 2),
+    ww2Project(0, 40, 1),
+    ww2Project(3, 42, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(9, 45, 1),
+    ww2Project(12, 43, 1),
+    ww2Project(14, 40, 1),
+    ww2Project(16, 38, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(15, 45, 1),
+    ww2Project(21, 44, 2),
+    ww2Project(26, 42, 2),
+    ww2Project(30, 39, 1),
+  ], "land", "grassland");
+  map.paintPoints([
+    ww2Project(4, 51, 0),
+    ww2Project(19, 47, 0),
+    ww2Project(25, 43, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(6, 58, 1),
+    ww2Project(12, 62, 2),
+    ww2Project(18, 66, 2),
+    ww2Project(24, 69, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    ww2Project(-5, 51, 1),
+    ww2Project(-2, 55, 1),
+    ww2Project(-4, 58, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(-10, 52, 0),
+    ww2Project(-8, 54, 0),
+  ], "land", "grassland");
+  map.paintPoints([
+    ww2Project(9, 40, 0),
+    ww2Project(14, 37, 0),
+    ww2Project(25, 35, 0),
+  ], "land", "grassland");
+
+  // North Africa, East Africa, and the Middle East.
+  map.paintPath([
+    ww2Project(-10, 34, 1),
+    ww2Project(0, 33, 2),
+    ww2Project(12, 31, 2),
+    ww2Project(24, 30, 2),
+    ww2Project(35, 31, 1),
+  ], "land", "desert");
+  map.paintPath([
+    ww2Project(-8, 25, 2),
+    ww2Project(8, 23, 2),
+    ww2Project(22, 20, 2),
+    ww2Project(35, 18, 1),
+  ], "land", "desert");
+  map.paintPath([
+    ww2Project(29, 31, 1),
+    ww2Project(35, 25, 1),
+    ww2Project(40, 18, 1),
+    ww2Project(43, 10, 1),
+    ww2Project(40, 1, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(34, 32, 1),
+    ww2Project(43, 34, 1),
+    ww2Project(51, 32, 1),
+    ww2Project(58, 28, 1),
+  ], "land", "desert");
+  map.paintPath([
+    ww2Project(45, 24, 1),
+    ww2Project(53, 22, 2),
+    ww2Project(58, 18, 1),
+  ], "land", "desert");
+  map.paintPath([
+    ww2Project(-17, 15, 1),
+    ww2Project(-8, 8, 2),
+    ww2Project(4, 2, 2),
+    ww2Project(14, -6, 2),
+    ww2Project(20, -18, 1),
+    ww2Project(20, -34, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(28, 8, 2),
+    ww2Project(35, 0, 2),
+    ww2Project(39, -10, 2),
+    ww2Project(34, -22, 1),
+    ww2Project(28, -34, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(10, 5, 1),
+    ww2Project(18, 0, 2),
+    ww2Project(26, -4, 1),
+  ], "land", "jungle");
+  map.paintPath([
+    ww2Project(46, -16, 0),
+    ww2Project(48, -21, 1),
+    ww2Project(49, -25, 0),
+  ], "land", "grassland");
+
+  // USSR, Central Asia, India, China, Southeast Asia.
+  map.paintPath([
+    ww2Project(33, 55, 2),
+    ww2Project(52, 56, 3),
+    ww2Project(75, 56, 3),
+    ww2Project(100, 55, 3),
+    ww2Project(125, 53, 2),
+    ww2Project(145, 50, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    ww2Project(40, 45, 2),
+    ww2Project(58, 45, 2),
+    ww2Project(78, 43, 2),
+    ww2Project(98, 41, 3),
+    ww2Project(118, 39, 2),
+    ww2Project(132, 42, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(61, 34, 1),
+    ww2Project(72, 30, 1),
+    ww2Project(84, 27, 1),
+    ww2Project(98, 28, 2),
+    ww2Project(112, 30, 2),
+    ww2Project(123, 32, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(72, 22, 1),
+    ww2Project(78, 16, 1),
+    ww2Project(78, 9, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(96, 18, 1),
+    ww2Project(103, 13, 1),
+    ww2Project(108, 8, 1),
+    ww2Project(106, 2, 1),
+    ww2Project(112, -2, 0),
+  ], "land", "jungle");
+  map.paintPath([
+    ww2Project(110, 35, 1),
+    ww2Project(119, 32, 1),
+    ww2Project(126, 27, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(126, 39, 1),
+    ww2Project(131, 42, 1),
+    ww2Project(138, 45, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(138, 35, 0),
+    ww2Project(141, 39, 1),
+    ww2Project(143, 43, 0),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(121, 18, 0),
+    ww2Project(122, 14, 1),
+    ww2Project(124, 10, 0),
+  ], "land", "jungle");
+  map.paintPoints([
+    ww2Project(114, 22, 0),
+    ww2Project(121, 24, 0),
+    ww2Project(122, 7, 0),
+  ], "land", "jungle");
+
+  // Indonesia, Oceania, and Pacific islands.
+  map.paintPath([
+    ww2Project(96, 4, 0),
+    ww2Project(101, 0, 1),
+    ww2Project(106, -5, 1),
+    ww2Project(113, -7, 0),
+  ], "land", "jungle");
+  map.paintPath([
+    ww2Project(110, 1, 1),
+    ww2Project(115, -2, 1),
+    ww2Project(121, -3, 0),
+  ], "land", "jungle");
+  map.paintPath([
+    ww2Project(134, -3, 1),
+    ww2Project(142, -5, 1),
+    ww2Project(150, -8, 1),
+  ], "land", "jungle");
+  map.paintPath([
+    ww2Project(114, -23, 1),
+    ww2Project(124, -18, 2),
+    ww2Project(134, -16, 2),
+    ww2Project(145, -20, 2),
+    ww2Project(151, -31, 1),
+  ], "land", "grassland");
+  map.paintPath([
+    ww2Project(116, -32, 0),
+    ww2Project(129, -34, 1),
+    ww2Project(142, -37, 1),
+  ], "land", "desert");
+  map.paintPath([
+    ww2Project(170, -42, 0),
+    ww2Project(174, -45, 1),
+    ww2Project(178, -39, 0),
+  ], "land", "grassland");
+  map.paintPoints([
+    ww2Project(144, 13, 0),
+    ww2Project(145, 15, 0),
+    ww2Project(156, 7, 0),
+    ww2Project(167, 7, 0),
+    ww2Project(160, -9, 0),
+    ww2Project(178, -17, 0),
+  ], "land", "grassland");
+
+  // Antarctica is a disabled reference continent.
+  map.paintPath([
+    ww2Project(-150, -64, 1),
+    ww2Project(-110, -68, 2),
+    ww2Project(-70, -70, 2),
+    ww2Project(-30, -70, 2),
+    ww2Project(10, -69, 2),
+    ww2Project(50, -67, 2),
+    ww2Project(90, -66, 2),
+    ww2Project(130, -66, 1),
+  ], "land", "arctic");
+  map.paintPath([
+    ww2Project(-120, -74, 1),
+    ww2Project(-70, -76, 2),
+    ww2Project(-20, -76, 2),
+    ww2Project(30, -74, 2),
+    ww2Project(80, -72, 1),
+  ], "land", "arctic");
+
+  return map.finalize("Large", WW2_THEATER_SCENARIO_RADIUS, WW2_THEATER_SCENARIO_SEED, {
+    waterPadding: 4,
+  });
+}
 
 export const WW2_OBJECTIVES = Object.freeze([
   {
@@ -967,10 +1316,17 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "germany",
     name: "Germany",
     bloc: "axis",
+    color: "#4b4f54",
     capital: { lon: 13, lat: 52 },         // Berlin
-    startTiles: [[13, 52], [10, 50], [16, 50]],
-    startingResources: { fruit: 2, hardwood: 1, iron: 4, oil: 1 },
-    startingMilitaryBoost: { land: 3 },
+    startTiles: [[13, 52], [10, 51], [11, 49], [13, 49], [15, 51], [16, 50], [20, 54]],
+    controlAreas: [[13, 52, 2], [10, 51, 1], [16, 50, 1], [20, 54, 0]],
+    industrialSites: [[13, 52], [8, 51], [12, 49]],
+    militarySites: [[16, 52], [19, 52]],
+    startingResources: { fruit: 8, hardwood: 12, iron: 14, oil: 5, food: 110, materials: 130, education: 70, industry: 35 },
+    startingTech: { farming: 2, mining: 3, education: 2, infrastructure: 2, military: 3, branches: { tanks: 1, air: 1, naval: 0 } },
+    startingPopulation: 58,
+    startingUnitStrength: 9,
+    personality: "aggressive",
     note: "Strong land forces, industrial heartland.",
   },
   {
@@ -978,9 +1334,17 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "italy",
     name: "Italy",
     bloc: "axis",
+    color: "#6b7f43",
     capital: { lon: 12, lat: 44 },         // Rome (nearest painted Mediterranean tile)
-    startTiles: [[12, 44], [15, 38]],
-    startingResources: { fruit: 2, hardwood: 0, iron: 2, oil: 1 },
+    startTiles: [[12, 44], [15, 38], [18, 41], [13, 32], [39, 9]],
+    controlAreas: [[12, 44, 1], [15, 38, 0], [18, 41, 0], [13, 32, 2], [39, 9, 1]],
+    industrialSites: [[12, 44], [9, 45]],
+    militarySites: [[15, 38], [13, 32]],
+    startingResources: { fruit: 7, hardwood: 8, iron: 9, oil: 5, food: 95, materials: 95, education: 48, industry: 18 },
+    startingTech: { farming: 2, mining: 2, education: 2, infrastructure: 2, military: 2, branches: { tanks: 0, air: 1, naval: 1 } },
+    startingPopulation: 44,
+    startingUnitStrength: 6,
+    personality: "aggressive",
     note: "Mediterranean foothold for the Axis.",
   },
   {
@@ -988,10 +1352,17 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "japan",
     name: "Japan",
     bloc: "axis",
+    color: "#b8463a",
     capital: { lon: 140, lat: 36 },        // Tokyo
-    startTiles: [[140, 37], [135, 35], [142, 41]],
-    startingResources: { fruit: 1, hardwood: 1, iron: 3, oil: 0 },
-    startingMilitaryBoost: { naval: 3 },
+    startTiles: [[140, 37], [135, 35], [142, 41], [127, 38], [121, 24], [122, 7], [129, 43]],
+    controlAreas: [[140, 37, 1], [142, 41, 0], [127, 38, 1], [121, 24, 0], [122, 7, 0], [129, 43, 1]],
+    industrialSites: [[140, 37], [135, 35], [127, 38]],
+    militarySites: [[140, 37], [121, 24], [129, 43]],
+    startingResources: { fruit: 5, hardwood: 9, iron: 12, oil: 3, food: 105, materials: 120, education: 70, industry: 28 },
+    startingTech: { farming: 2, mining: 3, education: 2, infrastructure: 2, military: 3, branches: { tanks: 0, air: 1, naval: 2 } },
+    startingPopulation: 56,
+    startingUnitStrength: 8,
+    personality: "aggressive",
     note: "Naval/expansion advantage; oil-poor — must conquer to fuel.",
   },
   {
@@ -999,10 +1370,17 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "uk",
     name: "United Kingdom",
     bloc: "allies",
+    color: "#2f6fb2",
     capital: { lon: -1, lat: 52 },         // London
-    startTiles: [[-2, 55], [-3, 51]],
-    startingResources: { fruit: 2, hardwood: 1, iron: 3, oil: 1 },
-    startingMilitaryBoost: { naval: 3 },
+    startTiles: [[-1, 52], [-4, 56], [31, 30], [35, 32], [77, 22], [103, 2], [115, 4], [145, -25], [174, -42], [114, 22]],
+    controlAreas: [[-1, 52, 1], [31, 30, 1], [35, 32, 0], [77, 22, 2], [103, 2, 1], [115, 4, 1], [145, -25, 2], [174, -42, 1], [114, 22, 0], [144, 13, 0]],
+    industrialSites: [[-1, 52], [-3, 55], [77, 22], [145, -25]],
+    militarySites: [[-1, 52], [31, 30], [103, 2], [144, 13]],
+    startingResources: { fruit: 12, hardwood: 14, iron: 14, oil: 10, food: 150, materials: 135, education: 80, industry: 32 },
+    startingTech: { farming: 2, mining: 3, education: 2, infrastructure: 2, military: 3, branches: { tanks: 0, air: 1, naval: 2 } },
+    startingPopulation: 60,
+    startingUnitStrength: 7,
+    personality: "balanced",
     note: "Naval/trade strength, global colonies.",
   },
   {
@@ -1010,9 +1388,17 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "france",
     name: "France",
     bloc: "allies",
+    color: "#4b8ad8",
     capital: { lon: 2, lat: 47 },          // Paris
-    startTiles: [[2, 47], [-10, 44]],
-    startingResources: { fruit: 3, hardwood: 0, iron: 2, oil: 1 },
+    startTiles: [[2, 47], [-3, 47], [5, 45], [-6, 34], [3, 32], [106, 16]],
+    controlAreas: [[2, 47, 2], [-3, 47, 1], [5, 45, 1], [-6, 34, 1], [3, 32, 2], [106, 16, 1]],
+    industrialSites: [[2, 47], [5, 45]],
+    militarySites: [[2, 47], [7, 49], [3, 32]],
+    startingResources: { fruit: 10, hardwood: 11, iron: 12, oil: 7, food: 130, materials: 115, education: 68, industry: 25 },
+    startingTech: { farming: 2, mining: 3, education: 2, infrastructure: 2, military: 2, branches: { tanks: 1, air: 0, naval: 1 } },
+    startingPopulation: 52,
+    startingUnitStrength: 7,
+    personality: "balanced",
     note: "Continental Allied power.",
   },
   {
@@ -1020,10 +1406,17 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "ussr",
     name: "Soviet Union",
     bloc: "comintern", // structurally neutral; conditional Allies via events
+    color: "#9e2f2f",
     capital: { lon: 40, lat: 60 },         // Moscow (on painted arctic band)
-    startTiles: [[40, 60], [70, 61], [55, 44]],
-    startingResources: { fruit: 4, hardwood: 1, iron: 4, oil: 3 },
-    startingMilitaryBoost: { land: 2 },
+    startTiles: [[40, 56], [55, 44], [70, 56], [90, 55], [32, 54], [58, 28]],
+    controlAreas: [[40, 56, 3], [55, 44, 2], [70, 56, 3], [90, 55, 3], [110, 53, 2], [32, 54, 1], [58, 28, 1]],
+    industrialSites: [[40, 56], [55, 44], [75, 55]],
+    militarySites: [[32, 54], [55, 44], [70, 56]],
+    startingResources: { fruit: 11, hardwood: 15, iron: 16, oil: 13, food: 160, materials: 140, education: 58, industry: 28 },
+    startingTech: { farming: 2, mining: 3, education: 2, infrastructure: 2, military: 2, branches: { tanks: 1, air: 0, naval: 0 } },
+    startingPopulation: 70,
+    startingUnitStrength: 8,
+    personality: "balanced",
     note: "Vast manpower and territory; slower early mobility.",
   },
   {
@@ -1031,11 +1424,52 @@ export const WW2_FACTIONS = Object.freeze([
     factionId: "usa",
     name: "United States",
     bloc: "neutral", // joins Allies via Pearl Harbor event (stubbed)
+    color: "#3d7fba",
     capital: { lon: -77, lat: 39 },        // Washington, D.C.
-    startTiles: [[-75, 39], [-84, 34], [-97, 34]],
-    startingResources: { fruit: 4, hardwood: 2, iron: 4, oil: 4 },
+    startTiles: [[-150, 64], [-124, 48], [-122, 37], [-118, 34], [-112, 45], [-105, 39], [-96, 38], [-90, 44], [-86, 39], [-82, 31], [-77, 39], [-75, 41], [-156, 20], [121, 14], [144, 13]],
+    controlAreas: [[-150, 64, 1], [-124, 48, 2], [-122, 37, 2], [-118, 34, 2], [-112, 45, 3], [-105, 39, 3], [-96, 38, 3], [-90, 44, 2], [-86, 39, 2], [-82, 31, 2], [-77, 39, 2], [-75, 41, 2], [-156, 20, 0], [121, 14, 1], [144, 13, 0]],
+    finalControlAreas: [[-150, 64, 1], [-124, 48, 2], [-122, 37, 2], [-118, 34, 2], [-112, 45, 3], [-105, 39, 3], [-96, 38, 3], [-90, 44, 2], [-86, 39, 2], [-82, 31, 2], [-77, 39, 2], [-75, 41, 2], [-156, 20, 0], [121, 14, 1], [144, 13, 0]],
+    industrialSites: [[-77, 39], [-96, 38], [-122, 37]],
+    militarySites: [[-77, 39], [-156, 20], [121, 14]],
+    startingResources: { fruit: 14, hardwood: 16, iron: 18, oil: 18, food: 180, materials: 160, education: 90, industry: 45 },
+    startingTech: { farming: 2, mining: 3, education: 3, infrastructure: 2, military: 2, branches: { tanks: 0, air: 1, naval: 2 } },
+    startingPopulation: 74,
+    startingUnitStrength: 6,
+    personality: "economic",
     note: "Industrial powerhouse; ramps up via Lend-Lease and entry events.",
   },
+]);
+
+export const WW2_NEUTRAL_NATIONS = Object.freeze([
+  { id: "ww2-neutral-canada", factionId: "canada", name: "Canada", capital: { lon: -75, lat: 45 }, controlAreas: [[-134, 52, 1], [-120, 51, 1], [-105, 51, 2], [-90, 51, 2], [-75, 48, 1], [-63, 49, 1], [-45, 70, 2]] },
+  { id: "ww2-neutral-mexico-central-america", factionId: "mexico_central_america", name: "Mexico and Central America", capital: { lon: -99, lat: 20 }, controlAreas: [[-110, 29, 1], [-102, 24, 1], [-97, 21, 1], [-90, 18, 1], [-84, 14, 0], [-78, 21, 1]] },
+  { id: "ww2-neutral-south-america", factionId: "south_america", name: "South America", capital: { lon: -58, lat: -15 }, controlAreas: [[-79, 9, 1], [-73, -8, 1], [-70, -24, 1], [-71, -43, 0], [-63, 0, 2], [-55, -10, 2], [-53, -25, 1], [-59, -36, 1]] },
+  { id: "ww2-neutral-poland", factionId: "poland", name: "Poland", capital: { lon: 21, lat: 52 }, controlAreas: [[19, 52, 1], [23, 52, 2], [21, 50, 1]] },
+  { id: "ww2-neutral-belgium", factionId: "belgium", name: "Belgium", capital: { lon: 2, lat: 49 }, controlAreas: [[2, 49, 0]] },
+  { id: "ww2-neutral-netherlands", factionId: "netherlands", name: "Netherlands", capital: { lon: 5, lat: 52 }, controlAreas: [[5, 52, 0]] },
+  { id: "ww2-neutral-luxembourg", factionId: "luxembourg", name: "Luxembourg", capital: { lon: 6, lat: 50 }, controlAreas: [[6, 50, 0]] },
+  { id: "ww2-neutral-denmark", factionId: "denmark", name: "Denmark", capital: { lon: 10, lat: 56 }, controlAreas: [[10, 56, 0]] },
+  { id: "ww2-neutral-norway", factionId: "norway", name: "Norway", capital: { lon: 10, lat: 60 }, controlAreas: [[8, 60, 1], [13, 64, 1], [18, 68, 0]] },
+  { id: "ww2-neutral-sweden", factionId: "sweden", name: "Sweden", capital: { lon: 16, lat: 61 }, controlAreas: [[16, 61, 1], [20, 65, 1]] },
+  { id: "ww2-neutral-finland", factionId: "finland", name: "Finland", capital: { lon: 25, lat: 62 }, controlAreas: [[25, 62, 1], [28, 66, 1]] },
+  { id: "ww2-neutral-switzerland", factionId: "switzerland", name: "Switzerland", capital: { lon: 8, lat: 47 }, controlAreas: [[8, 47, 0]] },
+  { id: "ww2-neutral-spain", factionId: "spain", name: "Spain", capital: { lon: -4, lat: 40 }, controlAreas: [[-4, 40, 2], [-8, 43, 1]] },
+  { id: "ww2-neutral-portugal", factionId: "portugal", name: "Portugal", capital: { lon: -8, lat: 40 }, controlAreas: [[-8, 40, 0]] },
+  { id: "ww2-neutral-ireland", factionId: "ireland", name: "Ireland", capital: { lon: -8, lat: 53 }, controlAreas: [[-8, 53, 0]] },
+  { id: "ww2-neutral-yugoslavia", factionId: "yugoslavia", name: "Yugoslavia", capital: { lon: 20, lat: 44 }, controlAreas: [[20, 44, 1], [18, 43, 0]] },
+  { id: "ww2-neutral-greece", factionId: "greece", name: "Greece", capital: { lon: 23, lat: 39 }, controlAreas: [[23, 39, 1], [25, 35, 0]] },
+  { id: "ww2-neutral-romania", factionId: "romania", name: "Romania", capital: { lon: 25, lat: 45 }, controlAreas: [[25, 45, 1]] },
+  { id: "ww2-neutral-hungary", factionId: "hungary", name: "Hungary", capital: { lon: 19, lat: 47 }, controlAreas: [[19, 47, 0]] },
+  { id: "ww2-neutral-bulgaria", factionId: "bulgaria", name: "Bulgaria", capital: { lon: 25, lat: 43 }, controlAreas: [[25, 43, 0]] },
+  { id: "ww2-neutral-turkey", factionId: "turkey", name: "Turkey", capital: { lon: 35, lat: 39 }, controlAreas: [[35, 39, 1], [42, 39, 0]] },
+  { id: "ww2-neutral-iran", factionId: "iran", name: "Iran", capital: { lon: 53, lat: 32 }, controlAreas: [[53, 32, 2], [58, 28, 1]] },
+  { id: "ww2-neutral-afghanistan", factionId: "afghanistan", name: "Afghanistan", capital: { lon: 66, lat: 34 }, controlAreas: [[66, 34, 1]] },
+  { id: "ww2-neutral-saudi", factionId: "saudi_arabia", name: "Saudi Arabia", capital: { lon: 45, lat: 24 }, controlAreas: [[45, 24, 2], [52, 21, 1]] },
+  { id: "ww2-neutral-sub-saharan-africa", factionId: "sub_saharan_africa", name: "Sub-Saharan Africa", capital: { lon: 18, lat: -8 }, controlAreas: [[-8, 8, 2], [4, 2, 2], [14, -6, 2], [20, -18, 1], [20, -34, 0], [28, 8, 2], [35, 0, 2], [39, -10, 2], [34, -22, 1], [28, -34, 0], [18, 0, 2], [48, -21, 1]] },
+  { id: "ww2-neutral-thailand", factionId: "thailand", name: "Thailand", capital: { lon: 101, lat: 14 }, controlAreas: [[101, 14, 1]] },
+  { id: "ww2-neutral-china", factionId: "china", name: "China", capital: { lon: 105, lat: 31 }, controlAreas: [[105, 31, 2], [112, 30, 1], [100, 28, 1]] },
+  { id: "ww2-neutral-indonesia", factionId: "dutch_east_indies", name: "Dutch East Indies", capital: { lon: 106, lat: -6 }, controlAreas: [[101, 0, 1], [106, -5, 1], [115, -2, 1]] },
+  { id: "ww2-neutral-antarctica", factionId: "antarctica", name: "Antarctica", capital: { lon: 10, lat: -74 }, controlAreas: [[-120, -68, 2], [-70, -70, 2], [-30, -70, 2], [10, -69, 2], [50, -67, 2], [90, -66, 2], [130, -66, 1], [-70, -76, 2], [-20, -76, 2], [30, -74, 2]] },
 ]);
 
 // Starting positions in the shape the existing newGame loop expects.
@@ -1045,10 +1479,31 @@ export const WW2_STARTING_POSITIONS = WW2_FACTIONS.map((faction) => ({
   name: faction.name,
   factionId: faction.factionId,
   bloc: faction.bloc,
+  color: faction.color,
   capital: faction.capital,
-  startTiles: projectCluster(worldProject, faction.startTiles),
+  startTiles: projectCluster(ww2Project, faction.startTiles),
+  controlAreas: projectAreas(ww2Project, faction.controlAreas),
+  finalControlAreas: projectAreas(ww2Project, faction.finalControlAreas || []),
+  industrialSites: projectCluster(ww2Project, faction.industrialSites || []),
+  militarySites: projectCluster(ww2Project, faction.militarySites || []),
   startingResources: { ...faction.startingResources },
-  startingMilitaryBoost: faction.startingMilitaryBoost || null,
+  startingTech: faction.startingTech ? { ...faction.startingTech, branches: { ...(faction.startingTech.branches || {}) } } : null,
+  startingPopulation: faction.startingPopulation || null,
+  startingUnitStrength: faction.startingUnitStrength || 4,
+  personality: faction.personality || null,
+}));
+
+export const WW2_NEUTRAL_STARTING_POSITIONS = WW2_NEUTRAL_NATIONS.map((nation) => ({
+  id: nation.id,
+  name: nation.name,
+  factionId: nation.factionId,
+  bloc: "neutral",
+  color: WW2_NEUTRAL_COLOR,
+  capital: nation.capital,
+  startTiles: projectCluster(ww2Project, [[nation.capital.lon, nation.capital.lat]]),
+  controlAreas: projectAreas(ww2Project, nation.controlAreas),
+  scenarioNeutral: true,
+  lockedNeutral: true,
 }));
 
 // Pre-formed alliance blocs at game start.
@@ -1073,6 +1528,7 @@ export const WW2_STARTING_ALLIANCES = Object.freeze([
 // Stored on game.settings.scenarioOverrides; consumed where applicable.
 // Unused multipliers are retained as data for future systems (TODO).
 export const WW2_RULE_OVERRIDES = Object.freeze({
+  societyEnabled: false,          // WW2 uses political blocs only; no religion/culture layer.
   unitCostMultiplier: 1.4,        // applied in game.js training cost path
   unitUpkeepMultiplier: 1.25,     // TODO: thread into upkeep paths
   factoryProductionMultiplier: 1.5, // TODO: apply in productionForTile factory yield
@@ -1090,9 +1546,97 @@ export const WW2_VICTORY_RULES = Object.freeze({
   alliedRequiredCapitals: ["germany", "italy", "japan"], // Berlin, Rome, Tokyo
 });
 
-// Historical event data. For MVP most are stubbed (active=false) with TODO
-// comments so the engine can iterate without scenario-specific surprises.
-// The events array is wired into game.scenarioEvents at start time.
+function ww2NationIdForFaction(game, factionId) {
+  return Object.values(game?.nations || {}).find((nation) => nation?.factionId === factionId)?.id || null;
+}
+
+function ww2TileNear(game, lon, lat, radius = 3) {
+  const point = ww2Project(lon, lat);
+  const direct = game?.map?.tiles?.find((tile) => tile.q === point.q && tile.r === point.r && tile.terrain === "land");
+  if (direct) return direct;
+  let best = null;
+  let bestDist = Infinity;
+  for (const tile of game?.map?.tiles || []) {
+    if (tile.terrain !== "land") continue;
+    const dist = Math.max(
+      Math.abs(tile.q - point.q),
+      Math.abs(tile.r - point.r),
+      Math.abs((tile.q + tile.r) - (point.q + point.r)),
+    );
+    if (dist <= radius && dist < bestDist) {
+      best = tile;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function ww2TransferAreas(game, ownerFactionId, areas) {
+  const ownerId = ww2NationIdForFaction(game, ownerFactionId);
+  if (!ownerId) return 0;
+  let changed = 0;
+  for (const [lon, lat, brush = 0] of areas) {
+    const center = ww2TileNear(game, lon, lat, Math.max(4, brush + 2));
+    if (!center) continue;
+    for (const tile of game.map?.tiles || []) {
+      if (tile.terrain !== "land") continue;
+      const dist = Math.max(
+        Math.abs(tile.q - center.q),
+        Math.abs(tile.r - center.r),
+        Math.abs((tile.q + tile.r) - (center.q + center.r)),
+      );
+      if (dist > brush) continue;
+      if (tile.ownerId === ownerId) continue;
+      tile.ownerId = ownerId;
+      changed += 1;
+    }
+  }
+  if (changed) game.recomputeTerritories?.();
+  return changed;
+}
+
+function ww2ActivateMajorWar(game, attackerFactionId, defenderFactionId, reason) {
+  const attackerId = ww2NationIdForFaction(game, attackerFactionId);
+  const defenderId = ww2NationIdForFaction(game, defenderFactionId);
+  if (!attackerId || !defenderId) return false;
+  const attacker = game.nations?.[attackerId];
+  const defender = game.nations?.[defenderId];
+  if (!attacker?.active || !defender?.active) return false;
+  const key = [attackerId, defenderId].sort().join("|");
+  if (!game.wars?.[key]?.active) {
+    game.wars[key] = {
+      key,
+      attackerId,
+      defenderId,
+      reason,
+      active: true,
+      startedTurn: game.turn,
+      battles: 0,
+      scenario: true,
+    };
+  }
+  game.establishDiplomaticContact?.(attackerId, defenderId);
+  const diplomacy = game.diplomacy?.[key] || null;
+  if (diplomacy) {
+    diplomacy.atWar = true;
+    diplomacy.wars = (diplomacy.wars || 0) + 1;
+    diplomacy.relation = Math.min(diplomacy.relation || 0, 8);
+  }
+  return true;
+}
+
+function ww2AddFactionToAlliance(game, allianceId, factionId) {
+  const nationId = ww2NationIdForFaction(game, factionId);
+  const alliance = game?.alliances?.find((item) => item.id === allianceId && item.active);
+  if (!nationId || !alliance) return false;
+  if (!alliance.members.includes(nationId)) alliance.members.push(nationId);
+  const nation = game.nations?.[nationId];
+  if (nation) nation.bloc = "allies";
+  return true;
+}
+
+// Historical event data. Active events are executed by the offline
+// scenario round loop and guarded so they only fire once.
 export const WW2_EVENTS = Object.freeze([
   {
     id: "germany_invades_poland",
@@ -1101,8 +1645,19 @@ export const WW2_EVENTS = Object.freeze([
     triggerTurn: 1,
     active: true,
     apply(game) {
-      // MVP behavior: log + small relation hit between Axis and Allies.
-      game.addEvent?.("Germany invades Poland — global war is underway.", { type: "scenario" });
+      const captured = ww2TransferAreas(game, "germany", [[18, 52, 0], [20, 51, 0]]);
+      game.addEvent?.(`Germany invades Poland; ${captured || "border"} tiles fall under German control.`, { type: "scenario" });
+    },
+  },
+  {
+    id: "poland_campaign_continues",
+    label: "Polish Campaign Continues",
+    description: "German forces push toward Warsaw while Poland remains locked as scripted scenario territory.",
+    triggerTurn: 2,
+    active: true,
+    apply(game) {
+      const captured = ww2TransferAreas(game, "germany", [[21, 52, 0], [23, 51, 0]]);
+      game.addEvent?.(`German forces continue the Polish campaign; ${captured || "additional"} Polish tiles are contested.`, { type: "scenario" });
     },
   },
   {
@@ -1118,24 +1673,44 @@ export const WW2_EVENTS = Object.freeze([
     label: "Operation Barbarossa",
     description: "Germany turns east. The USSR is drawn into the war.",
     triggerTurn: 12,
-    active: false,
-    apply() { /* TODO: declare war Germany→USSR; promote USSR to Allies bloc. */ },
+    active: true,
+    apply(game) {
+      const ussr = game.nations?.[ww2NationIdForFaction(game, "ussr")];
+      if (!ussr || ussr.bloc === "allies") return;
+      if (ww2ActivateMajorWar(game, "germany", "ussr", "Operation Barbarossa")) {
+        ww2AddFactionToAlliance(game, "ww2-allies", "ussr");
+        game.addEvent?.("Operation Barbarossa begins; the Soviet Union joins the Allied war effort.", { type: "scenario" });
+      }
+    },
   },
   {
     id: "pearl_harbor",
     label: "Pearl Harbor",
     description: "Japan strikes the U.S. Pacific Fleet.",
     triggerTurn: 18,
-    active: false,
-    apply() { /* TODO: declare war Japan→USA; promote USA to Allies bloc. */ },
+    active: true,
+    apply(game) {
+      const usa = game.nations?.[ww2NationIdForFaction(game, "usa")];
+      if (!usa || usa.bloc === "allies") return;
+      if (ww2ActivateMajorWar(game, "japan", "usa", "Pearl Harbor")) {
+        ww2AddFactionToAlliance(game, "ww2-allies", "usa");
+        game.addEvent?.("Pearl Harbor brings the United States into the Allied war effort.", { type: "scenario" });
+      }
+    },
   },
   {
     id: "us_enters_war",
     label: "United States Enters the War",
     description: "American industry mobilizes for global conflict.",
     triggerTurn: 19,
-    active: false,
-    apply() { /* TODO: link to pearl_harbor; grant USA production boost. */ },
+    active: true,
+    apply(game) {
+      const usa = game.nations?.[ww2NationIdForFaction(game, "usa")];
+      if (!usa || usa.bloc !== "allies") return;
+      usa.resources.industry = (usa.resources.industry || 0) + 35;
+      usa.resources.materials = (usa.resources.materials || 0) + 60;
+      game.addEvent?.("United States industry mobilizes for global conflict.", { type: "scenario" });
+    },
   },
   {
     id: "d_day",
@@ -1329,8 +1904,7 @@ export function getScenarioMap(scenarioId) {
     return createWorldMap();
   }
   if (scenarioId === SCENARIOS.WW2_GLOBAL) {
-    // WW2 reuses the global world map; faction starts/capitals differ.
-    return createWorldMap();
+    return createWW2TheaterMap();
   }
   return null;
 }
@@ -1371,6 +1945,13 @@ export function getScenarioStartingPositions(scenarioId) {
   return null;
 }
 
+export function getScenarioNeutralStartingPositions(scenarioId) {
+  if (scenarioId === SCENARIOS.WW2_GLOBAL) {
+    return WW2_NEUTRAL_STARTING_POSITIONS;
+  }
+  return [];
+}
+
 /**
  * Scenario-wide rule overrides applied to game.settings.scenarioOverrides.
  * Returns null when no overrides are defined.
@@ -1393,6 +1974,10 @@ export function getScenarioStartingAlliances(scenarioId) {
 export function getScenarioTurnLimit(scenarioId) {
   if (scenarioId === SCENARIOS.WW2_GLOBAL) return SCENARIO_METADATA[SCENARIOS.WW2_GLOBAL].turnLimit;
   return null;
+}
+
+export function getScenarioStartingEra(scenarioId) {
+  return SCENARIO_METADATA[scenarioId]?.startingEra || null;
 }
 
 /** Scenario event list (deep cloned to allow per-game mutation). */
