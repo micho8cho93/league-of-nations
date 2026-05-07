@@ -110,6 +110,9 @@ export function canResearch(
 ): { ok: true; cost: number; requirement: NonNullable<ReturnType<typeof researchRequirement>>; nextTier: number } | { ok: false; reason: string } {
   const config = TECH_CATEGORIES[category as TechCategory];
   if (!config) return { ok: false, reason: "Unknown technology." };
+  if (category === "infrastructure" && game.settings.mode !== "advanced") {
+    return { ok: false, reason: "Infrastructure research is only available in Advanced mode." };
+  }
   const current = numberValue((nation.tech as unknown as Record<string, unknown>)[category]);
   if (current >= TECH_RESEARCH.maxTier) return { ok: false, reason: "Maximum linear tier reached." };
 

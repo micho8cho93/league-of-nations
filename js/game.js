@@ -39,6 +39,7 @@ import {
 } from "./balance.js";
 import {
   ADVANCED_RESOURCE_KEYS,
+  advancedPenaltyStateForNation as advancedPenaltyState,
   advancedFruitDemand,
   applyAdvancedResourceDeficits,
   applyAdvancedResourceUpkeep,
@@ -68,7 +69,9 @@ import {
 } from "./nation.js";
 import {
   SOCIETY,
+  nationSocietyMetrics,
   blendCultureTowardNation,
+  bilateralSocietyMetrics,
   chooseReligionForNation,
   processSocietySpread,
   promoteReligionForNation,
@@ -576,7 +579,10 @@ export class GameState {
   }
 
   normalizeSocietyStates() {
-    for (const nation of Object.values(this.nations)) normalizeSociety(nation);
+    for (const nation of Object.values(this.nations)) {
+      normalizeSociety(nation);
+      nationSocietyMetrics(nation);
+    }
   }
 
   canSpendAction(nationId = this.playerId, amount = 1) {
@@ -810,6 +816,7 @@ export class GameState {
     const tile = this.tileById(tileIdValue);
     const type = normalizeInfrastructureType(infrastructureType);
     if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+    if (!isAdvancedMode(this)) return { ok: false, reason: "Infrastructure networks are only available in Advanced mode." };
     if (!tile || tile.ownerId !== nationId) return { ok: false, reason: "Infrastructure can only be built on owned tiles." };
     if (type === INFRASTRUCTURE_TYPES.NONE || !INFRASTRUCTURE_LABELS[type]) return { ok: false, reason: "Unknown infrastructure type." };
     if (!canTileHostInfrastructure(tile, type)) {
@@ -961,6 +968,8 @@ export class GameState {
     }
     const action = this.spendAction("train", nationId);
     if (!action.ok) return action;
+    const readiness = unitBranch === "infantry" ? 1 : this.advancedPenaltyStateForNation(nationId).advancedUnitReadinessModifier;
+    const deployedStrength = unitBranch === "infantry" ? amount : Math.max(1, Math.round(amount * readiness));
     nation.money -= cost.money;
     nation.population.available -= cost.people;
     nation.resources.materials -= cost.materials;
@@ -969,15 +978,17 @@ export class GameState {
     if (ironCost > 0) nation.resources.iron -= ironCost;
     if (oilCost > 0) nation.resources.oil -= oilCost;
     nation.workers.soldiers += cost.people;
-    nation.stats.moneySpent += cost.money;
-    nation.military.unitsTrained += amount;
+    nation.military.unitsTrained += deployedStrength;
     tile.unit = tile.unit || { nationId, strength: 0, branch: unitBranch, movedTurn: 0, branches: {} };
     tile.unit.nationId = nationId;
-    addUnitBranch(tile.unit, unitBranch, amount);
-    if (!silent) this.addEvent(`${nation.name} ${unitBranch === "infantry" ? "trained" : "deployed"} ${amount} ${unitBranch} strength.`, { nationId, type: "military", tileId: tile.id });
+    addUnitBranch(tile.unit, unitBranch, deployedStrength);
+    if (!silent) {
+      const readinessText = deployedStrength < amount ? ` at reduced readiness (${deployedStrength}/${amount})` : "";
+      this.addEvent(`${nation.name} ${unitBranch === "infantry" ? "trained" : "deployed"} ${deployedStrength} ${unitBranch} strength${readinessText}.`, { nationId, type: "military", tileId: tile.id });
+    }
     this.changed("train");
     const advancedCost = ironCost || oilCost ? { ...(ironCost && { iron: ironCost }), ...(oilCost && { oil: oilCost }) } : null;
-    return { ok: true, cost, advancedCost };
+    return { ok: true, cost, advancedCost, deployedStrength, readiness };
   }
 
   moveUnitToward(fromTileId, targetTileId, nationId = this.playerId, options = {}) {
@@ -1665,6 +1676,7 @@ export class GameState {
     let populationGain = 0;
     let foodProduced = 0;
     const happinessEnabled = this.settings.happinessEnabled !== false;
+    const advancedPenalties = isAdvancedMode(this) ? this.advancedPenaltyStateForNation(nation.id) : null;
     for (const tile of this.tiles.filter((item) => item.ownerId === nation.id)) {
       const production = productionForTile(nation, tile, this.era);
       if (!production) continue;
@@ -1676,7 +1688,8 @@ export class GameState {
       if (tile.type === TILE_TYPES.FACTORY) {
         if (nation.resources.materials < production.materialsCost || nation.resources.education < production.educationCost) {
           const exhaustedIncome = applyWarExhaustionIncome(nation, BALANCE.costs.factoryFallbackMoney);
-          const fallbackIncome = happinessEnabled ? applyHappinessProduction(nation, exhaustedIncome) : exhaustedIncome;
+          const infraIncome = Math.ceil(exhaustedIncome * logistics.moneyModifier);
+          const fallbackIncome = happinessEnabled ? applyHappinessProduction(nation, infraIncome) : infraIncome;
           earnMoney(nation, fallbackIncome);
           summary.money += fallbackIncome;
           continue;
@@ -1689,6 +1702,14 @@ export class GameState {
           let adjustedAmount = production[resource];
           if (resource === "food") adjustedAmount = Math.ceil(adjustedAmount * logistics.foodModifier);
           if (resource === "materials") adjustedAmount = Math.ceil(adjustedAmount * logistics.materialsModifier);
+          if (resource === "education") adjustedAmount = Math.ceil(adjustedAmount * logistics.educationModifier);
+          if (resource === "industry") adjustedAmount = Math.ceil(adjustedAmount * logistics.industryModifier);
+          if (advancedPenalties) {
+            const efficiency = tile.type === TILE_TYPES.FACTORY
+              ? advancedPenalties.factoryEfficiencyModifier
+              : advancedPenalties.buildingEfficiencyModifier;
+            adjustedAmount = Math.ceil(adjustedAmount * efficiency);
+          }
           const exhaustedProduction = applyWarExhaustionProduction(nation, adjustedAmount);
           const happyProduction = happinessEnabled ? applyHappinessProduction(nation, exhaustedProduction) : exhaustedProduction;
           const produced = applyStockpileDiminishingReturns(nation, resource, happyProduction);
@@ -1700,7 +1721,14 @@ export class GameState {
         }
       }
       if (production.money) {
-        const exhaustedIncome = applyWarExhaustionIncome(nation, production.money);
+        let adjustedIncome = Math.ceil(production.money * logistics.moneyModifier);
+        if (advancedPenalties) {
+          const efficiency = tile.type === TILE_TYPES.FACTORY
+            ? advancedPenalties.factoryEfficiencyModifier
+            : advancedPenalties.buildingEfficiencyModifier;
+          adjustedIncome = Math.ceil(adjustedIncome * efficiency);
+        }
+        const exhaustedIncome = applyWarExhaustionIncome(nation, adjustedIncome);
         const income = happinessEnabled ? applyHappinessProduction(nation, exhaustedIncome) : exhaustedIncome;
         earnMoney(nation, income);
         summary.money += income;
@@ -1835,7 +1863,8 @@ export class GameState {
     // Scenario rule override: slow population growth (e.g. WW2 wartime drag).
     const growthMul = Number(this.settings?.scenarioOverrides?.growthRateMultiplier) || 1;
     const effectiveGrowthRate = FRUIT_SURPLUS_GROWTH_RATE * growthMul;
-    const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * effectiveGrowthRate)) : 0;
+    const growthPenalty = this.advancedPenaltyStateForNation(nation.id).populationGrowthModifier;
+    const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * effectiveGrowthRate * growthPenalty)) : 0;
     if (growth > 0) {
       addPopulation(nation, growth);
       summary.population += growth;
@@ -1855,19 +1884,23 @@ export class GameState {
     if (!upkeepResult) return; // Not in Advanced mode or nation not active
 
     // Apply deficit penalties
-    applyAdvancedResourceDeficits(this, nation.id);
+    const penalties = applyAdvancedResourceDeficits(this, nation.id);
 
     // Report upkeep in events
     const { deficit } = upkeepResult;
     if (deficit.hardwood > 0) {
-      this.addEvent(`${nation.name} suffered hardwood shortage, reducing building efficiency.`, { nationId: nation.id, type: "resource" });
+      this.addEvent(`${nation.name} suffered hardwood shortage, reducing building efficiency by ${Math.round((1 - penalties.buildingEfficiencyModifier) * 100)}%.`, { nationId: nation.id, type: "resource" });
     }
     if (deficit.iron > 0) {
-      this.addEvent(`${nation.name} suffered iron shortage, reducing factory efficiency.`, { nationId: nation.id, type: "resource" });
+      this.addEvent(`${nation.name} suffered iron shortage, reducing factory efficiency by ${Math.round((1 - penalties.factoryEfficiencyModifier) * 100)}%.`, { nationId: nation.id, type: "resource" });
     }
     if (deficit.oil > 0) {
-      this.addEvent(`${nation.name} suffered oil shortage, reducing unit readiness.`, { nationId: nation.id, type: "resource" });
+      this.addEvent(`${nation.name} suffered oil shortage, reducing advanced unit readiness by ${Math.round((1 - penalties.advancedUnitReadinessModifier) * 100)}%.`, { nationId: nation.id, type: "resource" });
     }
+  }
+
+  advancedPenaltyStateForNation(nationId) {
+    return advancedPenaltyState(this.nations[nationId]);
   }
 
   updatePopulationHappiness(nation, summary, context) {
@@ -2254,12 +2287,12 @@ function normalizeSettings(raw) {
     mapSize: mapSizes.includes(raw.mapSize) ? raw.mapSize : "Medium",
     waterLevel: mapOptionLevels.includes(raw.waterLevel) ? raw.waterLevel : "Balanced",
     landscapeDiversity: normalizeLandscapeDiversity(raw.landscapeDiversity, mode),
-    fogOfWarEnabled: raw.fogOfWarEnabled === true,
+    fogOfWarEnabled: mode === "advanced" && raw.fogOfWarEnabled === true,
     nationCount,
     maxTurns: unlimitedMode ? 0 : clamp(Math.floor(Number(raw.maxTurns) || 30), 10, 120),
     turnTimerMinutes,
     unlimitedMode,
-    happinessEnabled: raw.happinessEnabled !== false,
+    happinessEnabled: mode === "advanced" && raw.happinessEnabled !== false,
     educationModeEnabled: raw.educationModeEnabled === true,
     seed: Math.floor(Number(raw.seed) || randomSeed()),
     scenarioId: raw.scenarioId || null,
@@ -2317,6 +2350,7 @@ function applyHappinessProduction(nation, amount) {
 function populationHappinessDelta(game, nation, context = {}) {
   const config = BALANCE.population.happiness.changes;
   const logistics = context.logistics || computeNationLogistics(game.tiles || game.map?.tiles || [], nation);
+  const society = nationSocietyMetrics(nation);
   const consumption = Math.max(1, Number(context.consumption) || 1);
   const surplus = Number(context.surplus) || 0;
   const surplusRatio = surplus / consumption;
@@ -2342,6 +2376,10 @@ function populationHappinessDelta(game, nation, context = {}) {
     delta += config.peacefulRecovery;
   }
   delta += logistics.happinessDelta;
+  delta += society.happinessDelta;
+  if ((nation.advancedResourceStatus?.deficit?.hardwood || 0) > 0) delta -= 1;
+  if ((nation.advancedResourceStatus?.deficit?.iron || 0) > 0) delta -= 1;
+  if ((nation.advancedResourceStatus?.deficit?.oil || 0) > 0) delta -= 1;
 
   if (delta === 0 && normalizeHappiness(nation.population.happiness) < BALANCE.population.happiness.default) return 1;
   return clamp(delta, -15, 8);

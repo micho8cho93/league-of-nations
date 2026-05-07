@@ -122,25 +122,31 @@ export function computeNationLogistics(tiles: Tile[], nation: Nation | null | un
   const connectedCoverage = infrastructure.counts.connectedTotal / total;
   const territoryScale = Math.max(0, total - 8) / 12;
   const rawDistancePenalty = Math.min(
-    0.24,
-    territoryScale * 0.07 +
-      Math.max(0, averageDistance - 2) * 0.022 +
-      remoteShare * 0.06,
+    0.34,
+    territoryScale * 0.085 +
+      Math.max(0, averageDistance - 2) * 0.028 +
+      remoteShare * 0.075,
   );
   const relief =
-    connectedCoverage * 0.08 +
-    roadCoverage * 0.02 +
-    railCoverage * 0.035 +
-    advancedCoverage * 0.05 +
-    Math.max(0, Math.min(4, Math.floor(Number(nation?.tech?.infrastructure) || 0))) * 0.012;
+    connectedCoverage * 0.11 +
+    roadCoverage * 0.03 +
+    railCoverage * 0.05 +
+    advancedCoverage * 0.07 +
+    Math.max(0, Math.min(4, Math.floor(Number(nation?.tech?.infrastructure) || 0))) * 0.018;
   const distancePenalty = Math.max(0, rawDistancePenalty - relief);
   const weightedCoverageScore = (roadCoverage + railCoverage * 1.4 + advancedCoverage * 1.8) / 4.2;
-  const transportEfficiency = clampNumber(1 - distancePenalty + weightedCoverageScore * 0.3 + connectedCoverage * 0.08, 0.84, 1.28);
-  const foodModifier = clampNumber(1 - distancePenalty * 0.55 + roadCoverage * 0.08 + connectedCoverage * 0.05, 0.9, 1.18);
-  const materialsModifier = clampNumber(1 - distancePenalty * 0.65 + railCoverage * 0.1 + advancedCoverage * 0.04, 0.88, 1.2);
-  const growthMultiplier = clampNumber(transportEfficiency + roadCoverage * 0.04, 0.9, 1.3);
-  const happinessDelta = clampInt(Math.round(connectedCoverage * 4 + advancedCoverage * 2 - distancePenalty * 18 - territoryScale * 1.5), -5, 4);
+  const transportEfficiency = clampNumber(1 - distancePenalty + weightedCoverageScore * 0.35 + connectedCoverage * 0.1, 0.76, 1.4);
+  const foodModifier = clampNumber(1 - distancePenalty * 0.7 + roadCoverage * 0.1 + connectedCoverage * 0.06, 0.84, 1.24);
+  const materialsModifier = clampNumber(1 - distancePenalty * 0.78 + railCoverage * 0.16 + advancedCoverage * 0.05, 0.8, 1.3);
+  const moneyModifier = clampNumber(1 - distancePenalty * 0.62 + connectedCoverage * 0.08 + advancedCoverage * 0.06, 0.84, 1.22);
+  const educationModifier = clampNumber(1 - distancePenalty * 0.58 + connectedCoverage * 0.06 + advancedCoverage * 0.08, 0.85, 1.24);
+  const industryModifier = clampNumber(1 - distancePenalty * 0.66 + railCoverage * 0.09 + advancedCoverage * 0.12, 0.82, 1.28);
+  const upkeepModifier = clampNumber(1 + distancePenalty * 0.55 - connectedCoverage * 0.16 - railCoverage * 0.08 - advancedCoverage * 0.14, 0.72, 1.14);
+  const diplomacyModifier = clampNumber(1 - distancePenalty * 0.22 + connectedCoverage * 0.08 + advancedCoverage * 0.06, 0.9, 1.22);
+  const growthMultiplier = clampNumber(transportEfficiency + roadCoverage * 0.05, 0.82, 1.4);
+  const happinessDelta = clampInt(Math.round(connectedCoverage * 5 + advancedCoverage * 3 - distancePenalty * 22 - territoryScale * 2), -7, 5);
   return {
+    nation,
     infrastructure,
     territoryCount: infrastructure.counts.total,
     averageDistance,
@@ -152,6 +158,11 @@ export function computeNationLogistics(tiles: Tile[], nation: Nation | null | un
     transportEfficiency,
     foodModifier,
     materialsModifier,
+    moneyModifier,
+    educationModifier,
+    industryModifier,
+    upkeepModifier,
+    diplomacyModifier,
     growthMultiplier,
     happinessDelta,
   };

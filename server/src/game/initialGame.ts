@@ -66,6 +66,18 @@ interface Nation {
     prevalence: Record<string, number>;
     dominantReligionId: string | null;
   };
+  societyMetrics?: {
+    homeShare: number;
+    foreignShare: number;
+    dominantCultureId: string;
+    dominantCultureShare: number;
+    stateReligionShare: number;
+    dominantReligionShare: number;
+    religiousCohesion: number;
+    culturalCohesion: number;
+    happinessDelta: number;
+    stability: number;
+  };
   warExhaustion: number;
   reputation: number;
   mobilizationLevel: number;
@@ -76,6 +88,12 @@ interface Nation {
   };
   money: number;
   resources: Record<string, number>;
+  advancedResourceStatus?: {
+    upkeep: Record<string, number>;
+    paid: Record<string, number>;
+    deficit: Record<string, number>;
+    penalties: Record<string, number>;
+  };
   workers: Record<string, number>;
   diplomacy: Record<string, unknown>;
   military: Record<string, unknown>;
@@ -397,8 +415,8 @@ function normalizeInitialGameSettings(settings: InitialGameSettings): InitialGam
     mode,
     waterLevel: sanitizeMapOptionLevel(settings.waterLevel),
     landscapeDiversity: normalizeLandscapeDiversity(settings.landscapeDiversity, mode),
-    fogOfWarEnabled: settings.fogOfWarEnabled === true,
-    happinessEnabled: settings.happinessEnabled !== false,
+    fogOfWarEnabled: mode === "advanced" && settings.fogOfWarEnabled === true,
+    happinessEnabled: mode === "advanced" && settings.happinessEnabled !== false,
     educationModeEnabled: settings.educationModeEnabled === true,
   };
 }

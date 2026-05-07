@@ -10,6 +10,7 @@ import {
   RESOURCE_METADATA,
   SPECIAL_RESOURCES,
 } from "./balance.js";
+import { computeNationLogistics } from "./infrastructure.js";
 import { TILE_TYPES, clamp } from "./utils.js";
 
 export const ADVANCED_RESOURCE_KEYS = Object.freeze(["fruit", "hardwood", "iron", "oil"]);
@@ -52,7 +53,24 @@ export function normalizeAdvancedResources(nation) {
   for (const key of ADVANCED_RESOURCE_KEYS) {
     nation.resources[key] = Math.max(0, Math.floor(Number(nation.resources[key]) || 0));
   }
+  nation.advancedResourceStatus = normalizeAdvancedResourceStatus(nation.advancedResourceStatus);
   return nation;
+}
+
+export function normalizeAdvancedResourceStatus(status = null) {
+  const normalized = status && typeof status === "object" ? status : {};
+  return {
+    upkeep: { fruit: 0, hardwood: 0, iron: 0, oil: 0, ...(normalized.upkeep || {}) },
+    paid: { fruit: 0, hardwood: 0, iron: 0, oil: 0, ...(normalized.paid || {}) },
+    deficit: { fruit: 0, hardwood: 0, iron: 0, oil: 0, ...(normalized.deficit || {}) },
+    penalties: {
+      populationGrowthModifier: 1,
+      buildingEfficiencyModifier: 1,
+      factoryEfficiencyModifier: 1,
+      advancedUnitReadinessModifier: 1,
+      ...(normalized.penalties || {}),
+    },
+  };
 }
 
 export function emptyAdvancedResourceBundle() {
@@ -127,7 +145,7 @@ export function calculateBuildingUpkeepForNation(gameState, nationId) {
   const upkeep = { hardwood: 0, iron: 0, oil: 0 };
   if (!isAdvancedMode(gameState)) return upkeep;
   const costs = ADVANCED_UPKEEP_COSTS.buildings;
-  for (const tile of gameState.tiles || []) {
+  for (const tile of gameState.tiles || gameState.map?.tiles || []) {
     if (tile.ownerId !== nationId) continue;
     const tileCosts = costs[tile.type];
     if (tileCosts) {
@@ -144,7 +162,7 @@ export function calculateUnitUpkeepForNation(gameState, nationId) {
   const upkeep = { hardwood: 0, iron: 0, oil: 0 };
   if (!isAdvancedMode(gameState)) return upkeep;
   const costs = ADVANCED_UPKEEP_COSTS.units;
-  for (const tile of gameState.tiles || []) {
+  for (const tile of gameState.tiles || gameState.map?.tiles || []) {
     if (!tile.unit || tile.unit.nationId !== nationId) continue;
     const unit = tile.unit;
     // Calculate upkeep per strength point for each branch
@@ -202,41 +220,38 @@ export function describeUpkeepDeficit(deficits) {
 // Comprehensive resource upkeep calculation for Advanced mode
 // Returns detailed upkeep requirements, available resources, and deficits
 export function calculateAdvancedResourceUpkeep(gameState, nationId) {
+  const emptyResult = {
+    required: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
+    available: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
+    deficit: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
+    penalties: normalizeAdvancedResourceStatus().penalties,
+    details: { population: 0, buildingCount: 0, factoryCount: 0, advancedUnitCount: 0, upkeepModifier: 1 },
+  };
   if (!isAdvancedMode(gameState)) {
-    return {
-      required: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
-      available: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
-      deficit: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
-      details: { population: 0, buildingCount: 0, factoryCount: 0, advancedUnitCount: 0 },
-    };
+    return emptyResult;
   }
 
   const nation = gameState.nations[nationId];
   if (!nation?.active) {
-    return {
-      required: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
-      available: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
-      deficit: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
-      details: { population: 0, buildingCount: 0, factoryCount: 0, advancedUnitCount: 0 },
-    };
+    return emptyResult;
   }
 
   normalizeAdvancedResources(nation);
+  const tiles = gameState.tiles || gameState.map?.tiles || [];
+  const logistics = computeNationLogistics(tiles, nation);
 
   // Count buildings and units
   let buildingCount = 0;
   let factoryCount = 0;
   let advancedUnitCount = 0;
-  let totalUnitStrength = 0;
 
-  for (const tile of gameState.tiles || []) {
+  for (const tile of tiles) {
     if (tile.ownerId !== nationId) continue;
     if (tile.type && tile.type !== "EMPTY" && tile.type !== "CAPITAL") {
       buildingCount += 1;
       if (tile.type === "FACTORY") factoryCount += 1;
     }
     if (tile.unit?.nationId === nationId) {
-      totalUnitStrength += tile.unit.strength || 0;
       for (const [branch, strength] of Object.entries(tile.unit.branches || {})) {
         if (branch !== "infantry" && strength > 0) advancedUnitCount += strength;
       }
@@ -244,15 +259,16 @@ export function calculateAdvancedResourceUpkeep(gameState, nationId) {
   }
 
   const population = nation.population?.total || 0;
+  const upkeepModifier = Number(logistics.upkeepModifier) || 1;
+  const buildingUpkeep = calculateBuildingUpkeepForNation(gameState, nationId);
+  const unitUpkeep = calculateUnitUpkeepForNation(gameState, nationId);
 
   // Calculate required upkeep
   const required = {
     fruit: Math.ceil(population * FRUIT_CONSUMPTION_PER_POPULATION),
-    hardwood: calculateBuildingUpkeepForNation(gameState, nationId).hardwood,
-    iron: calculateBuildingUpkeepForNation(gameState, nationId).iron +
-           calculateUnitUpkeepForNation(gameState, nationId).iron,
-    oil: calculateBuildingUpkeepForNation(gameState, nationId).oil +
-         calculateUnitUpkeepForNation(gameState, nationId).oil,
+    hardwood: Math.ceil((buildingUpkeep.hardwood || 0) * upkeepModifier),
+    iron: Math.ceil(((buildingUpkeep.iron || 0) + (unitUpkeep.iron || 0)) * upkeepModifier),
+    oil: Math.ceil(((buildingUpkeep.oil || 0) + (unitUpkeep.oil || 0)) * upkeepModifier),
   };
 
   const available = {
@@ -268,12 +284,14 @@ export function calculateAdvancedResourceUpkeep(gameState, nationId) {
     iron: Math.max(0, required.iron - available.iron),
     oil: Math.max(0, required.oil - available.oil),
   };
+  const penalties = deriveAdvancedPenaltyModifiers(deficit);
 
   return {
     required,
     available,
     deficit,
-    details: { population, buildingCount, factoryCount, advancedUnitCount },
+    penalties,
+    details: { population, buildingCount, factoryCount, advancedUnitCount, upkeepModifier },
   };
 }
 
@@ -301,13 +319,14 @@ export function applyAdvancedResourceUpkeep(gameState, nationId) {
   nation.resources.oil = (nation.resources.oil || 0) - paid.oil;
 
   // Store upkeep status for UI/event display
-  nation.advancedResourceStatus = {
+  nation.advancedResourceStatus = normalizeAdvancedResourceStatus({
     upkeep: upkeep.required,
     paid,
     deficit: upkeep.deficit,
-  };
+    penalties: upkeep.penalties,
+  });
 
-  return { upkeep, paid, deficit: upkeep.deficit };
+  return { upkeep, paid, deficit: upkeep.deficit, penalties: upkeep.penalties };
 }
 
 // Apply consequences of resource deficits
@@ -322,33 +341,26 @@ export function applyAdvancedResourceDeficits(gameState, nationId) {
   if (!status) return null;
 
   const { deficit } = status;
-  const penalties = {
-    populationGrowthModifier: 1.0,
-    buildingEfficiencyModifier: 1.0,
-    factoryEfficiencyModifier: 1.0,
-    advancedUnitReadinessModifier: 1.0,
-  };
-
-  // Fruit deficit: reduces population growth rate
-  if (deficit.fruit > 0) {
-    penalties.populationGrowthModifier *= Math.max(0.3, 1 - (deficit.fruit * 0.15));
-  }
-
-  // Hardwood deficit: reduces building efficiency
-  if (deficit.hardwood > 0) {
-    penalties.buildingEfficiencyModifier *= Math.max(0.4, 1 - (deficit.hardwood * 0.1));
-  }
-
-  // Iron deficit: reduces factory efficiency
-  if (deficit.iron > 0) {
-    penalties.factoryEfficiencyModifier *= Math.max(0.3, 1 - (deficit.iron * 0.12));
-  }
-
-  // Oil deficit: reduces advanced unit readiness
-  if (deficit.oil > 0) {
-    penalties.advancedUnitReadinessModifier *= Math.max(0.4, 1 - (deficit.oil * 0.15));
-  }
+  const penalties = deriveAdvancedPenaltyModifiers(deficit);
 
   nation.advancedResourceStatus.penalties = penalties;
+  return penalties;
+}
+
+export function advancedPenaltyStateForNation(nation) {
+  return normalizeAdvancedResourceStatus(nation?.advancedResourceStatus).penalties;
+}
+
+function deriveAdvancedPenaltyModifiers(deficit = {}) {
+  const penalties = {
+    populationGrowthModifier: 1,
+    buildingEfficiencyModifier: 1,
+    factoryEfficiencyModifier: 1,
+    advancedUnitReadinessModifier: 1,
+  };
+  if ((deficit.fruit || 0) > 0) penalties.populationGrowthModifier *= Math.max(0.3, 1 - (deficit.fruit * 0.15));
+  if ((deficit.hardwood || 0) > 0) penalties.buildingEfficiencyModifier *= Math.max(0.42, 1 - (deficit.hardwood * 0.11));
+  if ((deficit.iron || 0) > 0) penalties.factoryEfficiencyModifier *= Math.max(0.28, 1 - (deficit.iron * 0.13));
+  if ((deficit.oil || 0) > 0) penalties.advancedUnitReadinessModifier *= Math.max(0.38, 1 - (deficit.oil * 0.16));
   return penalties;
 }

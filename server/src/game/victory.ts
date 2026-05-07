@@ -1,5 +1,6 @@
 import type { ServerGameState } from "./initialGame.js";
 import { BRANCH_RESEARCH, TECH_RESEARCH } from "./tech.js";
+import { bilateralSocietyMetrics } from "./cultureReligion.js";
 
 type Nation = ServerGameState["nations"][string];
 
@@ -16,6 +17,7 @@ export const VICTORY_CONFIG = {
   },
   diplomaticHegemony: {
     holdTurns: 10,
+    minimumBlocQuality: 58,
   },
 } as const;
 
@@ -66,6 +68,7 @@ export function refreshVictoryProgress(game: ServerGameState | Record<string, an
   progress.diplomaticHegemony = {
     requiredAllianceCount,
     holdTurns: diplomacyConfig.holdTurns,
+    minimumBlocQuality: diplomacyConfig.minimumBlocQuality,
     activeNationCount: activeNationIds.length,
   };
 
@@ -85,6 +88,7 @@ export function refreshVictoryProgress(game: ServerGameState | Record<string, an
     const techLead = activeNationIds.length > 1 ? score - bestOtherScore : 0;
     const alliedNationIds = alliedNationIdsFor(game, nationId);
     const allianceCount = alliedNationIds.length;
+    const blocQuality = diplomaticBlocQuality(game, nationId, alliedNationIds);
     const meetsTechCondition = Boolean(
       nation?.active &&
       activeNationIds.length > 1 &&
@@ -94,7 +98,8 @@ export function refreshVictoryProgress(game: ServerGameState | Record<string, an
     const meetsDiplomaticCondition = Boolean(
       nation?.active &&
       activeNationIds.length > 1 &&
-      allianceCount >= requiredAllianceCount
+      allianceCount >= requiredAllianceCount &&
+      blocQuality >= diplomacyConfig.minimumBlocQuality
     );
 
     entry.capitalsControlled = capitalsControlled;
@@ -112,6 +117,8 @@ export function refreshVictoryProgress(game: ServerGameState | Record<string, an
     entry.allianceCount = allianceCount;
     entry.requiredAllianceCount = requiredAllianceCount;
     entry.activeNationCount = activeNationIds.length;
+    entry.diplomaticBlocQuality = blocQuality;
+    entry.requiredDiplomaticBlocQuality = diplomacyConfig.minimumBlocQuality;
     entry.meetsDiplomaticCondition = meetsDiplomaticCondition;
     entry.diplomaticHoldTurns = nextHoldTurns(entry.diplomaticHoldTurns, meetsDiplomaticCondition, shouldCountTurnBoundary);
     entry.diplomaticTurnsRemaining = Math.max(0, diplomacyConfig.holdTurns - entry.diplomaticHoldTurns);
@@ -163,6 +170,8 @@ function normalizeNationVictoryEntry(entry: Record<string, any> | null | undefin
     allianceCount: numberValue(entry?.allianceCount),
     requiredAllianceCount: numberValue(entry?.requiredAllianceCount),
     activeNationCount: numberValue(entry?.activeNationCount),
+    diplomaticBlocQuality: numberValue(entry?.diplomaticBlocQuality),
+    requiredDiplomaticBlocQuality: numberValue(entry?.requiredDiplomaticBlocQuality, VICTORY_CONFIG.diplomaticHegemony.minimumBlocQuality),
     meetsDiplomaticCondition: Boolean(entry?.meetsDiplomaticCondition),
     diplomaticHoldTurns: numberValue(entry?.diplomaticHoldTurns),
     diplomaticTurnsRemaining: numberValue(entry?.diplomaticTurnsRemaining, VICTORY_CONFIG.diplomaticHegemony.holdTurns),
@@ -203,6 +212,20 @@ function alliedNationIdsFor(game: ServerGameState | Record<string, any>, nationI
     }
   }
   return [...allies].sort();
+}
+
+function diplomaticBlocQuality(game: ServerGameState | Record<string, any>, nationId: string, alliedNationIds = alliedNationIdsFor(game, nationId)) {
+  if (!alliedNationIds.length) return 0;
+  const scores = alliedNationIds.map((allyId) => {
+    const record = (game.diplomacy || {})[[nationId, allyId].sort().join("::")] || {};
+    const route = (game.tradeRoutes || []).find((item: any) => item.status !== "removed" && item.members?.includes(nationId) && item.members?.includes(allyId));
+    const society = bilateralSocietyMetrics(game.nations[nationId], game.nations[allyId]);
+    const relation = Math.max(0, Math.min(100, numberValue((record as Record<string, any>).relation, 50)));
+    const tradeBonus = route?.status === "active" ? 12 : route?.status === "disrupted" ? -10 : 0;
+    const societyBonus = Math.round((society.trust - 0.5) * 24 + society.pressure * 20);
+    return Math.max(0, Math.min(100, relation + tradeBonus + societyBonus));
+  });
+  return Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length);
 }
 
 function nextHoldTurns(previous: unknown, meetsCondition: boolean, shouldCountTurnBoundary: boolean) {

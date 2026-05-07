@@ -53,8 +53,10 @@ import { activeEventSummaries } from "./events.js";
 import {
   RELIGIONS,
   SOCIETY,
+  bilateralSocietyMetrics,
   dominantCultureLabel,
   isSocietyEnabled,
+  nationSocietyMetrics,
   normalizeSociety,
   religionIcon,
   religionLabel,
@@ -77,7 +79,7 @@ const TUTORIAL_STEPS = [
   },
   {
     title: "Resources",
-    body: "Your resource strip runs across the top. It shows money, food, materials, population, happiness, education, industry, and military power.",
+    body: "Your resource strip runs across the top. It tracks the economy, population, research, industry, and military strength that drive your nation.",
     target: "#resource-panel",
   },
   {
@@ -103,7 +105,7 @@ const TUTORIAL_STEPS = [
   },
   {
     title: "Leaderboard",
-    body: "The rank button opens the leaderboard so you can compare score, territory, population, happiness, and military power.",
+    body: "The rank button opens the leaderboard so you can compare score, territory, population, and military power.",
     target: "#leaderboard-btn",
   },
   {
@@ -676,6 +678,8 @@ class GameUI {
   renderStatus() {
     const player = this.game.player;
     const societyEnabled = isSocietyEnabled(this.game);
+    const fogEnabled = this.game.settings.fogOfWarEnabled === true;
+    const happinessEnabled = this.game.settings.happinessEnabled !== false;
     const waitingForTurn = this.isServerAuthoritative() && !this.isPlayersTurn();
     const needsReflection = this.playerNeedsEducationReflection();
     const endTurnDisabled = this.game.isProcessingTurn || Boolean(this.game.gameOver) || waitingForTurn || needsReflection;
@@ -695,11 +699,11 @@ class GameUI {
       pill(player.name),
       pill(eraLabel(this.game.era)),
       pill(`Turn ${turnLimit}`),
-      pill(this.game.settings.fogOfWarEnabled ? "Fog On" : "Fog Off"),
       pill(`Money $${formatNumber(player.money)}`),
       pill(`Pop ${formatNumber(player.population.total)} (${formatNumber(player.population.available)} free)`),
-      pill(`Happy ${formatNumber(populationHappiness(player))} ${happinessBand(player).label}`),
     ];
+    if (fogEnabled) statusPills.push(pill("Fog On"));
+    if (happinessEnabled) statusPills.push(pill(`Happy ${formatNumber(populationHappiness(player))} ${happinessBand(player).label}`));
     if (societyEnabled) normalizeSociety(player);
     if (societyEnabled && this.game.era >= SOCIETY.unlockEra) {
       statusPills.push(pill(player.religion.stateReligionId ? religionLabel(player.religion.stateReligionId) : "Choose Religion"));
@@ -776,7 +780,9 @@ class GameUI {
 	  }
 
   renderLogisticsSummaryHtml(player = this.game.player) {
+    if (!isAdvancedMode(this.game)) return "";
     const logistics = this.game.logisticsSummaryFor(player.id);
+    const society = nationSocietyMetrics(player);
     return `
       <div class="summary-row">
         <strong>National Logistics</strong>
@@ -784,8 +790,10 @@ class GameUI {
           ${metric("Transport Efficiency", formatPercent(logistics.transportEfficiency))}
           ${metric("Infrastructure Coverage", formatPercent(logistics.connectedCoverage))}
           ${metric("Distance Penalty", formatPercent(logistics.distancePenalty))}
+          ${metric("Trade Throughput", formatPercent(logistics.diplomacyModifier))}
+          ${metric("Upkeep Pressure", formatPercent(logistics.upkeepModifier))}
         </div>
-        <div class="muted">Road coverage ${formatPercent(logistics.roadCoverage)} · Rail coverage ${formatPercent(logistics.railCoverage)} · Advanced coverage ${formatPercent(logistics.advancedCoverage)}</div>
+        <div class="muted">Road ${formatPercent(logistics.roadCoverage)} · Rail ${formatPercent(logistics.railCoverage)} · Advanced ${formatPercent(logistics.advancedCoverage)} · Society stability ${formatNumber(society.stability)}</div>
       </div>
     `;
   }
@@ -850,6 +858,7 @@ class GameUI {
   renderResources() {
     const player = this.game.player;
     const logistics = this.game.logisticsSummaryFor(player.id);
+    const society = nationSocietyMetrics(player);
     if (isAdvancedMode(this.game)) normalizeAdvancedResources(player);
     const flows = this.projectResourceFlows(player);
     const foodClass = flows.food < 0 || player.resources.food + flows.food < 0 ? "bad" : "good";
@@ -897,6 +906,16 @@ class GameUI {
       })}
     ` : "";
     document.querySelectorAll(".ui-tooltip[data-floating-tooltip='true']").forEach((tooltip) => tooltip.remove());
+    const happinessRow = happinessEnabled ? resourceRow({
+      id: "happiness",
+      label: "Happiness",
+      icon: "🙂",
+      value: `${formatNumber(populationHappiness(player))}/100`,
+      className: happinessClass(player),
+      note: `${happinessBand(player).label} · ${formatPercent(happinessBand(player).workRate)} work rate`,
+      rate: happinessRiskText(player),
+      tooltip: `Happiness reflects food security, upkeep pressure, war, losses, diplomacy, culture, religion, and transportation. Logistics add ${signed(logistics.happinessDelta)} this turn. Society adds ${signed(society.happinessDelta)} from cohesion vs. foreign pressure. ${happinessEffectText(player)}`,
+    }) : "";
     this.resourcePanel.innerHTML = `
       ${resourceRow({
         id: "money",
@@ -940,18 +959,7 @@ class GameUI {
           ? `Population supplies workers and soldiers. In Advanced mode it grows from fruit surplus while food still covers survival. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`
           : `Population supplies workers and soldiers. It grows when food production beats consumption and territory has capacity. Logistics growth multiplier: ${formatPercent(logistics.growthMultiplier)}. Current projected change: ${signed(flows.population)}/turn. Capacity: ${formatNumber(flows.capacity)} people.`,
       })}
-      ${resourceRow({
-        id: "happiness",
-        label: "Happiness",
-        icon: "🙂",
-        value: happinessEnabled ? `${formatNumber(populationHappiness(player))}/100` : "Off",
-        className: happinessEnabled ? happinessClass(player) : "warn",
-        note: happinessEnabled ? `${happinessBand(player).label} · ${formatPercent(happinessBand(player).workRate)} work rate` : "Mechanic disabled",
-        rate: happinessEnabled ? happinessRiskText(player) : "No happiness effects",
-        tooltip: happinessEnabled
-          ? `Happiness reflects food security, upkeep pressure, war, losses, diplomatic stability, and transportation supply chains. Logistics currently add ${signed(logistics.happinessDelta)} happiness pressure per turn. ${happinessEffectText(player)}`
-          : "Citizen happiness is disabled for this game.",
-      })}
+      ${happinessRow}
       ${resourceRow({
         id: "education",
         label: "Education",
@@ -994,6 +1002,7 @@ class GameUI {
     if (isAdvancedMode(this.game)) normalizeAdvancedResources(player);
     const foodFlow = this.game.foodFlowFor(player.id);
     const advancedUpkeep = isAdvancedMode(this.game) ? calculateAdvancedResourceUpkeep(this.game, player.id) : null;
+    const advancedPenalties = advancedUpkeep?.penalties || null;
     const flows = {
       money: 0,
       moneyNet: 0,
@@ -1023,7 +1032,7 @@ class GameUI {
       if (!production) continue;
       if (tile.type === TILE_TYPES.FACTORY) {
         if (available.materials < production.materialsCost || available.education < production.educationCost) {
-          flows.money += applyProjectedHappiness(player, 20, happinessEnabled);
+          flows.money += applyProjectedHappiness(player, Math.ceil(20 * logistics.moneyModifier), happinessEnabled);
           continue;
         }
         available.materials -= production.materialsCost;
@@ -1036,12 +1045,29 @@ class GameUI {
         let amount = production[resource];
         if (resource === "food") amount = Math.ceil(amount * logistics.foodModifier);
         if (resource === "materials") amount = Math.ceil(amount * logistics.materialsModifier);
+        if (resource === "education") amount = Math.ceil(amount * logistics.educationModifier);
+        if (resource === "industry") amount = Math.ceil(amount * logistics.industryModifier);
+        if (advancedPenalties) {
+          const efficiency = tile.type === TILE_TYPES.FACTORY
+            ? advancedPenalties.factoryEfficiencyModifier
+            : advancedPenalties.buildingEfficiencyModifier;
+          amount = Math.ceil(amount * efficiency);
+        }
         const produced = applyProjectedHappiness(player, amount, happinessEnabled);
         flows[resource] += produced;
         available[resource] += produced;
         if (resource === "food") flows.foodProduced += produced;
       }
-      if (production.money) flows.money += applyProjectedHappiness(player, production.money, happinessEnabled);
+      if (production.money) {
+        let income = Math.ceil(production.money * logistics.moneyModifier);
+        if (advancedPenalties) {
+          const efficiency = tile.type === TILE_TYPES.FACTORY
+            ? advancedPenalties.factoryEfficiencyModifier
+            : advancedPenalties.buildingEfficiencyModifier;
+          income = Math.ceil(income * efficiency);
+        }
+        flows.money += applyProjectedHappiness(player, income, happinessEnabled);
+      }
       if (production.people) flows.population += production.people;
     }
     const trade = projectTradeRouteYield(this.game, player.id);
@@ -1060,20 +1086,18 @@ class GameUI {
   }
 
   renderLeaderboardHtml() {
-    const happinessText = this.game.settings.happinessEnabled === false
-      ? "happiness off"
-      : null;
+    const happinessEnabled = this.game.settings.happinessEnabled !== false;
     const scores = this.game.scoreboard();
     return scores.map((entry, index) => {
       const nation = this.game.nations[entry.id];
-      const happiness = happinessText || `${formatNumber(populationHappiness(nation))} happiness (${happinessBand(nation).label})`;
+      const happiness = happinessEnabled ? ` · ${formatNumber(populationHappiness(nation))} happiness (${happinessBand(nation).label})` : "";
       return `
         <div class="nation-row">
           <div class="row-head">
             <strong><span style="color:${nation.color}">■</span> ${escapeHtml(entry.name)}</strong>
             <span class="mini-pill">#${index + 1} ${formatNumber(entry.score)}</span>
           </div>
-          <div class="muted">${entry.active ? nation.profile : "Conquered"} · ${entry.territory} tiles · ${entry.population} people · ${entry.military} power · ${happiness}</div>
+          <div class="muted">${entry.active ? nation.profile : "Conquered"} · ${entry.territory} tiles · ${entry.population} people · ${entry.military} power${happiness}</div>
         </div>
       `;
     }).join("");
@@ -1122,6 +1146,7 @@ class GameUI {
     const stateReligion = player.religion.stateReligionId;
     const dominantReligion = player.religion.dominantReligionId;
     const dominantCulture = player.culture.dominantCultureId;
+    const society = nationSocietyMetrics(player);
     const cultureRows = Object.entries(player.culture.mix || {})
       .sort((a, b) => Number(b[1]) - Number(a[1]))
       .slice(0, 5)
@@ -1160,6 +1185,7 @@ class GameUI {
           <span class="mini-pill">${stateReligion ? `${religionIcon(stateReligion)} ${religionLabel(stateReligion)}` : "Unchosen"}</span>
         </div>
         <div class="muted">Dominant faith: ${dominantReligion ? religionLabel(dominantReligion) : "None"} · Dominant culture: ${escapeHtml(dominantCultureLabel(this.game, dominantCulture))}</div>
+        <div class="muted">Cultural cohesion ${formatNumber(society.culturalCohesion)} · Religious cohesion ${formatNumber(society.religiousCohesion)} · Stability ${formatNumber(society.stability)}</div>
         <button class="secondary-btn" data-society-action="promote" ${promoteAllowed ? "" : "disabled"}>Promote $${SOCIETY.promoteCost}</button>
         ${stateReligion ? "" : `<div class="muted">Religion unlocks in Era 2 and can be chosen once.</div>`}
       </div>
@@ -1189,15 +1215,16 @@ class GameUI {
       const routeText = route ? `Route ${route.status}${route.status === "disrupted" ? ` until T${route.disruptedUntil}` : ""}` : "No trade route";
       const embargoActive = (diplo.embargoes?.[this.game.playerId] || 0) > this.game.turn;
       const societyModifier = societyEnabled ? societyRelationModifier(this.game.player, nation) : 0;
+      const bilateral = societyEnabled ? bilateralSocietyMetrics(this.game.player, nation) : null;
       const religionText = societyEnabled && nation.religion.stateReligionId
         ? `${religionIcon(nation.religion.stateReligionId)} ${religionLabel(nation.religion.stateReligionId)}`
         : "No religion";
       const cultureText = societyEnabled ? dominantCultureLabel(this.game, nation.culture.dominantCultureId) : "";
       const societyLine = societyEnabled
-        ? `<div class="muted">${escapeHtml(religionText)} · ${escapeHtml(cultureText)} culture · society modifier ${signed(societyModifier)}</div>`
+        ? `<div class="muted">${escapeHtml(religionText)} · ${escapeHtml(cultureText)} culture · society modifier ${signed(societyModifier)} · overlap ${formatNumber(bilateral.cultureOverlap)}%</div>`
         : "";
       const societyTitle = societyEnabled
-        ? `title="Religion and culture currently apply ${signed(societyModifier)} relation-equivalent pressure."`
+        ? `title="Religion and culture apply ${signed(societyModifier)} relation pressure. Shared trust ${formatPercent(bilateral.trust)} and route pressure ${signed(Math.round(bilateral.pressure * 100))}%."`
         : "";
       return `
         <div class="diplo-row">
@@ -1270,7 +1297,9 @@ class GameUI {
 
   renderTechTreeHtml() {
     const player = this.game.player;
-    const categoryRows = Object.entries(TECH_CATEGORIES).map(([id, config]) => {
+    const categoryRows = Object.entries(TECH_CATEGORIES)
+      .filter(([id]) => isAdvancedMode(this.game) || id !== "infrastructure")
+      .map(([id, config]) => {
       const check = canResearch(this.game, player, id);
       const tier = player.tech[id] || 0;
       const cost = researchCost(id, tier);
@@ -1380,10 +1409,11 @@ class GameUI {
     const active = isTileActive(tile);
     const workerRole = WORKER_ROLE_BY_TILE[tile.type];
     const isPlayerTile = tile.ownerId === this.game.playerId;
+    const infrastructureEnabled = isAdvancedMode(this.game);
     const buildRows = this.renderBuildButtons(tile);
     const workerRows = isPlayerTile && workerRole ? this.renderWorkerControls(tile, active) : "";
     const militaryRows = isPlayerTile ? this.renderMilitaryControls(tile) : "";
-    const infrastructureRows = isPlayerTile ? this.renderInfrastructureControls(tile) : "";
+    const infrastructureRows = isPlayerTile && infrastructureEnabled ? this.renderInfrastructureControls(tile) : "";
     const advancedResource = isAdvancedMode(this.game) ? advancedResourceForTile(tile) : null;
     this.tilePopupContent.innerHTML = `
       <h2>${escapeHtml(TILE_LABELS[tile.type] || tile.type)} ${tile.isCapital ? "Capital" : ""}</h2>
@@ -1392,7 +1422,7 @@ class GameUI {
         ${metric("Region", tile.regionId || "Sea")}
         ${metric("Biome", biomeLabel(tile))}
         ${metric("Status", tile.type === TILE_TYPES.WATER ? "Water" : active ? "Active" : "Inactive")}
-        ${metric("Infrastructure", infrastructureLabel(tile.infrastructure))}
+        ${infrastructureEnabled ? metric("Infrastructure", infrastructureLabel(tile.infrastructure)) : ""}
         ${advancedResource ? metric("Special Resource", RESOURCE_METADATA[advancedResource].label) : ""}
         ${advancedResource ? metric("Output", `${RESOURCE_BASE_YIELD_PER_TILE}/turn`) : ""}
       </div>
@@ -1407,6 +1437,7 @@ class GameUI {
   }
 
   renderInfrastructureControls(tile) {
+    if (!isAdvancedMode(this.game)) return "";
     const options = [INFRASTRUCTURE_TYPES.ROAD, INFRASTRUCTURE_TYPES.RAIL, INFRASTRUCTURE_TYPES.ADVANCED].map((type) => {
       const check = this.game.canBuildInfrastructure(tile.id, type, this.game.playerId);
       const cost = `$${formatNumber(INFRASTRUCTURE_BUILD_COSTS[type] || 0)}`;
@@ -2104,8 +2135,8 @@ class GameUI {
         : `${formatSigned(playerProgress.techLead)} lead · ${formatSigned(playerProgress.requiredTechLead)} needed`)
       : `${playerProgress.linearTiersCompleted}/${playerProgress.requiredLinearTiers} final-tier tracks complete`;
     const diplomacyStatus = playerProgress.meetsDiplomaticCondition
-      ? `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · ${diplomacyTurnsRemaining} turn${diplomacyTurnsRemaining === 1 ? "" : "s"} remaining`
-      : `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · build a larger bloc`;
+      ? `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · quality ${formatNumber(playerProgress.diplomaticBlocQuality)}/${formatNumber(playerProgress.requiredDiplomaticBlocQuality)} · ${diplomacyTurnsRemaining} turn${diplomacyTurnsRemaining === 1 ? "" : "s"} remaining`
+      : `${playerProgress.allianceCount}/${playerProgress.requiredAllianceCount} alliances · quality ${formatNumber(playerProgress.diplomaticBlocQuality)}/${formatNumber(playerProgress.requiredDiplomaticBlocQuality)}`;
 
     return `
       <div class="victory-progress-content victory-progress-dialog-content">
@@ -2409,7 +2440,8 @@ function projectedFruitGrowth(game, player, flows) {
   const headroom = Math.max(0, flows.capacity - player.population.total);
   if (headroom <= 0) return 0;
   const surplus = Math.max(0, stockAfterFruit - demand);
-  return Math.min(headroom, Math.floor(surplus * 0.18));
+  const growthPenalty = flows.advancedUpkeep?.penalties?.populationGrowthModifier || 1;
+  return Math.min(headroom, Math.floor(surplus * 0.18 * growthPenalty));
 }
 
 function transportTechSummary(game, player, tier) {
@@ -2417,7 +2449,7 @@ function transportTechSummary(game, player, tier) {
   const current = transportUnlockForTier(Math.min(tier, 3))?.label || "No transport network";
   const next = tier >= 3 ? null : transportUnlockForTier(tier + 1);
   const currentEffect = logistics
-    ? `Current: ${current}, ${formatPercent(logistics.transportEfficiency)} transport efficiency, ${formatPercent(logistics.connectedCoverage)} connected coverage.`
+    ? `Current: ${current}, ${formatPercent(logistics.transportEfficiency)} transport, ${formatPercent(logistics.connectedCoverage)} coverage, ${formatPercent(logistics.diplomacyModifier)} trade throughput, ${formatPercent(logistics.upkeepModifier)} upkeep pressure.`
     : `Current: ${current}.`;
   if (!next) return currentEffect;
   return `${currentEffect} Next: ${next.label} in Era ${next.era}.`;

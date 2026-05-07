@@ -289,17 +289,18 @@ function getColyseusEndpoint() {
 
 function readSettings(settings = {}) {
   const turnTimerMinutes = Number(settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0);
+  const mode = settings.mode === "advanced" ? "advanced" : "lite";
   return {
-    mode: settings.mode === "advanced" ? "advanced" : "lite",
+    mode,
     mapSize: settings.mapSize || "Medium",
     waterLevel: settings.waterLevel || "Balanced",
-    landscapeDiversity: settings.landscapeDiversity || (settings.mode === "advanced" ? "high" : "Balanced"),
-    fogOfWarEnabled: Boolean(settings.fogOfWarEnabled),
+    landscapeDiversity: settings.landscapeDiversity || (mode === "advanced" ? "high" : "Balanced"),
+    fogOfWarEnabled: mode === "advanced" && Boolean(settings.fogOfWarEnabled),
     nationCount: Number(settings.nationCount || 5),
     maxTurns: Number(settings.maxTurns || 30),
     turnTimerMinutes,
     unlimitedMode: Boolean(settings.unlimitedMode),
-    happinessEnabled: settings.happinessEnabled !== false,
+    happinessEnabled: mode === "advanced" && settings.happinessEnabled !== false,
     educationModeEnabled: settings.educationModeEnabled === true,
     seed: Number(settings.seed || 1),
   };

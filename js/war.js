@@ -15,6 +15,7 @@ import {
   canUseInfrastructureEdge,
   computeNationLogistics,
 } from "./infrastructure.js";
+import { advancedPenaltyStateForNation } from "./advanced.js";
 import { applyWarDiplomacyPenalty, areAllied, disruptTradeRoutes, getDiplomacy } from "./trade.js";
 import { militaryPower } from "./nation.js";
 import { BALANCE } from "./balance.js";
@@ -379,6 +380,8 @@ export function resolveCombat(game, attackerId, defenderId, attackingStrength, d
   const defender = game.nations[defenderId];
   const combat = BALANCE.war.combat;
   const unitConfig = unitTypeConfig(unitType);
+  const attackerReadiness = unitType === "infantry" ? 1 : advancedPenaltyStateForNation(attacker).advancedUnitReadinessModifier;
+  const defenderReadiness = unitType === "infantry" ? 1 : advancedPenaltyStateForNation(defender).advancedUnitReadinessModifier;
   const attackerBranch =
     attacker.tech.branches.tanks * combat.attackerTankPower +
     attacker.tech.branches.air * combat.attackerAirPower +
@@ -389,8 +392,8 @@ export function resolveCombat(game, attackerId, defenderId, attackingStrength, d
     defender.tech.military * combat.militaryTechPower;
   const supply = attackSupplyModifier(game, attackerId, targetTile, fromTile);
   const tileDefense = tileDefenseModifier(targetTile);
-  const baseAttack = (attackingStrength + attackerBranch) * combatEffectivenessMultiplier(attacker) * unitConfig.attackMultiplier;
-  const baseDefense = (defendingStrength + defenderBranch) * combatEffectivenessMultiplier(defender);
+  const baseAttack = (attackingStrength + attackerBranch) * combatEffectivenessMultiplier(attacker) * unitConfig.attackMultiplier * attackerReadiness;
+  const baseDefense = (defendingStrength + defenderBranch) * combatEffectivenessMultiplier(defender) * defenderReadiness;
   const attack = baseAttack * supply.multiplier;
   const defense = baseDefense * tileDefense.multiplier + tileDefense.flatBonus;
   const margin = attack - defense;
@@ -414,6 +417,7 @@ export function resolveCombat(game, attackerId, defenderId, attackingStrength, d
         id: normalizeUnitType(unitType),
         label: unitConfig.label,
         attackMultiplier: unitConfig.attackMultiplier,
+        readiness: attackerReadiness,
       },
     },
     survivingAttackStrength: attackerWins ? Math.max(1, attackingStrength - losses.attacker) : 0,
@@ -663,9 +667,15 @@ function canUnitAttackTile(game, nationId, tile, unitType) {
 
 function movementBonusAvailable(logistics, from, unitType) {
   if (unitType === "infantry") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ROAD].has(from.id) ? 1 : 0;
-  if (unitType === "tanks") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(from.id) ? 1 : 0;
-  if (unitType === "air" || unitType === "naval") return advancedNetworkSupport(logistics, from.id) ? 1 : 0;
+  if (unitType === "tanks") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(from.id) && readinessFallback(logistics, unitType) >= 0.8 ? 1 : 0;
+  if (unitType === "air" || unitType === "naval") return advancedNetworkSupport(logistics, from.id) && readinessFallback(logistics, unitType) >= 0.8 ? 1 : 0;
   return 0;
+}
+
+function readinessFallback(logistics, unitType) {
+  const nation = logistics?.nation || null;
+  if (!nation || unitType === "infantry") return 1;
+  return advancedPenaltyStateForNation(nation).advancedUnitReadinessModifier;
 }
 
 function effectiveMoveRange(game, from, nationId, unitType) {

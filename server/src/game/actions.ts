@@ -3,7 +3,13 @@ import {
   ADVANCED_RESOURCE_KEYS,
   FRUIT_DEFICIT_STABILITY_PENALTY,
   FRUIT_SURPLUS_GROWTH_RATE,
+  advancedPenaltyStateForNation,
   advancedFruitDemand,
+  applyAdvancedResourceDeficits,
+  applyAdvancedResourceUpkeep,
+  calculateAdvancedResourceUpkeep,
+  calculateBuildingUpkeepForNation,
+  calculateUnitUpkeepForNation,
   collectAdvancedResourcesForNation,
   hardwoodCostForBuilding,
   ironCostForBranch,
@@ -39,8 +45,10 @@ import {
 import {
   RELIGION_IDS,
   SOCIETY,
+  bilateralSocietyMetrics,
   blendCultureTowardNation,
   chooseReligionForNation,
+  nationSocietyMetrics,
   processSocietySpread,
   promoteReligionForNation,
   religionLabel,
@@ -681,10 +689,12 @@ export function processServerRound(game: ServerGameState) {
     if (!nation.active) continue;
     if (isSocietyEnabled(game)) ensureAutomaticReligionChoice(game, nation);
     const logistics = computeNationLogistics(game.map.tiles, nation);
+    const society = nationSocietyMetrics(nation);
     if (isAdvancedMode(game)) {
       const resourceCollection = collectAdvancedResourcesForNation(game, nation.id);
       for (const resource of ADVANCED_RESOURCE_KEYS) summary[resource] += resourceCollection.gained[resource];
     }
+    const advancedPenalties = isAdvancedMode(game) ? advancedPenaltyStateForNation(nation) : null;
     for (const tile of game.map.tiles) {
       if (tile.ownerId !== nation.id || !isTileActive(tile)) continue;
       const production = PRODUCTION[tile.type];
@@ -694,14 +704,31 @@ export function processServerRound(game: ServerGameState) {
         let baseAmount = Math.ceil((production[resource] || 0) * multiplier);
         if (resource === "food") baseAmount = Math.ceil(baseAmount * logistics.foodModifier);
         if (resource === "materials") baseAmount = Math.ceil(baseAmount * logistics.materialsModifier);
+        if (resource === "education") baseAmount = Math.ceil(baseAmount * logistics.educationModifier);
+        if (resource === "industry") baseAmount = Math.ceil(baseAmount * logistics.industryModifier);
+        if (advancedPenalties) {
+          const efficiency = tile.type === TILE_TYPES.FACTORY
+            ? advancedPenalties.factoryEfficiencyModifier
+            : advancedPenalties.buildingEfficiencyModifier;
+          baseAmount = Math.ceil(baseAmount * efficiency);
+        }
         const eventAmount = applyEventModifiers(game, resource, baseAmount);
-        const amount = applyWarExhaustionProduction(nation, eventAmount);
+        const exhausted = applyWarExhaustionProduction(nation, eventAmount);
+        const amount = game.settings.happinessEnabled === false ? exhausted : applyHappinessProduction(nation, exhausted);
         if (!amount) continue;
         nation.resources[resource] = resourceCount(nation, resource) + amount;
         incrementStat(nation, "resourcesProduced", amount);
         summary[resource] += amount;
       }
-      const money = applyWarExhaustionProduction(nation, applyEventModifiers(game, "money", Math.ceil(production.money || 0)));
+      let moneyBase = Math.ceil((production.money || 0) * logistics.moneyModifier);
+      if (advancedPenalties) {
+        const efficiency = tile.type === TILE_TYPES.FACTORY
+          ? advancedPenalties.factoryEfficiencyModifier
+          : advancedPenalties.buildingEfficiencyModifier;
+        moneyBase = Math.ceil(moneyBase * efficiency);
+      }
+      const moneyExhausted = applyWarExhaustionProduction(nation, applyEventModifiers(game, "money", moneyBase));
+      const money = game.settings.happinessEnabled === false ? moneyExhausted : applyHappinessProduction(nation, moneyExhausted);
       if (money > 0) {
         nation.money += money;
         incrementStat(nation, "moneyEarned", money);
@@ -710,13 +737,24 @@ export function processServerRound(game: ServerGameState) {
     }
     if (game.settings.happinessEnabled !== false) {
       const before = normalizeHappiness(nation.population.happiness);
-      nation.population.happiness = normalizeHappiness(before + logistics.happinessDelta);
+      nation.population.happiness = normalizeHappiness(before + logistics.happinessDelta + society.happinessDelta);
       summary.happiness += nation.population.happiness - before;
     }
     if (isAdvancedMode(game)) applyAdvancedFruitEffects(game, nation, summary);
   }
 
   if (isSocietyEnabled(game)) processSocietySpread(game);
+  if (isAdvancedMode(game)) {
+    for (const nation of Object.values(game.nations)) {
+      if (!nation.active) continue;
+      const upkeep = applyAdvancedResourceUpkeep(game, nation.id);
+      const penalties = applyAdvancedResourceDeficits(game, nation.id);
+      if (!upkeep || !penalties) continue;
+      if (upkeep.deficit.hardwood > 0) addEvent(game, `${nation.name} suffered hardwood shortage, reducing building efficiency by ${Math.round((1 - penalties.buildingEfficiencyModifier) * 100)}%.`, { nationId: nation.id, type: "resource" });
+      if (upkeep.deficit.iron > 0) addEvent(game, `${nation.name} suffered iron shortage, reducing factory efficiency by ${Math.round((1 - penalties.factoryEfficiencyModifier) * 100)}%.`, { nationId: nation.id, type: "resource" });
+      if (upkeep.deficit.oil > 0) addEvent(game, `${nation.name} suffered oil shortage, reducing advanced unit readiness by ${Math.round((1 - penalties.advancedUnitReadinessModifier) * 100)}%.`, { nationId: nation.id, type: "resource" });
+    }
+  }
   game.lastSummary = summary;
   tickEventTileEffects(game);
   addEvent(game, `Turn ${game.turn} production resolved by the server.`, { type: "resource" });
@@ -969,6 +1007,7 @@ function canBuildInfrastructure(
   const tile = tileById(game, tileId);
   const type = normalizeInfrastructureType(infrastructureType);
   if (!nation?.active) return { ok: false, reason: "Nation is inactive." };
+  if (game.settings.mode !== "advanced") return { ok: false, reason: "Infrastructure networks are only available in Advanced mode." };
   if (!tile || tile.ownerId !== nationId) return { ok: false, reason: "Infrastructure can only be built on owned tiles." };
   if (type === INFRASTRUCTURE_TYPES.NONE || !INFRASTRUCTURE_LABELS[type]) return { ok: false, reason: "Unknown infrastructure type." };
   if (!canTileHostInfrastructure(tile, type)) {
@@ -1139,6 +1178,8 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
 
   const action = spendAction(game, nationId, SERVER_GAME_ACTION_TYPES.TRAIN_UNIT);
   if (!action.ok) return action;
+  const readiness = branch === "infantry" ? 1 : advancedPenaltyStateForNation(nation).advancedUnitReadinessModifier;
+  const deployedStrength = branch === "infantry" ? strength : Math.max(1, Math.round(strength * readiness));
 
   spendMoney(nation, cost.money);
   nation.population.available -= cost.people;
@@ -1148,18 +1189,19 @@ function trainUnit(game: ServerGameState, tileId: string, rawStrength: unknown, 
   if (ironCost > 0) nation.resources.iron = resourceCount(nation, "iron") - ironCost;
   if (oilCost > 0) nation.resources.oil = resourceCount(nation, "oil") - oilCost;
   nation.workers.soldiers = workerCount(nation, WORKER_ROLES.SOLDIERS) + cost.people;
-  nation.military.unitsTrained = numberValue(nation.military.unitsTrained) + strength;
+  nation.military.unitsTrained = numberValue(nation.military.unitsTrained) + deployedStrength;
   tile.unit = tile.unit || { nationId, strength: 0, branch, movedTurn: 0, branches: {} };
   tile.unit.nationId = nationId;
-  addUnitBranch(tile.unit, branch, strength);
-  addEvent(game, `${nation.name} ${branch === "infantry" ? "trained" : "deployed"} ${strength} ${branch} strength.`, {
+  addUnitBranch(tile.unit, branch, deployedStrength);
+  const readinessText = deployedStrength < strength ? ` at reduced readiness (${deployedStrength}/${strength})` : "";
+  addEvent(game, `${nation.name} ${branch === "infantry" ? "trained" : "deployed"} ${deployedStrength} ${branch} strength${readinessText}.`, {
     nationId,
     type: "military",
     tileId: tile.id,
   });
 
   const advancedCost = ironCost || oilCost ? { ...(ironCost && { iron: ironCost }), ...(oilCost && { oil: oilCost }) } : null;
-  return { ok: true, cost, advancedCost };
+  return { ok: true, cost, advancedCost, deployedStrength, readiness };
 }
 
 function moveOrAttackUnit(
@@ -1581,7 +1623,8 @@ function applyAdvancedFruitEffects(game: ServerGameState, nation: Nation, summar
   const stockSurplus = Math.max(0, available - demand);
   const capacity = Math.max(0, nation.territory.length * 10);
   const headroom = Math.max(0, capacity - nation.population.total);
-  const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * FRUIT_SURPLUS_GROWTH_RATE)) : 0;
+  const growthPenalty = advancedPenaltyStateForNation(nation).populationGrowthModifier;
+  const growth = headroom > 0 ? Math.min(headroom, Math.floor(stockSurplus * FRUIT_SURPLUS_GROWTH_RATE * growthPenalty)) : 0;
   if (growth > 0) {
     addPopulation(nation, growth);
     summary.population = numberValue(summary.population) + growth;
@@ -1596,6 +1639,11 @@ function applyAdvancedFruitEffects(game: ServerGameState, nation: Nation, summar
 function happinessBand(nation: Nation) {
   const happiness = normalizeHappiness(nation.population?.happiness);
   return HAPPINESS_BANDS.find((band) => happiness >= band.min) || HAPPINESS_BANDS[HAPPINESS_BANDS.length - 1];
+}
+
+function applyHappinessProduction(nation: Nation, amount: number) {
+  if (amount <= 0) return amount;
+  return Math.max(0, Math.ceil(amount * happinessBand(nation).workRate));
 }
 
 function checkMilitaryRefusal(game: ServerGameState, nation: Nation, fromTileId: string, toTileId: string): ActionResult {
@@ -1772,8 +1820,9 @@ function canUnitAttackTile(game: ServerGameState, tile: Tile, unitType: string) 
 
 function movementBonusAvailable(logistics: ReturnType<typeof computeNationLogistics>, from: Tile, unitType: string) {
   if (unitType === "infantry") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.ROAD].has(from.id) ? 1 : 0;
-  if (unitType === "tanks") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(from.id) ? 1 : 0;
-  if (unitType === "air" || unitType === "naval") return advancedNetworkSupport(logistics, from.id) ? 1 : 0;
+  const readiness = advancedPenaltyStateForNation(logistics.nation).advancedUnitReadinessModifier;
+  if (unitType === "tanks") return logistics.infrastructure.connectedByType[INFRASTRUCTURE_TYPES.RAIL].has(from.id) && readiness >= 0.8 ? 1 : 0;
+  if (unitType === "air" || unitType === "naval") return advancedNetworkSupport(logistics, from.id) && readiness >= 0.8 ? 1 : 0;
   return 0;
 }
 
@@ -1848,7 +1897,8 @@ function evaluateTrade(game: ServerGameState, fromId: string, toId: string, offe
   const requestValue = bundleValue(normalizedRequest);
   const threshold = TRADE.thresholds[to.personality] || TRADE.thresholds.default;
   const societyModifier = isSocietyEnabled(game) ? societyRelationModifier(from, to) : 0;
-  const effectiveRelation = Math.max(0, Math.min(100, numberValue(record.relation, 50) + societyModifier));
+  const bilateral = bilateralSocietyMetrics(from, to);
+  const effectiveRelation = Math.max(0, Math.min(100, numberValue(record.relation, 50) + societyModifier + Math.round((bilateral.trust - 0.5) * 10)));
   const relationFactor = 1 - ((effectiveRelation - 50) / TRADE.relationFactorDivisor);
   const trustBonus = Math.min(TRADE.maxTrustBonus, numberValue(record.trades) * TRADE.trustBonusPerTrade);
   const required = requestValue * Math.max(TRADE.minimumRequiredFactor, threshold * relationFactor - trustBonus);
@@ -1875,9 +1925,11 @@ function proposeAlliance(game: ServerGameState, fromId: string, toId: string, ty
   if (from.money < config.cost) return { ok: false as const, reason: `Requires $${config.cost}.` };
   const record = getDiplomacy(game, fromId, toId);
   const societyModifier = isSocietyEnabled(game) ? societyRelationModifier(from, to) : 0;
+  const bilateral = bilateralSocietyMetrics(from, to);
   const score =
     numberValue(record.relation, 50) +
     societyModifier +
+    Math.round(bilateral.trust * 12) +
     (to.personality === "economic" ? TRADE.personalityAllianceBonus.economic : 0) +
     (to.personality === "scientific" && type === "research" ? TRADE.personalityAllianceBonus.scientificResearch : 0) +
     (to.personality === "aggressive" && type === "military" ? TRADE.personalityAllianceBonus.aggressiveMilitary : 0);
@@ -2131,6 +2183,8 @@ function resolveCombat(game: ServerGameState, attackerId: string, defenderId: st
   const attacker = game.nations[attackerId];
   const defender = game.nations[defenderId];
   const unitConfig = unitTypeConfig(unitType);
+  const attackerReadiness = unitType === "infantry" ? 1 : advancedPenaltyStateForNation(attacker).advancedUnitReadinessModifier;
+  const defenderReadiness = unitType === "infantry" ? 1 : advancedPenaltyStateForNation(defender).advancedUnitReadinessModifier;
   const attackerBranch =
     techBranchLevel(attacker, "tanks") * WAR.combat.attackerTankPower +
     techBranchLevel(attacker, "air") * WAR.combat.attackerAirPower +
@@ -2140,8 +2194,8 @@ function resolveCombat(game: ServerGameState, attackerId: string, defenderId: st
     techBranchLevel(defender, "air") * WAR.combat.defenderAirPower +
     numberValue(defender.tech.military) * WAR.combat.militaryTechPower;
   const tileDefense = tileDefenseModifier(targetTile);
-  const baseAttack = (attackingStrength + attackerBranch) * unitConfig.attackMultiplier;
-  const baseDefense = defendingStrength + defenderBranch;
+  const baseAttack = (attackingStrength + attackerBranch) * unitConfig.attackMultiplier * attackerReadiness;
+  const baseDefense = (defendingStrength + defenderBranch) * defenderReadiness;
   const attack = baseAttack;
   const defense = baseDefense * tileDefense.multiplier + tileDefense.flatBonus;
   const margin = attack - defense;
@@ -2156,7 +2210,7 @@ function resolveCombat(game: ServerGameState, attackerId: string, defenderId: st
     defense,
     margin,
     losses,
-    modifiers: { tileDefense, baseAttack, baseDefense, unitType: { id: unitType, label: unitConfig.label, attackMultiplier: unitConfig.attackMultiplier } },
+    modifiers: { tileDefense, baseAttack, baseDefense, unitType: { id: unitType, label: unitConfig.label, attackMultiplier: unitConfig.attackMultiplier, readiness: attackerReadiness } },
     survivingAttackStrength: attackerWins ? Math.max(1, attackingStrength - losses.attacker) : 0,
     survivingDefenseStrength: attackerWins ? 0 : Math.max(1, defendingStrength - losses.defender),
   };

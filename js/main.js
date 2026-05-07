@@ -72,6 +72,17 @@ const lobbyInputs = {
   educationModeEnabled: document.getElementById("lobby-education-mode"),
 };
 
+const modeOptionalFields = {
+  setup: {
+    fogOfWarEnabled: inputs.fogOfWarEnabled?.closest(".field"),
+    happinessEnabled: inputs.happinessEnabled?.closest(".field"),
+  },
+  lobby: {
+    fogOfWarEnabled: lobbyInputs.fogOfWarEnabled?.closest(".field"),
+    happinessEnabled: lobbyInputs.happinessEnabled?.closest(".field"),
+  },
+};
+
 if (!window.THREE) {
   continueNote.textContent = "Three.js could not load. Check your connection and refresh.";
   throw new Error("Three.js failed to load.");
@@ -103,6 +114,8 @@ window.visualViewport?.addEventListener("resize", syncAppViewportHeight);
 setSessionOnlyNote();
 populateLandscapeOptions(inputs.landscapeDiversity, currentSetupMode);
 populateLandscapeOptions(lobbyInputs.landscapeDiversity, currentSetupMode);
+updateModeSpecificOptionVisibility(inputs, modeOptionalFields.setup, currentSetupMode);
+updateModeSpecificOptionVisibility(lobbyInputs, modeOptionalFields.lobby, currentSetupMode);
 
 modeLiteBtn.addEventListener("click", () => openSetupMode("lite"));
 modeAdvancedBtn.addEventListener("click", () => openSetupMode("advanced"));
@@ -213,7 +226,7 @@ function readSetup() {
   if (currentScenarioId) {
     setup.scenarioId = currentScenarioId;
   }
-  return setup;
+  return applyModeSpecificSettings(setup, mode);
 }
 
 function setSessionOnlyNote() {
@@ -322,19 +335,21 @@ function renderLobby(nextLobbyState) {
 }
 
 function syncLobbyInputs(settings, editable) {
+  const normalizedSettings = applyModeSpecificSettings({ ...settings }, settings.mode || "lite");
   syncingLobbyInputs = true;
-  populateLandscapeOptions(lobbyInputs.landscapeDiversity, settings.mode || "lite");
-  lobbyInputs.mapSize.value = settings.mapSize;
-  lobbyInputs.waterLevel.value = settings.waterLevel || "Balanced";
-  lobbyInputs.landscapeDiversity.value = normalizeLandscapeDiversity(settings.landscapeDiversity, settings.mode || "lite");
-  lobbyInputs.fogOfWarEnabled.checked = settings.fogOfWarEnabled === true;
-  lobbyInputs.nationCount.value = settings.nationCount;
-  lobbyInputs.maxTurns.value = settings.unlimitedMode ? 30 : settings.maxTurns;
-  lobbyInputs.turnTimerMinutes.value = settings.turnTimerMinutes ?? settings.timeLimitMinutes ?? 0;
-  lobbyInputs.unlimitedMode.checked = settings.unlimitedMode;
-  lobbyInputs.happinessEnabled.checked = settings.happinessEnabled !== false;
-  lobbyInputs.educationModeEnabled.checked = settings.educationModeEnabled === true;
-  lobbyInputs.maxTurns.disabled = settings.unlimitedMode || !editable;
+  populateLandscapeOptions(lobbyInputs.landscapeDiversity, normalizedSettings.mode || "lite");
+  updateModeSpecificOptionVisibility(lobbyInputs, modeOptionalFields.lobby, normalizedSettings.mode || "lite");
+  lobbyInputs.mapSize.value = normalizedSettings.mapSize;
+  lobbyInputs.waterLevel.value = normalizedSettings.waterLevel || "Balanced";
+  lobbyInputs.landscapeDiversity.value = normalizeLandscapeDiversity(normalizedSettings.landscapeDiversity, normalizedSettings.mode || "lite");
+  lobbyInputs.fogOfWarEnabled.checked = normalizedSettings.fogOfWarEnabled === true;
+  lobbyInputs.nationCount.value = normalizedSettings.nationCount;
+  lobbyInputs.maxTurns.value = normalizedSettings.unlimitedMode ? 30 : normalizedSettings.maxTurns;
+  lobbyInputs.turnTimerMinutes.value = normalizedSettings.turnTimerMinutes ?? normalizedSettings.timeLimitMinutes ?? 0;
+  lobbyInputs.unlimitedMode.checked = normalizedSettings.unlimitedMode;
+  lobbyInputs.happinessEnabled.checked = normalizedSettings.happinessEnabled !== false;
+  lobbyInputs.educationModeEnabled.checked = normalizedSettings.educationModeEnabled === true;
+  lobbyInputs.maxTurns.disabled = normalizedSettings.unlimitedMode || !editable;
 
   for (const [key, input] of Object.entries(lobbyInputs)) {
     if (key !== "maxTurns") input.disabled = !editable;
@@ -344,7 +359,7 @@ function syncLobbyInputs(settings, editable) {
 
 function readLobbySetup() {
   const mode = normalizeGameMode(lobbyState?.settings?.mode || currentSetupMode);
-  return {
+  return applyModeSpecificSettings({
     mode,
     mapSize: lobbyInputs.mapSize.value,
     waterLevel: lobbyInputs.waterLevel.value,
@@ -356,7 +371,7 @@ function readLobbySetup() {
     unlimitedMode: lobbyInputs.unlimitedMode.checked,
     happinessEnabled: lobbyInputs.happinessEnabled.checked,
     educationModeEnabled: lobbyInputs.educationModeEnabled.checked,
-  };
+  }, mode);
 }
 
 function isCurrentPlayerHost() {
@@ -602,6 +617,7 @@ function startScenario(scenarioId) {
 }
 
 function configureScenarioSetupScreen(scenario) {
+  configureSetupScreen(scenario.mode);
   setupSubtitle.textContent = `${scenario.name}: ${scenario.description}`;
   // Hide certain options for scenario mode
   const mapSizeField = inputs.mapSize?.closest?.(".field");
@@ -630,6 +646,7 @@ function configureSetupScreen(mode) {
 
   populateLandscapeOptions(inputs.landscapeDiversity, mode);
   inputs.landscapeDiversity.value = normalizeLandscapeDiversity(inputs.landscapeDiversity.value, mode);
+  updateModeSpecificOptionVisibility(inputs, modeOptionalFields.setup, mode);
 }
 
 function populateLandscapeOptions(select, mode) {
@@ -648,4 +665,21 @@ function populateLandscapeOptions(select, mode) {
   const nextValue = normalizeLandscapeDiversity(select.value, mode);
   select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join("");
   select.value = options.some((option) => option.value === nextValue) ? nextValue : options[0].value;
+}
+
+function applyModeSpecificSettings(settings, mode = settings?.mode) {
+  const normalizedMode = normalizeGameMode(mode);
+  if (normalizedMode !== "advanced") {
+    settings.fogOfWarEnabled = false;
+    settings.happinessEnabled = false;
+  }
+  return settings;
+}
+
+function updateModeSpecificOptionVisibility(inputMap, fieldMap, mode) {
+  const advanced = normalizeGameMode(mode) === "advanced";
+  for (const [key, field] of Object.entries(fieldMap)) {
+    if (field) field.style.display = advanced ? "" : "none";
+    if (!advanced && inputMap[key]) inputMap[key].checked = false;
+  }
 }

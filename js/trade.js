@@ -1,6 +1,8 @@
 import { pairKey } from "./utils.js";
 import { BALANCE } from "./balance.js";
-import { societyRelationModifier } from "./cultureReligion.js";
+import { bilateralSocietyMetrics, nationSocietyMetrics, societyRelationModifier } from "./cultureReligion.js";
+import { computeNationLogistics } from "./infrastructure.js";
+import { calculateAdvancedResourceUpkeep } from "./advanced.js";
 
 export const ALLIANCE_TYPES = BALANCE.trade.alliances;
 
@@ -64,7 +66,8 @@ export function evaluateTrade(game, fromId, toId, offer, request) {
   const requestValue = bundleValueForNation(game, fromId, normalizedRequest);
   const personalityThreshold = tradeThreshold(to.personality);
   const societyModifier = game.societyEnabled?.() === false ? 0 : societyRelationModifier(from, to);
-  const effectiveRelation = Math.max(0, Math.min(100, record.relation + societyModifier));
+  const bilateral = bilateralSocietyMetrics(from, to);
+  const effectiveRelation = Math.max(0, Math.min(100, record.relation + societyModifier + Math.round((bilateral.trust - 0.5) * 10)));
   const relationFactor = 1 - ((effectiveRelation - 50) / BALANCE.trade.relationFactorDivisor);
   const trustBonus = Math.min(BALANCE.trade.maxTrustBonus, record.trades * BALANCE.trade.trustBonusPerTrade);
   const required = requestValue * Math.max(BALANCE.trade.minimumRequiredFactor, personalityThreshold * relationFactor - trustBonus);
@@ -125,9 +128,11 @@ export function proposeAlliance(game, fromId, toId, type = "trade") {
   if (from.money < config.cost) return { ok: false, reason: `Requires $${config.cost}.` };
   const record = getDiplomacy(game, fromId, toId);
   const societyModifier = game.societyEnabled?.() === false ? 0 : societyRelationModifier(from, to);
+  const bilateral = bilateralSocietyMetrics(from, to);
   const score =
     record.relation +
     societyModifier +
+    Math.round(bilateral.trust * 12) +
     (to.personality === "economic" ? BALANCE.trade.personalityAllianceBonus.economic : 0) +
     (to.personality === "scientific" && type === "research" ? BALANCE.trade.personalityAllianceBonus.scientificResearch : 0) +
     (to.personality === "aggressive" && type === "military" ? BALANCE.trade.personalityAllianceBonus.aggressiveMilitary : 0);
@@ -437,6 +442,8 @@ function calculateRouteYield(game, route, nationId, partnerId) {
   const nation = game.nations[nationId];
   const partner = game.nations[partnerId];
   const record = getDiplomacy(game, nationId, partnerId);
+  const bilateral = bilateralSocietyMetrics(nation, partner);
+  const logistics = computeNationLogistics(game.tiles || game.map?.tiles || [], nation);
   const routes = BALANCE.trade.routes;
   const dependency = BALANCE.trade.dependency;
   const relationPressure = (record.relation - routes.relationNeutral) / routes.relationRangeDivisor;
@@ -445,7 +452,10 @@ function calculateRouteYield(game, route, nationId, partnerId) {
   const dependencyBonus = Math.min(dependency.maxRateBonus, (record.dependency[nationId] || 0) * dependency.rateBonusPerPoint);
   const allianceBonus = hasActiveTradeAlliance(game, nationId, partnerId) ? routes.tradeAllianceIncomeBonus : 0;
   const embargo = embargoMultiplierFor(game, nationId);
-  const multiplier = Math.max(routes.minimumYieldMultiplier, relationMultiplier + partnerBonus + dependencyBonus + allianceBonus);
+  const multiplier = Math.max(
+    routes.minimumYieldMultiplier,
+    (relationMultiplier + partnerBonus + dependencyBonus + allianceBonus + bilateral.pressure) * logistics.diplomacyModifier
+  );
   const money = Math.min(routes.maxIncomePerTurn, Math.ceil(routes.baseIncome * multiplier * embargo.income));
   const resource = scarcestResource(game, nationId);
   const scarcityPrice = resourcePrice(game, nationId, resource);
@@ -523,11 +533,16 @@ function applyDependencyShock(game, route, reason) {
     const nation = game.nations[nationId];
     if (!nation?.active) continue;
     const pressure = dependency - config.overdependenceThreshold;
-    const moneyLoss = Math.min(nation.money, Math.min(config.maxShockMoney, Math.ceil(pressure * config.shockMoneyPerPoint)));
+    const society = nationSocietyMetrics(nation);
+    const advanced = calculateAdvancedResourceUpkeep(game, nationId);
+    const fragility = 1 +
+      (society.stability < 45 ? 0.18 : 0) +
+      (Object.values(advanced.deficit || {}).some((value) => value > 0) ? 0.14 : 0);
+    const moneyLoss = Math.min(nation.money, Math.min(config.maxShockMoney, Math.ceil(pressure * config.shockMoneyPerPoint * fragility)));
     nation.money -= moneyLoss;
     nation.stats.moneySpent += moneyLoss;
     const resource = scarcestResource(game, nationId);
-    const resourceLoss = Math.min(nation.resources[resource] || 0, Math.ceil(pressure * config.shockResourcePerPoint));
+    const resourceLoss = Math.min(nation.resources[resource] || 0, Math.ceil(pressure * config.shockResourcePerPoint * fragility));
     nation.resources[resource] -= resourceLoss;
     if (game.addEvent) {
       game.addEvent(

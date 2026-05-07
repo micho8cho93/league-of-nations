@@ -375,6 +375,8 @@ export class LeagueRoom extends Room {
     } else if (this.state.settings.maxTurns <= 0) {
       this.state.settings.maxTurns = 30;
     }
+
+    this.applyModeSpecificSettings();
   }
 
   private snapshotSettings(): InitialGameSettings {
@@ -392,6 +394,13 @@ export class LeagueRoom extends Room {
       educationModeEnabled: this.state.settings.educationModeEnabled,
       seed: this.state.settings.seed,
     };
+  }
+
+  private applyModeSpecificSettings() {
+    if (this.state.settings.mode !== "advanced") {
+      this.state.settings.fogOfWarEnabled = false;
+      this.state.settings.happinessEnabled = false;
+    }
   }
 
   private createInitialGameSnapshot() {

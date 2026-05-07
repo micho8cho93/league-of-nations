@@ -10,6 +10,7 @@ import {
   INFRASTRUCTURE_UNLOCKS,
   transportUnlockForTier as infrastructureUnlockForTier,
 } from "./infrastructure.js";
+import { isAdvancedMode } from "./advanced.js";
 
 export const ERAS = {
   1: {
@@ -255,6 +256,9 @@ export function researchRequirement(category, nextTier) {
 export function canResearch(game, nation, category) {
   const config = TECH_CATEGORIES[category];
   if (!config) return { ok: false, reason: "Unknown technology." };
+  if (category === "infrastructure" && !isAdvancedMode(game)) {
+    return { ok: false, reason: "Infrastructure research is only available in Advanced mode." };
+  }
   const current = nation.tech[category] || 0;
   if (current >= BALANCE.tech.research.maxTier) return { ok: false, reason: "Maximum linear tier reached." };
   const nextTier = current + 1;

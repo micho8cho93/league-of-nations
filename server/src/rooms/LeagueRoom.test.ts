@@ -46,6 +46,10 @@ async function createRoom(nationCount = 3, overrides: Record<string, unknown> = 
   return room;
 }
 
+async function createAdvancedRoom(nationCount = 3, overrides: Record<string, unknown> = {}) {
+  return createRoom(nationCount, { mode: "advanced", ...overrides });
+}
+
 function join(room: LeagueRoom, sessionId: string, playerName: string, options: Record<string, unknown> = {}) {
   const client = fakeClient(sessionId);
   room.onAuth(client.client, { playerName, ...options });
@@ -353,19 +357,19 @@ test("room settings use turnTimerMinutes and accept legacy timeLimitMinutes", as
   assert.equal(room.state.settings.turnTimerMinutes, 7);
 });
 
-test("room settings preserve map options, fog, and happiness toggle", async () => {
-  const room = await createRoom(2);
+test("advanced room settings preserve map options, fog, and happiness toggle", async () => {
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
 
   room.messages.updateSettings(creator.client, {
     waterLevel: "High",
-    landscapeDiversity: "Low",
+    landscapeDiversity: "superHigh",
     fogOfWarEnabled: true,
     happinessEnabled: false,
   });
 
   assert.equal(room.state.settings.waterLevel, "High");
-  assert.equal(room.state.settings.landscapeDiversity, "Low");
+  assert.equal(room.state.settings.landscapeDiversity, "superHigh");
   assert.equal(room.state.settings.fogOfWarEnabled, true);
   assert.equal(room.state.settings.happinessEnabled, false);
 
@@ -373,14 +377,70 @@ test("room settings preserve map options, fog, and happiness toggle", async () =
   const snapshot = (room as any).createInitialGameSnapshot();
 
   assert.equal(gameState.settings.waterLevel, "High");
-  assert.equal(gameState.settings.landscapeDiversity, "Low");
+  assert.equal(gameState.settings.landscapeDiversity, "superHigh");
   assert.equal(gameState.settings.fogOfWarEnabled, true);
   assert.equal(gameState.settings.happinessEnabled, false);
   assert.equal(snapshot.settings.waterLevel, "High");
-  assert.equal(snapshot.settings.landscapeDiversity, "Low");
+  assert.equal(snapshot.settings.landscapeDiversity, "superHigh");
   assert.equal(snapshot.settings.fogOfWarEnabled, true);
   assert.equal(snapshot.settings.happinessEnabled, false);
   assert.equal(snapshot.gameState.settings.fogOfWarEnabled, true);
+});
+
+test("lite mode forces fog of war and happiness off", async () => {
+  const room = await createRoom(2, { fogOfWarEnabled: true, happinessEnabled: true });
+  const creator = join(room, "creator", "Creator");
+
+  assert.equal(room.state.settings.fogOfWarEnabled, false);
+  assert.equal(room.state.settings.happinessEnabled, false);
+
+  room.messages.updateSettings(creator.client, {
+    fogOfWarEnabled: true,
+    happinessEnabled: true,
+  });
+
+  assert.equal(room.state.settings.fogOfWarEnabled, false);
+  assert.equal(room.state.settings.happinessEnabled, false);
+
+  const gameState = startGame(room, creator);
+  assert.equal(gameState.settings.fogOfWarEnabled, false);
+  assert.equal(gameState.settings.happinessEnabled, false);
+});
+
+test("lite mode rejects society and infrastructure actions", async () => {
+  const room = await createRoom(2);
+  const creator = join(room, "creator", "Creator");
+  join(room, "second", "Second");
+  const gameState = startGame(room, creator);
+  gameState.era = 2;
+  const nation = gameState.nations["nation-1"];
+  nation.money = 5000;
+  setResources(nation, { materials: 500, education: 300 });
+  const tile = makeOwnedTile(gameState, "nation-1", "farm", 2);
+
+  await room.messages.playerAction(creator.client, {
+    type: "chooseReligion",
+    nationId: "nation-1",
+    religionId: "auralis",
+  });
+  assert.match(latestRejection(creator), /disabled/i);
+
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "researchTech",
+    nationId: "nation-1",
+    category: "infrastructure",
+  });
+  assert.match(latestRejection(creator), /advanced mode/i);
+
+  clearMessages(creator);
+  await room.messages.playerAction(creator.client, {
+    type: "buildInfrastructure",
+    nationId: "nation-1",
+    tileId: tile.id,
+    infrastructureType: "road",
+  });
+  assert.match(latestRejection(creator), /advanced mode/i);
 });
 
 test("default mode is lite", () => {
@@ -424,7 +484,7 @@ test("advanced round collection adds fruit hardwood iron oil and fruit can grow 
   processServerRound(game);
 
   assert.ok(nation.resources.hardwood >= 1);
-  assert.ok(nation.resources.iron >= 1);
+  assert.ok((nation.advancedResourceStatus?.paid?.iron || 0) >= 1);
   assert.ok(nation.resources.oil >= 1);
   assert.ok(nation.population.total >= beforePopulation);
 });
@@ -782,7 +842,7 @@ test("transport buildings are rejected as tile builds", async () => {
 });
 
 test("buildInfrastructure works online as a separate tile improvement", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -1500,7 +1560,7 @@ test("advanced networks extend air and naval movement", async () => {
 });
 
 test("low happiness can make military refuse movement online without spending resources", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -1533,7 +1593,7 @@ test("low happiness can make military refuse movement online without spending re
 });
 
 test("disabled happiness does not make military refuse movement online", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -1789,7 +1849,7 @@ test("researchBranch rejects era, military tier, factory, resource, max level, a
 });
 
 test("infrastructure research uses starter requirements then tech-only era gates", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -1911,7 +1971,7 @@ test("trade, alliance, and breakAlliance work online", async () => {
 });
 
 test("chooseReligion validates era, selection, and does not spend action points", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -1946,7 +2006,7 @@ test("chooseReligion validates era, selection, and does not spend action points"
 });
 
 test("promoteReligion spends money and shifts prevalence toward the state religion", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -1973,18 +2033,18 @@ test("promoteReligion spends money and shifts prevalence toward the state religi
 });
 
 test("shared religion improves alliance acceptance", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
   gameState.era = 2;
   resetActions(gameState, "nation-1");
   gameState.nations["nation-1"].money = 1000;
-  setSociety(gameState, "nation-1", "auralis");
-  setSociety(gameState, "nation-2", "auralis");
+  setSociety(gameState, "nation-1", "auralis", { "nation-1": 55, "nation-2": 45 });
+  setSociety(gameState, "nation-2", "auralis", { "nation-1": 45, "nation-2": 55 });
   gameState.diplomacy["nation-1::nation-2"] = {
     pair: "nation-1::nation-2",
-    relation: 47,
+    relation: 52,
     trades: 0,
     alliances: [],
     atWar: false,
@@ -2007,7 +2067,7 @@ test("shared religion improves alliance acceptance", async () => {
 
 test("society spreads across active trade routes", async () => {
   const gameState = createInitialServerGame({
-    mode: "lite",
+    mode: "advanced",
     mapSize: "Small",
     nationCount: 2,
     maxTurns: 30,
@@ -2039,7 +2099,7 @@ test("society spreads across active trade routes", async () => {
 });
 
 test("capital conquest blends defeated culture and religion into the winner", async () => {
-  const room = await createRoom(2);
+  const room = await createAdvancedRoom(2);
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -2190,7 +2250,7 @@ test("trade proposal can be rejected through the dedicated server message", asyn
 });
 
 test("fog of war blocks trade with undiscovered nations", async () => {
-  const room = await createRoom(2, { fogOfWarEnabled: true });
+  const room = await createAdvancedRoom(2, { fogOfWarEnabled: true });
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -2212,7 +2272,7 @@ test("fog of war blocks trade with undiscovered nations", async () => {
 });
 
 test("visible contact discovers nations for trade and persists across turns", async () => {
-  const room = await createRoom(2, { fogOfWarEnabled: true });
+  const room = await createAdvancedRoom(2, { fogOfWarEnabled: true });
   const creator = join(room, "creator", "Creator");
   join(room, "second", "Second");
   const gameState = startGame(room, creator);
@@ -2454,6 +2514,25 @@ test("diplomatic hegemony only triggers after 10 consecutive qualifying turns", 
     { id: "a2", active: true, members: ["nation-1", "nation-3"] },
     { id: "a3", active: true, members: ["nation-1", "nation-4"] },
   ] as any;
+  for (const nationId of ["nation-1", "nation-2", "nation-3", "nation-4"]) setSociety(gameState, nationId, "auralis");
+  gameState.tradeRoutes = [
+    { id: "r1", status: "active", members: ["nation-1", "nation-2"] },
+    { id: "r2", status: "active", members: ["nation-1", "nation-3"] },
+    { id: "r3", status: "active", members: ["nation-1", "nation-4"] },
+  ] as any;
+  for (const allyId of ["nation-2", "nation-3", "nation-4"]) {
+    gameState.diplomacy[`nation-1::${allyId}`] = {
+      pair: `nation-1::${allyId}`,
+      relation: 78,
+      trades: 3,
+      alliances: [],
+      atWar: false,
+      wars: 0,
+      brokenAgreements: 0,
+      dependency: { "nation-1": 8, [allyId]: 8 },
+      embargoes: {},
+    };
+  }
 
   for (let turn = 1; turn <= 9; turn += 1) {
     gameState.turn = turn;
@@ -2481,6 +2560,25 @@ test("diplomatic hegemony resets immediately when the alliance bloc breaks", () 
     { id: "a2", active: true, members: ["nation-1", "nation-3"] },
     { id: "a3", active: true, members: ["nation-1", "nation-4"] },
   ] as any;
+  for (const nationId of ["nation-1", "nation-2", "nation-3", "nation-4"]) setSociety(gameState, nationId, "auralis");
+  gameState.tradeRoutes = [
+    { id: "r1", status: "active", members: ["nation-1", "nation-2"] },
+    { id: "r2", status: "active", members: ["nation-1", "nation-3"] },
+    { id: "r3", status: "active", members: ["nation-1", "nation-4"] },
+  ] as any;
+  for (const allyId of ["nation-2", "nation-3", "nation-4"]) {
+    gameState.diplomacy[`nation-1::${allyId}`] = {
+      pair: `nation-1::${allyId}`,
+      relation: 78,
+      trades: 3,
+      alliances: [],
+      atWar: false,
+      wars: 0,
+      brokenAgreements: 0,
+      dependency: { "nation-1": 8, [allyId]: 8 },
+      embargoes: {},
+    };
+  }
 
   for (let turn = 1; turn <= 5; turn += 1) {
     gameState.turn = turn;
@@ -2493,6 +2591,74 @@ test("diplomatic hegemony resets immediately when the alliance bloc breaks", () 
   checkServerVictory(gameState);
   assert.equal(gameState.victoryProgress?.nations?.["nation-1"]?.diplomaticHoldTurns, 0);
   assert.equal(gameState.gameOver, null);
+});
+
+test("diplomatic hegemony requires a high-quality alliance bloc", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 4, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345, mode: "advanced" } as any,
+    [],
+  );
+  gameState.alliances = [
+    { id: "a1", active: true, members: ["nation-1", "nation-2"] },
+    { id: "a2", active: true, members: ["nation-1", "nation-3"] },
+    { id: "a3", active: true, members: ["nation-1", "nation-4"] },
+  ] as any;
+  setSociety(gameState, "nation-1", "auralis");
+  setSociety(gameState, "nation-2", "thalorin");
+  setSociety(gameState, "nation-3", "thalorin");
+  setSociety(gameState, "nation-4", "pyrelume");
+  for (const allyId of ["nation-2", "nation-3", "nation-4"]) {
+    gameState.diplomacy[`nation-1::${allyId}`] = {
+      pair: `nation-1::${allyId}`,
+      relation: 42,
+      trades: 0,
+      alliances: [],
+      atWar: false,
+      wars: 0,
+      brokenAgreements: 0,
+      dependency: { "nation-1": 0, [allyId]: 0 },
+      embargoes: {},
+    };
+  }
+
+  for (let turn = 1; turn <= 10; turn += 1) {
+    gameState.turn = turn;
+    gameState.turnNumber = turn;
+    checkServerVictory(gameState, undefined, { turnBoundary: true });
+  }
+
+  assert.equal(gameState.gameOver, null);
+  assert.ok((gameState.victoryProgress?.nations?.["nation-1"]?.diplomaticBlocQuality || 0) < 58);
+});
+
+test("server round uses stored advanced penalties to reduce building output", () => {
+  const gameState = createInitialServerGame(
+    { mapSize: "Small", nationCount: 2, maxTurns: 30, turnTimerMinutes: 0, unlimitedMode: false, seed: 12345, mode: "advanced" } as any,
+    [],
+  );
+  const nation = gameState.nations["nation-1"];
+  const schoolTile = gameState.map.tiles.find((tile: any) => tile.ownerId === "nation-1" && tile.terrain === "land" && tile.type === "empty");
+  assert.ok(schoolTile);
+  schoolTile.type = "school";
+  schoolTile.workers = 3;
+  nation.advancedResourceStatus = {
+    upkeep: { fruit: 0, hardwood: 3, iron: 0, oil: 0 },
+    paid: { fruit: 0, hardwood: 0, iron: 0, oil: 0 },
+    deficit: { fruit: 0, hardwood: 3, iron: 0, oil: 0 },
+    penalties: {
+      populationGrowthModifier: 1,
+      buildingEfficiencyModifier: 0.5,
+      factoryEfficiencyModifier: 1,
+      advancedUnitReadinessModifier: 1,
+    },
+  };
+
+  const beforeEducation = nation.resources.education;
+  processServerRound(gameState);
+
+  assert.ok(nation.resources.education - beforeEducation > 0);
+  assert.ok(nation.resources.education - beforeEducation < 9, "education output should be reduced by stored building penalties");
+  assert.ok((nation.advancedResourceStatus?.penalties?.buildingEfficiencyModifier || 1) < 1);
 });
 
 test("server event trigger stores active event and history", () => {

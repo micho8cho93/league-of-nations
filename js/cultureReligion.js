@@ -1,4 +1,5 @@
 import { clamp, pairKey } from "./utils.js";
+import { normalizeGameMode } from "./advanced.js";
 
 export const RELIGIONS = Object.freeze([
   { id: "auralis", name: "Auralis", icon: "*" },
@@ -29,6 +30,16 @@ export const SOCIETY = Object.freeze({
   sameReligionModifier: 8,
   differentStrongStateReligionModifier: -5,
   strongStateReligionPrevalence: 65,
+  cultureRelationWeight: 10,
+  dominantCultureRelationBonus: 3,
+  foreignCulturePressureScale: 0.08,
+  cohesionHappinessScale: 0.05,
+  lowReligionPenaltyThreshold: 45,
+  highReligionBonusThreshold: 72,
+  religionHappinessScale: 0.06,
+  tradeYieldScale: 0.24,
+  allianceQualityScale: 0.18,
+  embargoResilienceScale: 0.2,
 });
 
 export function religionLabel(religionId) {
@@ -65,6 +76,7 @@ export function createInitialSociety(nationId) {
 
 export function isSocietyEnabled(game) {
   if (game?.settings?.scenarioId === "ww2_global") return false;
+  if (normalizeGameMode(game?.settings?.mode) !== "advanced") return false;
   return game?.settings?.scenarioOverrides?.societyEnabled !== false;
 }
 
@@ -146,11 +158,14 @@ export function religionPrevalence(nation, religionId) {
 export function societyRelationModifier(a, b) {
   normalizeSociety(a);
   normalizeSociety(b);
+  const bilateral = bilateralSocietyMetrics(a, b);
   const stateA = a.religion.stateReligionId;
   const stateB = b.religion.stateReligionId;
   const dominantA = a.religion.dominantReligionId;
   const dominantB = b.religion.dominantReligionId;
-  if ((stateA && stateA === stateB) || (dominantA && dominantA === dominantB)) return SOCIETY.sameReligionModifier;
+  let modifier = Math.round(((bilateral.cultureOverlap - 50) / 100) * SOCIETY.cultureRelationWeight);
+  if (bilateral.sharedDominantCulture) modifier += SOCIETY.dominantCultureRelationBonus;
+  if ((stateA && stateA === stateB) || (dominantA && dominantA === dominantB)) modifier += SOCIETY.sameReligionModifier;
   if (
     stateA &&
     stateB &&
@@ -158,9 +173,9 @@ export function societyRelationModifier(a, b) {
     religionPrevalence(a, stateA) >= SOCIETY.strongStateReligionPrevalence &&
     religionPrevalence(b, stateB) >= SOCIETY.strongStateReligionPrevalence
   ) {
-    return SOCIETY.differentStrongStateReligionModifier;
+    modifier += SOCIETY.differentStrongStateReligionModifier;
   }
-  return 0;
+  return clamp(modifier, -12, 14);
 }
 
 export function processSocietySpread(game) {
@@ -206,10 +221,80 @@ export function processSocietySpread(game) {
     const record = ensureDiplomacyRecord(game, a, b);
     record.relation = Math.min(100, (Number(record.relation) || 50) + SOCIETY.sharedReligionRelationGain);
   }
+
+  for (const nation of activeNations) nationSocietyMetrics(nation);
 }
 
 export function dominantCultureLabel(game, cultureId) {
   return game?.nations?.[cultureId]?.name || cultureId || "Unknown";
+}
+
+export function nationSocietyMetrics(nation) {
+  normalizeSociety(nation);
+  const homeCultureId = nation.culture.homeCultureId;
+  const homeShare = roundPercent(Number(nation.culture.mix?.[homeCultureId]) || 0);
+  const dominantCultureId = nation.culture.dominantCultureId;
+  const dominantCultureShare = dominantCultureId ? roundPercent(Number(nation.culture.mix?.[dominantCultureId]) || 0) : homeShare;
+  const foreignShare = roundPercent(Math.max(0, 100 - homeShare));
+  const stateReligionId = nation.religion.stateReligionId;
+  const stateReligionShare = stateReligionId ? religionPrevalence(nation, stateReligionId) : 0;
+  const dominantReligionIdValue = nation.religion.dominantReligionId;
+  const dominantReligionShare = dominantReligionIdValue ? religionPrevalence(nation, dominantReligionIdValue) : 0;
+  const religiousCohesion = roundPercent(Math.max(stateReligionShare, dominantReligionShare));
+  const culturePressure = foreignShare * SOCIETY.foreignCulturePressureScale;
+  const cohesionRelief = Math.max(0, homeShare - 50) * SOCIETY.cohesionHappinessScale;
+  const religionRelief = Math.max(0, religiousCohesion - 50) * SOCIETY.religionHappinessScale;
+  const religionPenalty = Math.max(0, SOCIETY.lowReligionPenaltyThreshold - stateReligionShare) * 0.05;
+  const happinessDelta = Math.round(clamp(cohesionRelief + religionRelief - culturePressure - religionPenalty, -6, 5));
+  const stability = roundPercent(clamp((homeShare * 0.55) + (religiousCohesion * 0.45) - (foreignShare * 0.35), 0, 100));
+  const metrics = {
+    homeShare,
+    foreignShare,
+    dominantCultureId,
+    dominantCultureShare,
+    stateReligionShare: roundPercent(stateReligionShare),
+    dominantReligionShare: roundPercent(dominantReligionShare),
+    religiousCohesion,
+    culturalCohesion: roundPercent(homeShare),
+    happinessDelta,
+    stability,
+  };
+  nation.societyMetrics = metrics;
+  return metrics;
+}
+
+export function bilateralSocietyMetrics(a, b) {
+  normalizeSociety(a);
+  normalizeSociety(b);
+  const cultureOverlap = roundPercent(cultureOverlapScore(a.culture.mix, b.culture.mix));
+  const dominantCultureA = a.culture.dominantCultureId;
+  const dominantCultureB = b.culture.dominantCultureId;
+  const sharedDominantCulture = Boolean(dominantCultureA && dominantCultureA === dominantCultureB);
+  const sharedStateReligion = Boolean(a.religion.stateReligionId && a.religion.stateReligionId === b.religion.stateReligionId);
+  const sharedDominantReligion = Boolean(a.religion.dominantReligionId && a.religion.dominantReligionId === b.religion.dominantReligionId);
+  const trust = clamp(
+    (cultureOverlap / 100) * 0.7 +
+      (sharedStateReligion ? 0.24 : 0) +
+      (!sharedStateReligion && sharedDominantReligion ? 0.12 : 0) +
+      (sharedDominantCulture ? 0.1 : 0),
+    0,
+    1
+  );
+  const pressure = clamp(
+    (sharedStateReligion ? 0.22 : 0) +
+      (!sharedStateReligion && sharedDominantReligion ? 0.1 : 0) +
+      ((cultureOverlap - 50) / 100) * SOCIETY.tradeYieldScale,
+    -0.2,
+    0.36
+  );
+  return {
+    cultureOverlap,
+    sharedDominantCulture,
+    sharedStateReligion,
+    sharedDominantReligion,
+    trust: roundPercent(trust * 100) / 100,
+    pressure: roundPercent(pressure * 100) / 100,
+  };
 }
 
 function exchangeSociety(nationA, nationB, culturePressure, religionPressure) {
@@ -373,4 +458,11 @@ function trimRounding(map, fallbackId) {
 
 function roundPercent(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function cultureOverlapScore(aMix = {}, bMix = {}) {
+  const keys = new Set([...Object.keys(aMix || {}), ...Object.keys(bMix || {})]);
+  let overlap = 0;
+  for (const key of keys) overlap += Math.min(Number(aMix[key]) || 0, Number(bMix[key]) || 0);
+  return clamp(overlap, 0, 100);
 }
